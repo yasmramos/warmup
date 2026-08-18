@@ -28,7 +28,7 @@ jobs:
     - name: Run Benchmarks
       run: |
         echo "Running all benchmarks automatically..."
-        java -jar warmup-benchmarks/target/warmup-benchmarks-1.0.0-SNAPSHOT-jar-with-dependencies.jar
+        java -jar warmup-benchmarks/target/benchmarks.jar
 
     - name: Upload Benchmark Results
       uses: actions/upload-artifact@v4
