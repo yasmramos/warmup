@@ -13,6 +13,7 @@
     <description>Hybrid dependency injection container with JIT compilation engine based on ASM</description>
 
     <modules>
+        <module>warmup-annotations</module>
         <module>warmup-core</module>
         <module>warmup-asm</module>
         <module>warmup-processor</module>
@@ -33,6 +34,11 @@
     <dependencyManagement>
         <dependencies>
             <!-- Core modules -->
+            <dependency>
+                <groupId>com.warmup</groupId>
+                <artifactId>warmup-annotations</artifactId>
+                <version>${project.version}</version>
+            </dependency>
             <dependency>
                 <groupId>com.warmup</groupId>
                 <artifactId>warmup-core</artifactId>

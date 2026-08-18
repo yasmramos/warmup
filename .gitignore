@@ -1,0 +1,34 @@
+```
+# Compiled and build artifacts
+*.class
+*.o
+*.obj
+*.out
+target/
+build/
+
+# Dependencies
+.mypy_cache/
+.pytest_cache/
+.coverage
+coverage/
+htmlcov/
+
+# Logs and temp files
+*.log
+*.tmp
+*.swp
+
+# Editors
+.vscode/
+.idea/
+
+# System files
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local
+*.env.*
+```
