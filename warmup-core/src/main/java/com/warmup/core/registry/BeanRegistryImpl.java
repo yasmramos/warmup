@@ -28,6 +28,9 @@ public class BeanRegistryImpl implements BeanRegistry {
     // Cached singleton instances
     private final ConcurrentMap<String, Object> singletonInstances = new ConcurrentHashMap<>();
     
+    // Track which singletons have had their init callback applied (to avoid deadlocks)
+    private final java.util.Set<String> singletonInitCallbacksApplied = java.util.Collections.newSetFromMap(new ConcurrentHashMap<>());
+    
     // Type-to-name mapping for resolving conflicts
     private final ConcurrentMap<Class<?>, String> typeToNameMap = new ConcurrentHashMap<>();
 
@@ -83,13 +86,31 @@ public class BeanRegistryImpl implements BeanRegistry {
 
         return switch (definition.scope()) {
             case SINGLETON -> {
+                // Track if we created a new instance to apply init callback outside the lock
+                boolean newInstanceCreated = false;
+                T instance = (T) singletonInstances.get(name);
+                
+                // Fast path: instance already exists
+                if (instance != null) {
+                    yield instance;
+                }
+                
                 // ComputeIfAbsent ensures thread-safe lazy initialization
-                T instance = (T) singletonInstances.computeIfAbsent(name, k -> {
+                instance = (T) singletonInstances.computeIfAbsent(name, k -> {
                     T newInstance = factory.get();
-                    // Apply init callback exactly once at creation time
-                    applyInitCallback(newInstance, (BeanDefinition<T>) definition);
+                    // Mark that we created it (callback will be applied after computeIfAbsent)
+                    // We use a side-effect marker since we can't return extra info
+                    // The callback application is deferred to after computeIfAbsent completes
                     return newInstance;
                 });
+                
+                // Apply init callback only if this thread created the instance
+                // Check if instance was just created by verifying it's the same reference
+                // and applying callback exactly once using a separate tracking set
+                if (singletonInitCallbacksApplied.add(name)) {
+                    applyInitCallback(instance, (BeanDefinition<T>) definition);
+                }
+                
                 yield instance;
             }
             case PROTOTYPE -> {
