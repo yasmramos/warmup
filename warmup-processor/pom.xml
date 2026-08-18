@@ -17,6 +17,13 @@
     <description>Compile-time annotation processor for generating zero-overhead factories</description>
 
     <dependencies>
+        <!-- Warmup annotations module -->
+        <dependency>
+            <groupId>com.warmup</groupId>
+            <artifactId>warmup-annotations</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        
         <!-- Annotation processing only needs JDK tools -->
         
         <!-- Testing -->

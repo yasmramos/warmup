@@ -1,6 +1,7 @@
 package com.warmup.core.registry;
 
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * Thread-safe bean registry with O(1) lookup using ConcurrentHashMap.
@@ -84,4 +85,11 @@ public interface BeanRegistry {
      * @return true if the bean exists
      */
     boolean contains(String name);
+    
+    /**
+     * Returns all registered bean names.
+     * 
+     * @return set of bean names
+     */
+    Set<String> getAllNames();
 }

@@ -17,8 +17,6 @@
     <description>Core DI container with registry, dependency graph, and lifecycle management</description>
 
     <dependencies>
-        <!-- No external dependencies in core - zero reflection design -->
-        
         <!-- Testing -->
         <dependency>
             <groupId>org.junit.jupiter</groupId>
