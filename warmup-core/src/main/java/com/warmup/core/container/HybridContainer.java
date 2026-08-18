@@ -142,7 +142,6 @@ public class HybridContainer {
         // Fast-path: check if singleton is already cached (avoid Optional allocation and lambda creation)
         T cachedInstance = registry.getIfPresent(name);
         if (cachedInstance != null) {
-            totalResolutions.add(1);
             if (diagnosticMode) {
                 long startTime = System.nanoTime();
                 BeanDefinition<T> definition = (BeanDefinition<T>) registry.getDefinition(name).orElseThrow(() -> new IllegalStateException("Bean not found: " + name));
