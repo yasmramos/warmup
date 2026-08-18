@@ -4,7 +4,6 @@ import com.warmup.core.container.HybridContainer;
 import com.warmup.core.jit.CompiledFactory;
 import com.warmup.core.registry.BeanDefinition;
 import com.warmup.core.scope.Scope;
-import com.warmup.asm.AsmJITCompiler;
 import org.openjdk.jmh.annotations.*;
 import org.openjdk.jmh.infra.Blackhole;
 
@@ -21,11 +20,14 @@ import java.util.concurrent.TimeUnit;
  * Metrics:
  * - Resolution time (single bean resolution)
  * - Throughput (resolutions per second)
+ * 
+ * Note: This benchmark uses explicit HybridContainer construction for precise
+ * performance measurement. For production usage, prefer Warmup.create().
  */
 @State(org.openjdk.jmh.annotations.Scope.Benchmark)
 @BenchmarkMode(Mode.AverageTime)
 @OutputTimeUnit(TimeUnit.NANOSECONDS)
-@Warmup(iterations = 3, time = 1)
+@org.openjdk.jmh.annotations.Warmup(iterations = 3, time = 1)
 @Measurement(iterations = 5, time = 1)
 @Fork(2)
 public class ResolutionBenchmark {
@@ -56,7 +58,9 @@ public class ResolutionBenchmark {
     
     @Setup(Level.Trial)
     public void setup() throws Exception {
-        AsmJITCompiler jitCompiler = new AsmJITCompiler();
+        // Using explicit constructor for benchmark measurement
+        // In production, use: com.warmup.core.Warmup warmup = com.warmup.core.Warmup.create();
+        com.warmup.asm.AsmJITCompiler jitCompiler = new com.warmup.asm.AsmJITCompiler();
         container = new HybridContainer(jitCompiler, false);
         
         // Register simple bean with JIT compilation

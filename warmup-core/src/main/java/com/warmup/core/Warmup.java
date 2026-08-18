@@ -1,0 +1,299 @@
+package com.warmup.core;
+
+import com.warmup.core.container.HybridContainer;
+import com.warmup.core.jit.JITCompiler;
+import com.warmup.core.jit.NoOpJITCompiler;
+import com.warmup.core.registry.BeanDefinition;
+
+import java.util.ServiceLoader;
+import java.util.Set;
+import java.util.function.Function;
+
+/**
+ * Main entry point for the Warmup dependency injection container.
+ * 
+ * This class provides an ergonomic API for creating and using the DI container,
+ * wrapping HybridContainer with a simpler interface. JIT compiler discovery
+ * is done via ServiceLoader at runtime to maintain proper module dependencies
+ * (warmup-core does not depend on warmup-asm).
+ * 
+ * Usage:
+ * <pre>{@code
+ * // Simple usage with defaults
+ * Warmup warmup = Warmup.create();
+ * MyService service = warmup.resolve(MyService.class);
+ * 
+ * // Advanced usage with builder
+ * Warmup warmup = Warmup.builder()
+ *     .diagnostic(true)
+ *     .maxPendingCompilations(20)
+ *     .build();
+ * }</pre>
+ * 
+ * Architecture note: The JITCompiler implementation is discovered via
+ * {@link ServiceLoader}. If no provider is found (e.g., in GraalVM native
+ * images or when warmup-asm is not on classpath), a NoOp fallback is used
+ * that delegates to reflection-based bean creation.
+ * 
+ * @see HybridContainer
+ * @see JITCompiler
+ */
+public class Warmup implements AutoCloseable {
+
+    private final HybridContainer container;
+
+    /**
+     * Creates a new Warmup instance with default settings.
+     * 
+     * Uses ServiceLoader to discover JITCompiler implementation.
+     * Falls back to NoOpJITCompiler if no provider is found.
+     * 
+     * @return new Warmup instance
+     */
+    public static Warmup create() {
+        return builder().build();
+    }
+
+    /**
+     * Returns a builder for advanced configuration.
+     * 
+     * @return new Builder instance
+     */
+    public static Builder builder() {
+        return new Builder();
+    }
+
+    /**
+     * Creates a Warmup instance with explicit JITCompiler.
+     * Useful for testing or custom configurations.
+     * 
+     * @param jitCompiler the JIT compiler to use
+     * @return new Warmup instance
+     */
+    public static Warmup create(JITCompiler jitCompiler) {
+        return new Warmup(new HybridContainer(jitCompiler, false));
+    }
+
+    /**
+     * Creates a Warmup instance with custom settings.
+     * 
+     * @param jitCompiler the JIT compiler to use
+     * @param diagnostic enable diagnostic mode
+     * @param maxPendingCompilations maximum concurrent background compilations
+     * @return new Warmup instance
+     */
+    public static Warmup create(JITCompiler jitCompiler, boolean diagnostic, int maxPendingCompilations) {
+        return new Warmup(new HybridContainer(jitCompiler, diagnostic, maxPendingCompilations));
+    }
+
+    /**
+     * Internal constructor wrapping a HybridContainer.
+     * 
+     * @param container the underlying container
+     */
+    private Warmup(HybridContainer container) {
+        this.container = container;
+    }
+
+    /**
+     * Returns the underlying HybridContainer for advanced operations.
+     * 
+     * @return the wrapped container
+     */
+    public HybridContainer container() {
+        return container;
+    }
+
+    /**
+     * Registers a bean definition with a pre-compiled factory.
+     * 
+     * @param definition the bean definition
+     * @param factory the compiled factory
+     * @param <T> the bean type
+     */
+    public <T> void register(BeanDefinition definition, com.warmup.core.jit.CompiledFactory<T> factory) {
+        container.register(definition, factory);
+    }
+
+    /**
+     * Registers a bean definition for dynamic resolution.
+     * 
+     * @param definition the bean definition
+     */
+    public void registerDynamic(BeanDefinition definition) {
+        container.registerDynamic(definition);
+    }
+
+    /**
+     * Resolves a bean by name.
+     * 
+     * @param name the bean name
+     * @return the bean instance
+     * @throws IllegalStateException if bean not found
+     */
+    public Object resolve(String name) {
+        return container.resolve(name);
+    }
+
+    /**
+     * Resolves a bean by type.
+     * 
+     * @param clazz the bean class
+     * @return the bean instance
+     * @throws IllegalStateException if bean not found
+     */
+    public <T> T resolve(Class<T> clazz) {
+        return container.resolve(clazz);
+    }
+
+    /**
+     * Checks if a bean exists by name.
+     * 
+     * @param name the bean name
+     * @return true if bean exists
+     */
+    public boolean contains(String name) {
+        return container.contains(name);
+    }
+
+    /**
+     * Checks if a bean exists by type.
+     * 
+     * @param clazz the bean class
+     * @return true if bean exists
+     */
+    public boolean contains(Class<?> clazz) {
+        return container.contains(clazz);
+    }
+
+    /**
+     * Gets all registered bean names.
+     * 
+     * @return set of bean names
+     */
+    public Set<String> getBeanNames() {
+        return container.getBeanNames();
+    }
+
+    /**
+     * Gets container metrics.
+     * 
+     * @return container metrics
+     */
+    public com.warmup.core.container.ContainerMetrics getMetrics() {
+        return container.getMetrics();
+    }
+
+    /**
+     * Gets compilation statistics from the JIT compiler.
+     * 
+     * @return compilation stats
+     */
+    public com.warmup.core.jit.CompilationStats getCompilationStats() {
+        return container.getCompilationStats();
+    }
+
+    /**
+     * Gets resolution diagnostics if diagnostic mode is enabled.
+     * 
+     * @return list of diagnostics
+     */
+    public java.util.List<com.warmup.core.container.ResolutionDiagnostic> getDiagnostics() {
+        return container.getDiagnostics();
+    }
+
+    /**
+     * Registers a compile-time factory for a bean by name.
+     * 
+     * @param beanName the bean name
+     * @param factory the compiled factory
+     */
+    public void registerFactory(String beanName, com.warmup.core.jit.CompiledFactory<?> factory) {
+        container.registerFactory(beanName, factory);
+    }
+
+    /**
+     * Shuts down the container, releasing resources.
+     */
+    public void shutdown() {
+        container.shutdown();
+    }
+
+    @Override
+    public void close() {
+        shutdown();
+    }
+
+    /**
+     * Builder for advanced Warmup configuration.
+     */
+    public static class Builder {
+        private JITCompiler jitCompiler;
+        private boolean diagnostic = false;
+        private int maxPendingCompilations = 10;
+
+        /**
+         * Enables or disables diagnostic mode.
+         * When enabled, resolution paths are logged for debugging.
+         * 
+         * @param diagnostic true to enable diagnostics
+         * @return this builder
+         */
+        public Builder diagnostic(boolean diagnostic) {
+            this.diagnostic = diagnostic;
+            return this;
+        }
+
+        /**
+         * Sets the maximum number of pending background compilations.
+         * Used for backpressure control during warmup.
+         * 
+         * @param maxPendingCompilations maximum concurrent compilations
+         * @return this builder
+         */
+        public Builder maxPendingCompilations(int maxPendingCompilations) {
+            this.maxPendingCompilations = maxPendingCompilations;
+            return this;
+        }
+
+        /**
+         * Sets an explicit JIT compiler implementation.
+         * Bypasses ServiceLoader discovery.
+         * 
+         * @param jitCompiler the JIT compiler to use
+         * @return this builder
+         */
+        public Builder jitCompiler(JITCompiler jitCompiler) {
+            this.jitCompiler = jitCompiler;
+            return this;
+        }
+
+        /**
+         * Builds the Warmup instance.
+         * 
+         * Discovers JITCompiler via ServiceLoader if not explicitly set.
+         * Falls back to NoOpJITCompiler if no provider is found.
+         * 
+         * @return new Warmup instance
+         */
+        public Warmup build() {
+            JITCompiler compiler = jitCompiler;
+            if (compiler == null) {
+                compiler = discoverJITCompiler();
+            }
+            return new Warmup(new HybridContainer(compiler, diagnostic, maxPendingCompilations));
+        }
+
+        /**
+         * Discovers JITCompiler implementation via ServiceLoader.
+         * Falls back to NoOpJITCompiler if no provider is found.
+         * 
+         * @return discovered or fallback JITCompiler
+         */
+        private JITCompiler discoverJITCompiler() {
+            return ServiceLoader.load(JITCompiler.class)
+                    .findFirst()
+                    .orElseGet(NoOpJITCompiler::new);
+        }
+    }
+}

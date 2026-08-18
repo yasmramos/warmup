@@ -1,5 +1,6 @@
 package com.warmup.javafx;
 
+import com.warmup.core.Warmup;
 import com.warmup.core.container.HybridContainer;
 import com.warmup.core.scope.Scope;
 import javafx.application.Application;
@@ -23,16 +24,22 @@ import javafx.stage.Stage;
  *     }
  * }
  * </pre>
+ * 
+ * Note: The default implementation uses explicit HybridContainer construction.
+ * For simpler usage, override createContainer() to use Warmup.create() or
+ * Warmup.builder() for custom configuration.
  */
 public abstract class WarmupApplication extends Application {
 
     protected HybridContainer container;
     protected FxLoader fxLoader;
+    private Warmup warmup;
 
     @Override
     public void init() throws Exception {
-        // Initialize container
-        container = createContainer();
+        // Initialize container via Warmup facade (or custom override)
+        warmup = createWarmup();
+        container = warmup.container();
         
         // Configure beans (implemented by subclass)
         configure(container);
@@ -63,11 +70,37 @@ public abstract class WarmupApplication extends Application {
     }
 
     /**
-     * Creates and configures the HybridContainer.
-     * Override for custom container configuration.
+     * Creates and configures the Warmup container.
+     * Override for custom container configuration using the ergonomic API.
+     * 
+     * Example:
+     * <pre>{@code
+     * @Override
+     * protected Warmup createWarmup() {
+     *     return Warmup.builder()
+     *         .diagnostic(true)
+     *         .maxPendingCompilations(20)
+     *         .build();
+     * }
+     * }</pre>
+     *
+     * @return configured Warmup instance
+     */
+    protected Warmup createWarmup() {
+        // Default: use explicit JIT compiler for backward compatibility
+        // For simpler usage, override to use: return Warmup.create();
+        com.warmup.asm.AsmJITCompiler jitCompiler = new com.warmup.asm.AsmJITCompiler();
+        return Warmup.create(jitCompiler, false, 10);
+    }
+
+    /**
+     * Creates and configures the HybridContainer (deprecated).
+     * Override createWarmup() instead for custom configuration.
      *
      * @return configured HybridContainer
+     * @deprecated Use {@link #createWarmup()} instead
      */
+    @Deprecated
     protected HybridContainer createContainer() {
         com.warmup.asm.AsmJITCompiler jitCompiler = new com.warmup.asm.AsmJITCompiler();
         return new HybridContainer(jitCompiler, false);
