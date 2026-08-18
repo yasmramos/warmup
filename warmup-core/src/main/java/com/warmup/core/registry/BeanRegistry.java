@@ -100,4 +100,18 @@ public interface BeanRegistry {
      * @return set of bean names
      */
     Set<String> getBeanNames();
+    
+    /**
+     * Gets a cached singleton instance if present, without triggering creation.
+     * This is a fast-path method for hot resolution scenarios.
+     * 
+     * @param <T> the bean type
+     * @param name the bean name
+     * @return the cached instance or null if not present/not a singleton
+     */
+    @SuppressWarnings("unchecked")
+    default <T> T getIfPresent(String name) {
+        // Default implementation returns null - to be overridden by implementations
+        return null;
+    }
 }

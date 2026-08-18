@@ -10,6 +10,7 @@
   <name>Warmup Benchmarks</name>
   <description>JMH benchmarks comparing Warmup vs Spring vs Dagger</description>
   <build>
+    <finalName>benchmarks</finalName>
     <plugins>
       <plugin>
         <artifactId>maven-shade-plugin</artifactId>
@@ -21,14 +22,28 @@
               <goal>shade</goal>
             </goals>
             <configuration>
+              <shadedArtifactAttached>false</shadedArtifactAttached>
               <transformers>
                 <transformer>
-                  <mainClass>org.openjdk.jmh.Main</mainClass>
+                  <mainClass>com.warmup.benchmarks.BenchmarkRunner</mainClass>
                 </transformer>
+                <transformer />
               </transformers>
             </configuration>
           </execution>
         </executions>
+      </plugin>
+      <plugin>
+        <groupId>org.codehaus.mojo</groupId>
+        <artifactId>exec-maven-plugin</artifactId>
+        <version>3.6.3</version>
+        <configuration>
+          <executable>java</executable>
+          <arguments>
+            <argument>-jar</argument>
+            <argument>${project.build.directory}/benchmarks.jar</argument>
+          </arguments>
+        </configuration>
       </plugin>
     </plugins>
   </build>

@@ -22,16 +22,13 @@ jobs:
         distribution: 'temurin'
         cache: maven
 
-    - name: Build project
-      run: mvn -B package -DskipTests
+    - name: Build project and benchmarks JAR
+      run: mvn -B package -DskipTests -pl warmup-benchmarks -am
 
     - name: Run Benchmarks
       run: |
-        echo "Running Startup Benchmark..."
-        mvn -pl warmup-benchmarks exec:java -Dexec.mainClass="org.openjdk.jmh.Main" -Dexec.args="-f 1 -i 3 -wi 2 -w 5s -t 1 .*StartupBenchmark.*" -q
-        echo ""
-        echo "Running Resolution Benchmark..."
-        mvn -pl warmup-benchmarks exec:java -Dexec.mainClass="org.openjdk.jmh.Main" -Dexec.args="-f 1 -i 3 -wi 2 -w 5s -t 1 .*ResolutionBenchmark.*" -q
+        echo "Running all benchmarks automatically..."
+        java -jar warmup-benchmarks/target/benchmarks.jar
 
     - name: Upload Benchmark Results
       uses: actions/upload-artifact@v4
