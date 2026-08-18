@@ -1,5 +1,8 @@
 package com.warmup.processor;
 
+import com.warmup.annotations.WarmupBean;
+import com.warmup.annotations.WarmupInject;
+
 import javax.annotation.processing.*;
 import javax.lang.model.SourceVersion;
 import javax.lang.model.element.*;
@@ -41,8 +44,8 @@ import java.util.*;
  * ```
  */
 @SupportedAnnotationTypes({
-    "com.warmup.processor.WarmupBean",
-    "com.warmup.processor.WarmupInject"
+    "com.warmup.annotations.WarmupBean",
+    "com.warmup.annotations.WarmupInject"
 })
 @SupportedSourceVersion(SourceVersion.RELEASE_17)
 public class WarmupProcessor extends AbstractProcessor {

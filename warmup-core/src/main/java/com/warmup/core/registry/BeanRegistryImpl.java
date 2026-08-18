@@ -7,6 +7,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.Optional;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Thread-safe implementation of BeanRegistry using lock-free data structures.
@@ -161,6 +162,11 @@ public class BeanRegistryImpl implements BeanRegistry {
     @Override
     public boolean contains(String name) {
         return definitionsByName.containsKey(name);
+    }
+
+    @Override
+    public Set<String> getAllNames() {
+        return definitionsByName.keySet();
     }
 
     /**
