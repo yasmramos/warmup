@@ -8,6 +8,7 @@ import javafx.scene.Parent;
 import java.io.IOException;
 import java.lang.reflect.Field;
 import java.net.URL;
+import java.util.ResourceBundle;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -51,27 +52,30 @@ public class FxLoader {
      * Load FXML with custom controller factory.
      * 
      * @param fxmlPath path to FXML file
-     * @param resourceBundle optional resource bundle
+     * @param resourceBundle optional resource bundle for localization
      * @return loaded Parent node
      * @throws IOException if FXML loading fails
      */
-    public Parent loadFxml(String fxmlPath, URL resourceBundle) throws IOException {
+    public Parent loadFxml(String fxmlPath, ResourceBundle resourceBundle) throws IOException {
         FXMLLoader loader = new FXMLLoader();
         
+        // Resolve FXML URL for proper relative reference resolution
+        URL fxmlUrl = getClass().getResource(fxmlPath);
+        if (fxmlUrl == null) {
+            throw new IOException("FXML not found: " + fxmlPath);
+        }
+        loader.setLocation(fxmlUrl);
+        
+        // Set resource bundle for localization (not location!)
         if (resourceBundle != null) {
-            loader.setLocation(resourceBundle);
+            loader.setResources(resourceBundle);
         }
         
         // Set controller factory for DI
         loader.setControllerFactory(this::createController);
         
-        // Load FXML
-        try (var stream = getClass().getResourceAsStream(fxmlPath)) {
-            if (stream == null) {
-                throw new IOException("FXML not found: " + fxmlPath);
-            }
-            loader.load(stream);
-        }
+        // Load FXML from the resolved URL
+        loader.load(fxmlUrl.openStream());
         
         return loader.getRoot();
     }
