@@ -3,7 +3,7 @@ package com.warmup.core.container;
 import com.warmup.core.jit.CompiledFactory;
 import com.warmup.core.lifecycle.LifecycleCallbacks;
 import com.warmup.core.registry.BeanDefinition;
-import com.warmup.core.scope.BeanScope;
+import com.warmup.core.scope.Scope;
 
 /**
  * Diagnostic information about which resolution path was used for a bean.

@@ -9,7 +9,7 @@ import com.warmup.core.lifecycle.LifecycleCallbacks;
 import com.warmup.core.registry.BeanDefinition;
 import com.warmup.core.registry.BeanRegistry;
 import com.warmup.core.registry.BeanRegistryImpl;
-import com.warmup.core.scope.BeanScope;
+import com.warmup.core.scope.Scope;
 
 import java.util.*;
 import java.util.concurrent.CompletableFuture;

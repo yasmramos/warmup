@@ -1,7 +1,7 @@
 package com.warmup.core.registry;
 
 import com.warmup.core.lifecycle.LifecycleCallbacks;
-import com.warmup.core.scope.BeanScope;
+import com.warmup.core.scope.Scope;
 
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
@@ -177,9 +177,9 @@ public class BeanRegistryImpl implements BeanRegistry {
      * Applies destruction callback to a bean instance.
      */
     @SuppressWarnings("unchecked")
-    private <T> void applyDestroyCallback(T instance, BeanDefinition<T> definition) {
+    private <T> void applyDestroyCallback(Object instance, BeanDefinition<?> definition) {
         if (definition.hasLifecycle() && definition.lifecycle().onDestroy() != null) {
-            definition.lifecycle().onDestroy().onDestroy(instance);
+            ((LifecycleCallbacks<Object>) definition.lifecycle()).onDestroy().onDestroy(instance);
         }
     }
 }

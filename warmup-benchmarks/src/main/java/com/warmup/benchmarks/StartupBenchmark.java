@@ -3,7 +3,7 @@ package com.warmup.benchmarks;
 import com.warmup.core.container.HybridContainer;
 import com.warmup.core.jit.CompiledFactory;
 import com.warmup.core.registry.BeanDefinition;
-import com.warmup.core.scope.BeanScope;
+import com.warmup.core.scope.Scope;
 import com.warmup.asm.AsmJITCompiler;
 import org.openjdk.jmh.annotations.*;
 
@@ -14,7 +14,7 @@ import java.util.concurrent.TimeUnit;
  * 
  * Scenarios: 10, 100, 1000, 10000 beans
  */
-@State(Scope.Benchmark)
+@State(org.openjdk.jmh.annotations.Scope.Benchmark)
 @BenchmarkMode(Mode.AverageTime)
 @OutputTimeUnit(TimeUnit.MILLISECONDS)
 @Warmup(iterations = 2, time = 2)
@@ -34,7 +34,7 @@ public class StartupBenchmark {
         for (int i = 0; i < beanCount; i++) {
             String beanName = "bean" + i;
             BeanDefinition<Object> definition = new BeanDefinition<>(
-                Object.class, beanName, BeanScope.SINGLETON
+                Object.class, beanName, Scope.SINGLETON
             );
             container.registerDynamic(definition);
         }

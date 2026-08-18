@@ -84,24 +84,22 @@ public class AsmJITCompiler implements JITCompiler {
     }
 
     @Override
+    @SuppressWarnings("unchecked")
     public <T> CompletableFuture<CompiledFactory<T>> compileAsync(Class<T> beanClass, Class<?>... dependencyClasses) {
         // Check if already compiled or compiling
-        @SuppressWarnings("unchecked")
         CompiledFactory<T> cached = (CompiledFactory<T>) factoryCache.get(beanClass);
         if (cached != null) {
             return CompletableFuture.completedFuture(cached);
         }
 
         // Check if already pending
-        @SuppressWarnings("unchecked")
-        CompletableFuture<CompiledFactory<T>> pending = 
-            (CompletableFuture<CompiledFactory<T>>) pendingCompilations.get(beanClass);
+        CompletableFuture<CompiledFactory<?>> pending = pendingCompilations.get(beanClass);
         if (pending != null) {
-            return pending;
+            return (CompletableFuture)(pending);
         }
 
         // Start new async compilation
-        CompletableFuture<CompiledFactory<T>> future = new CompletableFuture<>();
+        CompletableFuture<CompiledFactory<?>> future = new CompletableFuture<>();
         pendingCompilations.put(beanClass, future);
 
         CompletableFuture.supplyAsync(() -> {
@@ -117,7 +115,7 @@ public class AsmJITCompiler implements JITCompiler {
             }
         });
 
-        return future;
+        return (CompletableFuture)(future);
     }
 
     @Override
@@ -204,7 +202,7 @@ public class AsmJITCompiler implements JITCompiler {
         ctor.visitVarInsn(Opcodes.ALOAD, 0);
         ctor.visitMethodInsn(Opcodes.INVOKESPECIAL, "java/lang/Object", "<init>", "()V", false);
         ctor.visitInsn(Opcodes.RETURN);
-        ctor.visitMaxStack(1, 1);
+        ctor.visitMaxs(1, 1);
         ctor.visitEnd();
         
         // create method: public T create(Object... dependencies)
@@ -244,7 +242,7 @@ public class AsmJITCompiler implements JITCompiler {
         
         // Return the created instance
         mv.visitInsn(Opcodes.ARETURN);
-        mv.visitMaxStack(2 + dependencyClasses.length, 2 + dependencyClasses.length);
+        mv.visitMaxs(2 + dependencyClasses.length, 2 + dependencyClasses.length);
         mv.visitEnd();
         
         // getBeanType method (default in interface, but we override for efficiency)
@@ -254,7 +252,7 @@ public class AsmJITCompiler implements JITCompiler {
         mv.visitCode();
         mv.visitLdcInsn(Type.getType("L" + beanInternalName + ";"));
         mv.visitInsn(Opcodes.ARETURN);
-        mv.visitMaxStack(1, 1);
+        mv.visitMaxs(1, 1);
         mv.visitEnd();
         
         // getDependencyCount method
@@ -263,7 +261,7 @@ public class AsmJITCompiler implements JITCompiler {
         mv.visitCode();
         mv.visitLdcInsn(dependencyClasses.length);
         mv.visitInsn(Opcodes.IRETURN);
-        mv.visitMaxStack(1, 1);
+        mv.visitMaxs(1, 1);
         mv.visitEnd();
         
         cw.visitEnd();

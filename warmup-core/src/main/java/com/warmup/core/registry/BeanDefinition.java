@@ -1,7 +1,7 @@
 package com.warmup.core.registry;
 
 import com.warmup.core.lifecycle.LifecycleCallbacks;
-import com.warmup.core.scope.BeanScope;
+import com.warmup.core.scope.Scope;
 
 /**
  * Bean definition containing metadata for instantiation and lifecycle management.
@@ -11,7 +11,7 @@ import com.warmup.core.scope.BeanScope;
 public record BeanDefinition<T>(
     Class<T> type,
     String name,
-    BeanScope scope,
+    Scope scope,
     LifecycleCallbacks<T> lifecycle,
     boolean isPrimary,
     Object[] dependencies
@@ -20,13 +20,13 @@ public record BeanDefinition<T>(
      * Creates a bean definition with default values.
      */
     public BeanDefinition(Class<T> type, String name) {
-        this(type, name, BeanScope.SINGLETON, LifecycleCallbacks.empty(), false, new Object[0]);
+        this(type, name, Scope.SINGLETON, LifecycleCallbacks.empty(), false, new Object[0]);
     }
 
     /**
      * Creates a bean definition with custom scope.
      */
-    public BeanDefinition(Class<T> type, String name, BeanScope scope) {
+    public BeanDefinition(Class<T> type, String name, Scope scope) {
         this(type, name, scope, LifecycleCallbacks.empty(), false, new Object[0]);
     }
 
