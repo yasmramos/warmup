@@ -74,7 +74,7 @@ public class FxLoader {
         // Set controller factory for DI
         loader.setControllerFactory(this::createController);
         
-        // Load FXML - setLocation already configured, so use no-arg load() which handles stream internally
+        // Load FXML - let FXMLLoader handle the stream internally to avoid file handle leaks
         loader.load();
         
         return loader.getRoot();
