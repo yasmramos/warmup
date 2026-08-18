@@ -58,6 +58,7 @@
 
     <build>
         <plugins>
+            <!-- Build executable JAR with all dependencies -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-shade-plugin</artifactId>
@@ -80,6 +81,20 @@
                         </configuration>
                     </execution>
                 </executions>
+            </plugin>
+            
+            <!-- Run benchmarks using the shaded JAR to ensure all dependencies are available -->
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>exec-maven-plugin</artifactId>
+                <version>3.6.3</version>
+                <configuration>
+                    <executable>java</executable>
+                    <arguments>
+                        <argument>-jar</argument>
+                        <argument>${project.build.directory}/${project.artifactId}-${project.version}-jar-with-dependencies.jar</argument>
+                    </arguments>
+                </configuration>
             </plugin>
         </plugins>
     </build>

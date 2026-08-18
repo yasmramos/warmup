@@ -23,9 +23,12 @@
             <configuration>
               <transformers>
                 <transformer>
-                  <mainClass>org.openjdk.jmh.Main</mainClass>
+                  <mainClass>com.warmup.benchmarks.BenchmarkRunner</mainClass>
                 </transformer>
+                <transformer />
               </transformers>
+              <shadedArtifactAttached>true</shadedArtifactAttached>
+              <shadedClassifierName>jar-with-dependencies</shadedClassifierName>
             </configuration>
           </execution>
         </executions>
