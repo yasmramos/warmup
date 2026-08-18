@@ -132,6 +132,7 @@ public class HybridContainer {
     /**
      * Resolves a bean by name.
      * Uses compile-time factory if available, otherwise JIT-compiles or falls back.
+     * Time is always measured for accurate metrics.
      * 
      * @param <T> the bean type
      * @param name the bean name
@@ -139,20 +140,17 @@ public class HybridContainer {
      */
     @SuppressWarnings("unchecked")
     public <T> T resolve(String name) {
+        long startTime = System.nanoTime();
+        
         // Fast-path: check if singleton is already cached (avoid Optional allocation and lambda creation)
         T cachedInstance = registry.getIfPresent(name);
         if (cachedInstance != null) {
-            if (diagnosticMode) {
-                long startTime = System.nanoTime();
-                BeanDefinition<T> definition = (BeanDefinition<T>) registry.getDefinition(name).orElseThrow(() -> new IllegalStateException("Bean not found: " + name));
-                recordMetrics(definition, System.nanoTime() - startTime);
-            }
+            BeanDefinition<T> definition = (BeanDefinition<T>) registry.getDefinition(name).orElseThrow(() -> new IllegalStateException("Bean not found: " + name));
+            recordMetrics(definition, System.nanoTime() - startTime);
             return cachedInstance;
         }
         
         // Slow path: bean not yet cached, need to create it
-        long startTime = diagnosticMode ? System.nanoTime() : 0;
-        
         BeanDefinition<T> definition = (BeanDefinition<T>) registry.getDefinition(name).orElse(null);
         if (definition == null) {
             throw new IllegalStateException("Bean not found: " + name);
@@ -160,11 +158,7 @@ public class HybridContainer {
         
         T instance = registry.getInstance(name, () -> createBean(definition));
         
-        if (diagnosticMode) {
-            recordMetrics(definition, System.nanoTime() - startTime);
-        } else {
-            totalResolutions.add(1);
-        }
+        recordMetrics(definition, System.nanoTime() - startTime);
         
         return instance;
     }
