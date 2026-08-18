@@ -313,9 +313,9 @@ public class HybridContainer {
                 }
                 depClasses[i] = d.type();
             } else if (dep != null) {
-                // Direct object reference - derive type from constructor parameter, not runtime class
-                // This ensures the bytecode descriptor matches the actual constructor signature
-                depClasses[i] = dep.getClass();
+                // Direct object reference - derive type from constructor parameter signature, not runtime class
+                // This ensures the bytecode descriptor matches the actual constructor signature when interface/superType is used
+                depClasses[i] = findConstructorParameterType(definition.type(), i, dep.getClass());
             } else {
                 throw new IllegalStateException(
                     "Null dependency at index " + i + " in bean '" + definition.name() + "'"
@@ -324,6 +324,29 @@ public class HybridContainer {
         }
         
         return depClasses;
+    }
+
+    /**
+     * Find the actual parameter type from the constructor signature.
+     * Falls back to runtime class if constructor cannot be found.
+     */
+    private Class<?> findConstructorParameterType(Class<?> beanType, int paramIndex, Class<?> runtimeClass) {
+        try {
+            // Try to find a constructor that accepts this parameter at the given index
+            for (var ctor : beanType.getDeclaredConstructors()) {
+                Class<?>[] paramTypes = ctor.getParameterTypes();
+                if (paramIndex < paramTypes.length) {
+                    // Check if runtime class is assignable to this parameter type
+                    if (paramTypes[paramIndex].isAssignableFrom(runtimeClass)) {
+                        return paramTypes[paramIndex];
+                    }
+                }
+            }
+        } catch (Exception e) {
+            // Fall through to default behavior
+        }
+        // Fallback: use runtime class
+        return runtimeClass;
     }
 
     private Object[] resolveDependencies(BeanDefinition<?> definition) {
@@ -350,19 +373,23 @@ public class HybridContainer {
     }
 
     private <T> void triggerBackgroundWarmup(BeanDefinition<T> definition) {
+        // Check if all dependencies are registered before attempting warmup
+        for (Object dep : definition.dependencies()) {
+            if (dep instanceof String depName && !registry.contains(depName)) {
+                // Skip warmup if dependency is not yet registered - will be retried later
+                return;
+            }
+        }
+        
         // Try to acquire a permit for background compilation
         if (!warmupSemaphore.tryAcquire()) {
             // Backpressure: skip warmup if too many pending compilations
             return;
         }
         
-        CompletableFuture.supplyAsync(() -> {
-            try {
-                return jitCompiler.compileAsync(definition.type(), getDependencyClasses(definition));
-            } finally {
-                warmupSemaphore.release();
-            }
-        }, warmupExecutor);
+        CompletableFuture<CompiledFactory<T>> future = jitCompiler.compileAsync(definition.type(), getDependencyClasses(definition));
+        // Release semaphore when compilation completes (success or failure)
+        future.whenComplete((r, e) -> warmupSemaphore.release());
     }
 
     private void recordMetrics(BeanDefinition<?> definition, long resolutionTimeNs) {

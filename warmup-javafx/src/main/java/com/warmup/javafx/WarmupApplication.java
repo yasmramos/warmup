@@ -133,6 +133,8 @@ public abstract class WarmupApplication extends Application {
      */
     protected void enableHotReload(HybridContainer container) {
         System.setProperty("warmup.dev.mode", "true");
-        fxLoader.clearCache();
+        if (fxLoader != null) {
+            fxLoader.clearCache();
+        }
     }
 }
