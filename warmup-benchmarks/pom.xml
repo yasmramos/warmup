@@ -57,6 +57,7 @@
     </dependencies>
 
     <build>
+        <finalName>benchmarks</finalName>
         <plugins>
             <!-- Build executable JAR with all dependencies -->
             <plugin>
@@ -70,14 +71,13 @@
                             <goal>shade</goal>
                         </goals>
                         <configuration>
+                            <outputFile>${project.build.directory}/benchmarks-jar-with-dependencies.jar</outputFile>
                             <transformers>
                                 <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
                                     <mainClass>com.warmup.benchmarks.BenchmarkRunner</mainClass>
                                 </transformer>
                                 <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
                             </transformers>
-                            <shadedArtifactAttached>true</shadedArtifactAttached>
-                            <shadedClassifierName>jar-with-dependencies</shadedClassifierName>
                         </configuration>
                     </execution>
                 </executions>
@@ -92,7 +92,7 @@
                     <executable>java</executable>
                     <arguments>
                         <argument>-jar</argument>
-                        <argument>${project.build.directory}/${project.artifactId}-${project.version}-jar-with-dependencies.jar</argument>
+                        <argument>${project.build.directory}/benchmarks-jar-with-dependencies.jar</argument>
                     </arguments>
                 </configuration>
             </plugin>
