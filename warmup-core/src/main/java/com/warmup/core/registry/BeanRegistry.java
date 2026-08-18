@@ -92,4 +92,12 @@ public interface BeanRegistry {
      * @return set of bean names
      */
     Set<String> getAllNames();
+    
+    /**
+     * Returns all registered bean names (alias for getAllNames).
+     * Used by HybridContainer.getBeanNames().
+     * 
+     * @return set of bean names
+     */
+    Set<String> getBeanNames();
 }

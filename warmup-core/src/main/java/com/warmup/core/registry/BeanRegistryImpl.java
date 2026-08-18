@@ -169,6 +169,11 @@ public class BeanRegistryImpl implements BeanRegistry {
         return definitionsByName.keySet();
     }
 
+    @Override
+    public Set<String> getBeanNames() {
+        return definitionsByName.keySet();
+    }
+
     /**
      * Applies initialization callback to a bean instance.
      */
