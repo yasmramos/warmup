@@ -387,9 +387,19 @@ public class HybridContainer {
             return;
         }
         
-        CompletableFuture<CompiledFactory<T>> future = jitCompiler.compileAsync(definition.type(), getDependencyClasses(definition));
-        // Release semaphore when compilation completes (success or failure)
-        future.whenComplete((r, e) -> warmupSemaphore.release());
+        try {
+            CompletableFuture<CompiledFactory<T>> future = jitCompiler.compileAsync(definition.type(), getDependencyClasses(definition));
+            // Release semaphore when compilation completes (success or failure)
+            future.whenComplete((r, e) -> warmupSemaphore.release());
+        } catch (Exception e) {
+            // If compileAsync or getDependencyClasses throws synchronously, release the semaphore immediately
+            // to prevent permanent loss of warmup capacity
+            warmupSemaphore.release();
+            // Log at debug level - this is expected during rapid bean registration
+            if (System.getProperty("warmup.debug") != null) {
+                System.err.println("[Warmup] Background warmup failed for " + definition.name() + ": " + e.getMessage());
+            }
+        }
     }
 
     private void recordMetrics(BeanDefinition<?> definition, long resolutionTimeNs) {
