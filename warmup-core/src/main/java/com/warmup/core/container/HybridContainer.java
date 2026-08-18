@@ -16,6 +16,9 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Semaphore;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.LongAdder;
 import java.util.function.Function;
 
 /**
@@ -43,16 +46,16 @@ public class HybridContainer {
     private final boolean diagnosticMode;
     private final List<ResolutionDiagnostic> diagnostics = new ArrayList<>();
     
-    // Metrics tracking
-    private volatile long totalResolutions = 0;
-    private volatile long compileTimeHits = 0;
-    private volatile long jitHits = 0;
-    private volatile long fallbackCount = 0;
+    // Metrics tracking using LongAdder for thread-safe increments
+    private final LongAdder totalResolutions = new LongAdder();
+    private final LongAdder compileTimeHits = new LongAdder();
+    private final LongAdder jitHits = new LongAdder();
+    private final LongAdder fallbackCount = new LongAdder();
+    private final LongAdder resolutionTimeAccumulator = new LongAdder();
     
-    // Background warmup executor
+    // Background warmup executor with semaphore for backpressure
     private final ExecutorService warmupExecutor;
-    private final int maxPendingCompilations;
-    private volatile int pendingCompilations = 0;
+    private final Semaphore warmupSemaphore;
 
     /**
      * Creates a new HybridContainer with default settings.
@@ -74,7 +77,7 @@ public class HybridContainer {
     public HybridContainer(JITCompiler jitCompiler, boolean diagnosticMode, int maxPendingCompilations) {
         this.jitCompiler = jitCompiler;
         this.diagnosticMode = diagnosticMode;
-        this.maxPendingCompilations = maxPendingCompilations;
+        this.warmupSemaphore = new Semaphore(maxPendingCompilations);
         this.warmupExecutor = Executors.newFixedThreadPool(
             Math.max(2, Runtime.getRuntime().availableProcessors() / 2),
             r -> {
@@ -180,8 +183,7 @@ public class HybridContainer {
      * Gets all registered bean names.
      */
     public Set<String> getBeanNames() {
-        // Note: BeanRegistry doesn't expose this, would need to add method
-        return Collections.emptySet(); // TODO: implement
+        return registry.getBeanNames();
     }
 
     /**
@@ -195,16 +197,25 @@ public class HybridContainer {
      * Gets current container metrics.
      */
     public ContainerMetrics getMetrics() {
-        double hitRate = totalResolutions > 0 
-            ? ((compileTimeHits + jitHits) * 100.0 / totalResolutions) 
+        long total = totalResolutions.sum();
+        long compileHits = compileTimeHits.sum();
+        long jitHitCount = jitHits.sum();
+        long fallback = fallbackCount.sum();
+        
+        double hitRate = total > 0 
+            ? ((compileHits + jitHitCount) * 100.0 / total) 
             : 0.0;
         
+        long avgResolutionTimeNs = total > 0 
+            ? resolutionTimeAccumulator.sum() / total 
+            : 0L;
+        
         return new ContainerMetrics(
-            totalResolutions,
-            compileTimeHits,
-            jitHits,
-            fallbackCount,
-            0, // TODO: track average resolution time
+            total,
+            compileHits,
+            jitHitCount,
+            fallback,
+            avgResolutionTimeNs,
             hitRate
         );
     }
@@ -238,6 +249,7 @@ public class HybridContainer {
     @SuppressWarnings("unchecked")
     private <T> T createBean(BeanDefinition<T> definition) {
         String name = definition.name();
+        long startTime = System.nanoTime();
         long compileTimeNs = 0;
         ResolutionDiagnostic.ResolutionPath path;
         
@@ -245,17 +257,17 @@ public class HybridContainer {
         CompiledFactory<T> factory = (CompiledFactory<T>) compileTimeFactories.get(name);
         if (factory != null) {
             path = ResolutionDiagnostic.ResolutionPath.COMPILE_TIME;
-            compileTimeHits++;
+            compileTimeHits.add(1);
         } else {
             // Try JIT compilation
             try {
                 factory = jitCompiler.compile(definition.type(), getDependencyClasses(definition));
                 path = ResolutionDiagnostic.ResolutionPath.JIT;
-                jitHits++;
+                jitHits.add(1);
             } catch (CompilationException e) {
                 // Fallback (should not happen in production)
                 path = ResolutionDiagnostic.ResolutionPath.REFLECTION_FALLBACK;
-                fallbackCount++;
+                fallbackCount.add(1);
                 return createViaReflection(definition);
             }
         }
@@ -263,6 +275,8 @@ public class HybridContainer {
         // Create instance using factory
         Object[] deps = resolveDependencies(definition);
         T instance = factory.create(deps);
+        
+        long resolutionTime = System.nanoTime() - startTime;
         
         // Record diagnostic if enabled
         if (diagnosticMode) {
@@ -273,9 +287,26 @@ public class HybridContainer {
     }
 
     private Class<?>[] getDependencyClasses(BeanDefinition<?> definition) {
-        // Extract classes from dependencies array
-        // This is simplified - real implementation would handle various dependency types
-        return new Class[0]; // TODO: implement properly
+        // Extract classes from dependencies by resolving each dependency name
+        // and getting its type from the registry
+        Object[] deps = definition.dependencies();
+        Class<?>[] depClasses = new Class<?>[deps.length];
+        
+        for (int i = 0; i < deps.length; i++) {
+            Object dep = deps[i];
+            if (dep instanceof String depName) {
+                // Resolve dependency name to get its type
+                BeanDefinition<?> d = registry.getDefinition(depName).orElse(null);
+                if (d != null) {
+                    depClasses[i] = d.type();
+                }
+            } else if (dep != null) {
+                // Direct object reference - use its class
+                depClasses[i] = dep.getClass();
+            }
+        }
+        
+        return depClasses;
     }
 
     private Object[] resolveDependencies(BeanDefinition<?> definition) {
@@ -302,24 +333,38 @@ public class HybridContainer {
     }
 
     private <T> void triggerBackgroundWarmup(BeanDefinition<T> definition) {
-        if (pendingCompilations >= maxPendingCompilations) {
-            // Backpressure: skip warmup if too many pending
+        // Try to acquire a permit for background compilation
+        if (!warmupSemaphore.tryAcquire()) {
+            // Backpressure: skip warmup if too many pending compilations
             return;
         }
-        
-        pendingCompilations++;
         
         CompletableFuture.supplyAsync(() -> {
             try {
                 return jitCompiler.compileAsync(definition.type(), getDependencyClasses(definition));
             } finally {
-                pendingCompilations--;
+                warmupSemaphore.release();
             }
         }, warmupExecutor);
     }
 
     private void recordMetrics(BeanDefinition<?> definition, long resolutionTimeNs) {
-        totalResolutions++;
-        // TODO: track average resolution time with moving average
+        totalResolutions.add(1);
+        resolutionTimeAccumulator.add(resolutionTimeNs);
+    }
+
+    /**
+     * Checks if running in GraalVM native image mode.
+     * In native image, JIT compilation is disabled and only compile-time/fallback paths are used.
+     */
+    private boolean isNativeImage() {
+        try {
+            Class<?> imageInfoClass = Class.forName("org.graalvm.nativeimage.ImageInfo");
+            Object inImageCode = imageInfoClass.getMethod("inImageCode").invoke(null);
+            return Boolean.TRUE.equals(inImageCode);
+        } catch (ReflectiveOperationException e) {
+            // Not running in GraalVM or ImageInfo not available
+            return false;
+        }
     }
 }
