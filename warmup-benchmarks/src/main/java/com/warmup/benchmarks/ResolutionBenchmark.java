@@ -8,8 +8,6 @@ import com.warmup.asm.AsmJITCompiler;
 import org.openjdk.jmh.annotations.*;
 import org.openjdk.jmh.infra.Blackhole;
 
-import java.util.ArrayList;
-import java.util.List;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -19,14 +17,10 @@ import java.util.concurrent.TimeUnit;
  * - Direct instantiation (baseline)
  * - Warmup compile-time factory (zero-overhead path)
  * - Warmup JIT-compiled factory (runtime compilation)
- * - Spring container (comparison)
- * - Dagger container (comparison)
  * 
  * Metrics:
- * - Startup time (container initialization + bean registration)
  * - Resolution time (single bean resolution)
  * - Throughput (resolutions per second)
- * - Memory footprint (heap usage)
  */
 @State(org.openjdk.jmh.annotations.Scope.Benchmark)
 @BenchmarkMode(Mode.AverageTime)
@@ -61,7 +55,7 @@ public class ResolutionBenchmark {
     private CompiledFactory<SimpleBean> simpleFactory;
     
     @Setup(Level.Trial)
-    public void setup() {
+    public void setup() throws Exception {
         AsmJITCompiler jitCompiler = new AsmJITCompiler();
         container = new HybridContainer(jitCompiler, false);
         
@@ -72,11 +66,7 @@ public class ResolutionBenchmark {
         container.registerDynamic(definition);
         
         // Pre-compile factory for warmup
-        try {
-            simpleFactory = jitCompiler.compile(SimpleBean.class);
-        } catch (Exception e) {
-            throw new RuntimeException(e);
-        }
+        simpleFactory = jitCompiler.compile(SimpleBean.class);
     }
 
     @Benchmark
