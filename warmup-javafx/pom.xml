@@ -25,6 +25,10 @@
             <groupId>com.warmup</groupId>
             <artifactId>warmup-asm</artifactId>
         </dependency>
+        <dependency>
+            <groupId>com.warmup</groupId>
+            <artifactId>warmup-annotations</artifactId>
+        </dependency>
 
         <!-- JavaFX dependencies -->
         <dependency>
