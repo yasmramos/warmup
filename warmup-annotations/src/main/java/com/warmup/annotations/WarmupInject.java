@@ -9,7 +9,7 @@ import java.lang.annotation.Target;
  * Marks a field or constructor parameter for dependency injection.
  */
 @Target({ElementType.FIELD, ElementType.PARAMETER})
-@Retention(RetentionPolicy.SOURCE)
+@Retention(RetentionPolicy.RUNTIME)
 public @interface WarmupInject {
     /**
      * Optional bean name. If not specified, resolves by type.
