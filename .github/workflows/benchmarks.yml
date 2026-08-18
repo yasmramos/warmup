@@ -1,0 +1,44 @@
+name: Benchmarks
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+  workflow_dispatch:
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up JDK 17
+      uses: actions/setup-java@v4
+      with:
+        java-version: '17'
+        distribution: 'temurin'
+        cache: maven
+
+    - name: Build project
+      run: mvn -B package -DskipTests
+
+    - name: Run Benchmarks
+      run: |
+        echo "Running Startup Benchmark..."
+        mvn -pl warmup-benchmarks exec:java -Dexec.mainClass="org.openjdk.jmh.Main" -Dexec.args="-f 1 -i 3 -wi 2 -w 5s -t 1 .*StartupBenchmark.*" -q
+        echo ""
+        echo "Running Resolution Benchmark..."
+        mvn -pl warmup-benchmarks exec:java -Dexec.mainClass="org.openjdk.jmh.Main" -Dexec.args="-f 1 -i 3 -wi 2 -w 5s -t 1 .*ResolutionBenchmark.*" -q
+
+    - name: Upload Benchmark Results
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: benchmark-results
+        path: |
+          **/target/jmh-result.json
+          **/target/jmh-result.csv
+        retention-days: 30
