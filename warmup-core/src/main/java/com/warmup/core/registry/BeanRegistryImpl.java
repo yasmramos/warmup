@@ -84,13 +84,12 @@ public class BeanRegistryImpl implements BeanRegistry {
         return switch (definition.scope()) {
             case SINGLETON -> {
                 // ComputeIfAbsent ensures thread-safe lazy initialization
-                T instance = (T) singletonInstances.computeIfAbsent(name, k -> factory.get());
-                
-                // Apply init callback on first creation
-                if (singletonInstances.size() == 1 || !hasInstance(name)) {
-                    applyInitCallback((T) instance, (BeanDefinition<T>) definition);
-                }
-                
+                T instance = (T) singletonInstances.computeIfAbsent(name, k -> {
+                    T newInstance = factory.get();
+                    // Apply init callback exactly once at creation time
+                    applyInitCallback(newInstance, (BeanDefinition<T>) definition);
+                    return newInstance;
+                });
                 yield instance;
             }
             case PROTOTYPE -> {
@@ -172,6 +171,12 @@ public class BeanRegistryImpl implements BeanRegistry {
     @Override
     public Set<String> getBeanNames() {
         return definitionsByName.keySet();
+    }
+    
+    @Override
+    @SuppressWarnings("unchecked")
+    public <T> T getIfPresent(String name) {
+        return (T) singletonInstances.get(name);
     }
 
     /**

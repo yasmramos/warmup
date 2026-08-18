@@ -139,14 +139,33 @@ public class HybridContainer {
      */
     @SuppressWarnings("unchecked")
     public <T> T resolve(String name) {
-        long startTime = System.nanoTime();
+        // Fast-path: check if singleton is already cached (avoid Optional allocation and lambda creation)
+        T cachedInstance = registry.getIfPresent(name);
+        if (cachedInstance != null) {
+            totalResolutions.add(1);
+            if (diagnosticMode) {
+                long startTime = System.nanoTime();
+                BeanDefinition<T> definition = (BeanDefinition<T>) registry.getDefinition(name).orElseThrow(() -> new IllegalStateException("Bean not found: " + name));
+                recordMetrics(definition, System.nanoTime() - startTime);
+            }
+            return cachedInstance;
+        }
         
-        BeanDefinition<T> definition = (BeanDefinition<T>) registry.getDefinition(name)
-            .orElseThrow(() -> new IllegalStateException("Bean not found: " + name));
+        // Slow path: bean not yet cached, need to create it
+        long startTime = diagnosticMode ? System.nanoTime() : 0;
+        
+        BeanDefinition<T> definition = (BeanDefinition<T>) registry.getDefinition(name).orElse(null);
+        if (definition == null) {
+            throw new IllegalStateException("Bean not found: " + name);
+        }
         
         T instance = registry.getInstance(name, () -> createBean(definition));
         
-        recordMetrics(definition, System.nanoTime() - startTime);
+        if (diagnosticMode) {
+            recordMetrics(definition, System.nanoTime() - startTime);
+        } else {
+            totalResolutions.add(1);
+        }
         
         return instance;
     }

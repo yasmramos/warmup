@@ -11,40 +11,42 @@ import java.util.concurrent.TimeUnit;
 
 /**
  * JMH benchmarks comparing Warmup compile-time vs JIT paths.
- * 
+ *
  * Scenarios:
  * - Direct instantiation (baseline)
  * - Warmup compile-time factory (zero-overhead path)
  * - Warmup JIT-compiled factory (runtime compilation)
- * 
+ * - Warmup resolve() for singleton (cached lookup)
+ * - Warmup resolve() for prototype (creation overhead)
+ *
  * Metrics:
  * - Resolution time (single bean resolution)
  * - Throughput (resolutions per second)
- * 
+ *
  * Note: This benchmark uses explicit HybridContainer construction for precise
  * performance measurement. For production usage, prefer Warmup.create().
  */
 @State(org.openjdk.jmh.annotations.Scope.Benchmark)
 @BenchmarkMode(Mode.AverageTime)
 @OutputTimeUnit(TimeUnit.NANOSECONDS)
-@org.openjdk.jmh.annotations.Warmup(iterations = 3, time = 1)
-@Measurement(iterations = 5, time = 1)
-@Fork(2)
+@org.openjdk.jmh.annotations.Warmup(iterations = 5, time = 1)
+@Measurement(iterations = 10, time = 1)
+@Fork(3)
 public class ResolutionBenchmark {
 
     // Test beans with varying complexity
-    
+
     public static class SimpleBean {
         public SimpleBean() {}
     }
-    
+
     public static class BeanWithOneDependency {
         private final SimpleBean dependency;
         public BeanWithOneDependency(SimpleBean dependency) {
             this.dependency = dependency;
         }
     }
-    
+
     public static class BeanWithFiveDependencies {
         private final SimpleBean d1, d2, d3, d4, d5;
         public BeanWithFiveDependencies(SimpleBean d1, SimpleBean d2, SimpleBean d3, SimpleBean d4, SimpleBean d5) {
@@ -55,22 +57,37 @@ public class ResolutionBenchmark {
     // Benchmark state
     private HybridContainer container;
     private CompiledFactory<SimpleBean> simpleFactory;
-    
+    private CompiledFactory<PrototypeBean> prototypeFactory;
+
+    public static class PrototypeBean {
+        public PrototypeBean() {}
+    }
+
     @Setup(Level.Trial)
     public void setup() throws Exception {
         // Using explicit constructor for benchmark measurement
         // In production, use: com.warmup.core.Warmup warmup = com.warmup.core.Warmup.create();
         com.warmup.asm.AsmJITCompiler jitCompiler = new com.warmup.asm.AsmJITCompiler();
         container = new HybridContainer(jitCompiler, false);
-        
-        // Register simple bean with JIT compilation
-        BeanDefinition<SimpleBean> definition = new BeanDefinition<>(
+
+        // Register simple bean with JIT compilation (SINGLETON)
+        BeanDefinition<SimpleBean> singletonDef = new BeanDefinition<>(
             SimpleBean.class, "simpleBean", Scope.SINGLETON
         );
-        container.registerDynamic(definition);
-        
-        // Pre-compile factory for warmup
+        container.registerDynamic(singletonDef);
+
+        // Register prototype bean to measure creation overhead
+        BeanDefinition<PrototypeBean> prototypeDef = new BeanDefinition<>(
+            PrototypeBean.class, "prototypeBean", Scope.PROTOTYPE
+        );
+        container.registerDynamic(prototypeDef);
+
+        // Pre-compile factories for warmup
         simpleFactory = jitCompiler.compile(SimpleBean.class);
+        prototypeFactory = jitCompiler.compile(PrototypeBean.class);
+
+        // Pre-resolve singleton to ensure it's cached (fast-path test)
+        container.resolve("simpleBean");
     }
 
     @Benchmark
@@ -78,11 +95,28 @@ public class ResolutionBenchmark {
         return new SimpleBean();
     }
 
+    /**
+     * Measures resolve() overhead for a SINGLETON bean that is already cached.
+     * This tests the fast-path lookup without bean creation.
+     */
     @Benchmark
-    public Object warmupJITResolution() {
+    public Object singletonCachedResolve() {
         return container.resolve("simpleBean");
     }
 
+    /**
+     * Measures resolve() for a PROTOTYPE bean, including full creation cost.
+     * This measures the actual bean creation overhead via JIT factory.
+     */
+    @Benchmark
+    public Object prototypeResolve() {
+        return container.resolve("prototypeBean");
+    }
+
+    /**
+     * Measures direct compiled factory creation without container overhead.
+     * Baseline for JIT path.
+     */
     @Benchmark
     public Object compiledFactoryCreate() {
         return simpleFactory.create();
