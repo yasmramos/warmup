@@ -74,8 +74,8 @@ public class FxLoader {
         // Set controller factory for DI
         loader.setControllerFactory(this::createController);
         
-        // Load FXML from the resolved URL
-        loader.load(fxmlUrl.openStream());
+        // Load FXML - let FXMLLoader handle the stream internally to avoid file handle leaks
+        loader.load();
         
         return loader.getRoot();
     }
@@ -83,6 +83,7 @@ public class FxLoader {
     /**
      * Create controller with dependency injection.
      * Uses prototype scope for controllers (new instance per request).
+     * Falls back to reflective instantiation if controller is not registered in container.
      * 
      * @param clazz controller class
      * @return injected controller instance
@@ -104,8 +105,14 @@ public class FxLoader {
             }
         }
         
-        // Resolve from container (triggers JIT if needed)
-        T controller = container.resolve(clazz);
+        T controller;
+        try {
+            // Try to resolve from container (triggers JIT if needed)
+            controller = container.resolve(clazz);
+        } catch (IllegalStateException e) {
+            // Controller not registered - fall back to reflective no-arg instantiation
+            controller = createControllerReflectively(clazz);
+        }
         
         // Inject fields marked with @WarmupInject
         injectFields(controller);
@@ -116,6 +123,25 @@ public class FxLoader {
         }
         
         return controller;
+    }
+
+    /**
+     * Create controller instance via reflection using no-arg constructor.
+     * Used as fallback when controller is not registered in the container.
+     * 
+     * @param clazz controller class
+     * @return new controller instance
+     */
+    private <T> T createControllerReflectively(Class<T> clazz) {
+        try {
+            return clazz.getDeclaredConstructor().newInstance();
+        } catch (Exception e) {
+            throw new RuntimeException(
+                "Failed to create controller via reflection: " + clazz.getName() + 
+                ". Controller must either be registered in the container or have a public no-arg constructor.",
+                e
+            );
+        }
     }
 
     /**

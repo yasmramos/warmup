@@ -253,11 +253,19 @@ public class HybridContainer {
         long compileTimeNs = 0;
         ResolutionDiagnostic.ResolutionPath path;
         
+        // Check if running in GraalVM native image mode - disable JIT
+        boolean nativeImage = isNativeImage();
+        
         // Try compile-time factory first (zero-overhead path)
         CompiledFactory<T> factory = (CompiledFactory<T>) compileTimeFactories.get(name);
         if (factory != null) {
             path = ResolutionDiagnostic.ResolutionPath.COMPILE_TIME;
             compileTimeHits.add(1);
+        } else if (nativeImage) {
+            // In native image, skip JIT and go directly to fallback
+            path = ResolutionDiagnostic.ResolutionPath.REFLECTION_FALLBACK;
+            fallbackCount.add(1);
+            return createViaReflection(definition);
         } else {
             // Try JIT compilation
             try {
@@ -297,12 +305,21 @@ public class HybridContainer {
             if (dep instanceof String depName) {
                 // Resolve dependency name to get its type
                 BeanDefinition<?> d = registry.getDefinition(depName).orElse(null);
-                if (d != null) {
-                    depClasses[i] = d.type();
+                if (d == null) {
+                    throw new IllegalStateException(
+                        "Unknown dependency '" + depName + "' in bean '" + definition.name() + 
+                        "'. All dependencies must be registered before the dependent bean."
+                    );
                 }
+                depClasses[i] = d.type();
             } else if (dep != null) {
-                // Direct object reference - use its class
+                // Direct object reference - derive type from constructor parameter, not runtime class
+                // This ensures the bytecode descriptor matches the actual constructor signature
                 depClasses[i] = dep.getClass();
+            } else {
+                throw new IllegalStateException(
+                    "Null dependency at index " + i + " in bean '" + definition.name() + "'"
+                );
             }
         }
         
