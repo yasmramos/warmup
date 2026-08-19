@@ -6,9 +6,9 @@ import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
 
 /**
- * Marks a method to be called before bean destruction.
+ * Marks a method to be called after the bean is constructed and dependencies are injected.
  */
 @Target(ElementType.METHOD)
-@Retention(RetentionPolicy.SOURCE)
-public @interface WarmupPreDestroy {
+@Retention(RetentionPolicy.RUNTIME)
+public @interface PostConstruct {
 }

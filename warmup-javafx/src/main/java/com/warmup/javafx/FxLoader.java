@@ -1,6 +1,6 @@
 package com.warmup.javafx;
 
-import com.warmup.annotations.WarmupInject;
+import com.warmup.annotations.Inject;
 import com.warmup.core.container.HybridContainer;
 import javafx.fxml.FXMLLoader;
 import javafx.scene.Parent;
@@ -18,7 +18,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * Features:
  * - Lazy initialization of controllers
  * - Hot-reload support in development mode
- * - Automatic field injection with @WarmupInject
+ * - Automatic field injection with @Inject
  * - Circular dependency resolution for UI frameworks
  */
 public class FxLoader {
@@ -114,7 +114,7 @@ public class FxLoader {
             controller = createControllerReflectively(clazz);
         }
         
-        // Inject fields marked with @WarmupInject
+        // Inject fields marked with @Inject
         injectFields(controller);
         
         // Cache if not prototype
@@ -157,7 +157,7 @@ public class FxLoader {
         Class<?> clazz = controller.getClass();
         while (clazz != null && clazz != Object.class) {
             for (Field field : clazz.getDeclaredFields()) {
-                if (field.isAnnotationPresent(WarmupInject.class)) {
+                if (field.isAnnotationPresent(Inject.class)) {
                     injectField(controller, field);
                 }
             }

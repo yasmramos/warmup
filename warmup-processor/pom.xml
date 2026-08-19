@@ -38,6 +38,12 @@
             <version>0.21.0</version>
             <scope>test</scope>
         </dependency>
+        <dependency>
+            <groupId>com.warmup</groupId>
+            <artifactId>warmup-core</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
     <build>

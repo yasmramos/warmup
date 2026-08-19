@@ -15,7 +15,7 @@ Warmup is the evolution of traditional DI frameworks, featuring:
 
 ```
 warmup-parent/
-├── warmup-annotations    # Core annotations (@WarmupBean, @WarmupInject, etc.)
+├── warmup-annotations    # Core annotations (@Bean, @Inject, etc.)
 ├── warmup-core           # DI engine (HybridContainer, BeanRegistry, DependencyGraph)
 ├── warmup-asm            # JIT compiler implementation using ASM 9.x
 ├── warmup-processor      # Annotation processor for compile-time factories
@@ -52,13 +52,13 @@ MyService service = container.resolve(MyService.class);
 ### Annotations
 
 ```java
-@WarmupBean(scope = Scope.SINGLETON)
+@Bean(scope = Scope.SINGLETON)
 public class UserService {
     
-    @WarmupInject
+    @Inject
     private UserRepository repository;
     
-    @WarmupPostConstruct
+    @PostConstruct
     public void init() {
         // Initialization logic
     }
@@ -102,7 +102,7 @@ public interface HybridContainer extends BeanRegistry {
 
 ### Path A: Compile-Time (Zero Overhead)
 
-1. Annotation processor scans `@WarmupBean` classes
+1. Annotation processor scans `@Bean` classes
 2. Generates `XXXFactory` implementing `CompiledFactory<T>`
 3. Factory registered automatically in container
 4. Resolution: direct factory call (no reflection)
@@ -167,7 +167,7 @@ public class MyApp extends WarmupApplication {
 
 - **Lazy Controller Loading**: Controllers instantiated on-demand
 - **Hot-Reload**: Enable with `-Dwarmup.dev.mode=true`
-- **Field Injection**: `@WarmupInject` fields in controllers
+- **Field Injection**: `@Inject` fields in controllers
 - **Circular Dependencies**: Resolved automatically for UI frameworks
 
 ## Benchmarks
