@@ -86,7 +86,9 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>
+                <version>3.12.1</version>
                 <executions>
+                    <!-- First execution: Avaje Inject generator only -->
                     <execution>
                         <id>avaje-generate</id>
                         <phase>generate-sources</phase>
@@ -99,14 +101,12 @@
                                 <path>
                                     <groupId>io.avaje</groupId>
                                     <artifactId>avaje-inject-generator</artifactId>
-                                    <version>11.4</version>
+                                    <version>12.6</version>
                                 </path>
                             </annotationProcessorPaths>
-                            <compilerArgs>
-                                <arg>-AsmoothBuild=true</arg>
-                            </compilerArgs>
                         </configuration>
                     </execution>
+                    <!-- Second execution: Warmup processor + JMH generator -->
                     <execution>
                         <id>default-compile</id>
                         <phase>compile</phase>
@@ -172,7 +172,7 @@
       <plugin>
         <groupId>io.avaje</groupId>
         <artifactId>avaje-inject-maven-plugin</artifactId>
-        <version>11.4</version>
+        <version>12.6</version>
         <executions>
           <execution>
             <?m2e execute?>

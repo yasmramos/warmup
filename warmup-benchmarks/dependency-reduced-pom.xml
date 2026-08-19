@@ -21,6 +21,7 @@
       </plugin>
       <plugin>
         <artifactId>maven-compiler-plugin</artifactId>
+        <version>3.12.1</version>
         <executions>
           <execution>
             <id>avaje-generate</id>
@@ -34,12 +35,9 @@
                 <path>
                   <groupId>io.avaje</groupId>
                   <artifactId>avaje-inject-generator</artifactId>
-                  <version>11.4</version>
+                  <version>12.6</version>
                 </path>
               </annotationProcessorPaths>
-              <compilerArgs>
-                <arg>-AsmoothBuild=true</arg>
-              </compilerArgs>
             </configuration>
           </execution>
           <execution>
@@ -101,7 +99,7 @@
       <plugin>
         <groupId>io.avaje</groupId>
         <artifactId>avaje-inject-maven-plugin</artifactId>
-        <version>11.4</version>
+        <version>12.6</version>
         <executions>
           <execution>
             <phase>process-sources</phase>
