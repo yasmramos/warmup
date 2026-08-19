@@ -84,6 +84,14 @@ public class BeanRegistryImpl implements BeanRegistry {
             throw new IllegalStateException("Bean not found: " + name);
         }
 
+        return getInstance((BeanDefinition<T>) definition, factory);
+    }
+
+    @Override
+    @SuppressWarnings("unchecked")
+    public <T> T getInstance(BeanDefinition<T> definition, java.util.function.Supplier<T> factory) {
+        String name = definition.name();
+
         return switch (definition.scope()) {
             case SINGLETON -> {
                 // Track if we created a new instance to apply init callback outside the lock
@@ -108,7 +116,7 @@ public class BeanRegistryImpl implements BeanRegistry {
                 // Check if instance was just created by verifying it's the same reference
                 // and applying callback exactly once using a separate tracking set
                 if (singletonInitCallbacksApplied.add(name)) {
-                    applyInitCallback(instance, (BeanDefinition<T>) definition);
+                    applyInitCallback(instance, definition);
                 }
                 
                 yield instance;
@@ -116,13 +124,13 @@ public class BeanRegistryImpl implements BeanRegistry {
             case PROTOTYPE -> {
                 // Always create new instance for prototype scope
                 T instance = factory.get();
-                applyInitCallback(instance, (BeanDefinition<T>) definition);
+                applyInitCallback(instance, definition);
                 yield instance;
             }
             case CUSTOM -> {
                 // Custom scopes handled by extensions
                 T instance = factory.get();
-                applyInitCallback(instance, (BeanDefinition<T>) definition);
+                applyInitCallback(instance, definition);
                 yield instance;
             }
         };

@@ -49,6 +49,22 @@ public interface BeanRegistry {
     <T> T getInstance(String name, java.util.function.Supplier<T> factory);
 
     /**
+     * Gets or creates a bean instance based on its scope, using a pre-resolved BeanDefinition.
+     * This overload avoids the internal lookup by name for better performance.
+     * - Singleton: returns cached instance (creates if not exists)
+     * - Prototype: creates new instance every time
+     * 
+     * @param <T> the bean type
+     * @param definition the pre-resolved bean definition
+     * @param factory factory to create the instance if needed
+     * @return the bean instance
+     */
+    default <T> T getInstance(BeanDefinition<T> definition, java.util.function.Supplier<T> factory) {
+        // Default implementation delegates to the name-based version
+        return getInstance(definition.name(), factory);
+    }
+
+    /**
      * Checks if a singleton instance is already cached.
      * 
      * @param name the bean name

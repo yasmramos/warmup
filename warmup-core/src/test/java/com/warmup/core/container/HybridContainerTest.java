@@ -93,6 +93,139 @@ class HybridContainerTest {
         assertNotNull(stats);
     }
 
+    @Test
+    void testGetBeanNames() {
+        container.register(new com.warmup.core.registry.BeanDefinition<>(TestService.class, "bean1"), null);
+        container.register(new com.warmup.core.registry.BeanDefinition<>(TestService.class, "bean2"), null);
+        
+        var names = container.getBeanNames();
+        assertTrue(names.contains("bean1"));
+        assertTrue(names.contains("bean2"));
+    }
+
+    @Test
+    void testRegisterFactory() {
+        var definition = new com.warmup.core.registry.BeanDefinition<>(TestService.class, "factoryBean");
+        CompiledFactory<TestService> factory = deps -> new TestService();
+        
+        container.register(definition, null);
+        container.registerFactory("factoryBean", factory);
+        
+        // Should use the registered factory
+        TestService result = container.resolve("factoryBean");
+        assertNotNull(result);
+    }
+
+    @Test
+    void testGetDiagnostics() {
+        // Enable diagnostic mode
+        HybridContainer diagnosticContainer = new HybridContainer(jitCompiler, true);
+        var definition = new com.warmup.core.registry.BeanDefinition<>(TestService.class, "diagBean");
+        diagnosticContainer.register(definition, null);
+        
+        diagnosticContainer.resolve("diagBean");
+        
+        var diagnostics = diagnosticContainer.getDiagnostics();
+        assertNotNull(diagnostics);
+        assertFalse(diagnostics.isEmpty());
+    }
+
+    @Test
+    void testResolvePrototypeScope() {
+        var definition = new com.warmup.core.registry.BeanDefinition<>(
+            TestService.class, "prototypeBean", 
+            com.warmup.core.scope.Scope.PROTOTYPE
+        );
+        container.register(definition, null);
+        
+        // Resolve twice - should return different instances for prototype
+        TestService instance1 = container.resolve("prototypeBean");
+        TestService instance2 = container.resolve("prototypeBean");
+        
+        assertNotNull(instance1);
+        assertNotNull(instance2);
+        assertNotSame(instance1, instance2);
+    }
+
+    @Test
+    void testResolveWithDependencies() {
+        // Register dependency first
+        var depDef = new com.warmup.core.registry.BeanDefinition<>(DependencyService.class, "dep");
+        container.register(depDef, null);
+        
+        // Register bean with dependency - use compile-time factory to avoid reflection issues
+        var def = new com.warmup.core.registry.BeanDefinition<>(
+            DependentService.class, "dependent", 
+            com.warmup.core.scope.Scope.SINGLETON,
+            com.warmup.core.lifecycle.LifecycleCallbacks.empty(),
+            false,
+            new Object[]{"dep"}
+        );
+        CompiledFactory<DependentService> factory = deps -> new DependentService((DependencyService) deps[0]);
+        container.register(def, factory);
+        
+        DependentService result = container.resolve("dependent");
+        assertNotNull(result);
+        assertNotNull(result.getDependency());
+    }
+
+    @Test
+    void testResolveNonExistentBean() {
+        assertThrows(IllegalStateException.class, () -> container.resolve("nonExistent"));
+    }
+
+    @Test
+    void testResolveByTypeNonExistent() {
+        assertThrows(IllegalStateException.class, () -> container.resolve(TestService.class));
+    }
+
+    @Test
+    void testResolveCachedInstance() {
+        // First resolve to cache the singleton
+        container.register(new com.warmup.core.registry.BeanDefinition<>(TestService.class, "cached"), null);
+        TestService instance1 = container.resolve("cached");
+        
+        // Second resolve should return cached instance (fast path)
+        TestService instance2 = container.resolve("cached");
+        
+        assertNotNull(instance1);
+        assertSame(instance1, instance2);
+    }
+
+    @Test
+    void testGetMetricsAfterResolutions() {
+        var definition = new com.warmup.core.registry.BeanDefinition<>(TestService.class, "metricsBean");
+        container.register(definition, null);
+        
+        container.resolve("metricsBean");
+        container.resolve("metricsBean");
+        
+        var metrics = container.getMetrics();
+        assertEquals(2, metrics.totalResolutions());
+        assertTrue(metrics.averageResolutionTimeNs() >= 0);
+        assertTrue(metrics.cacheHitRate() >= 0);
+    }
+
+    @Test
+    void testRegisterWithCompileTimeFactory() {
+        var definition = new com.warmup.core.registry.BeanDefinition<>(TestService.class, "factoryBean");
+        CompiledFactory<TestService> factory = deps -> new TestService();
+        
+        container.register(definition, factory);
+        
+        TestService result = container.resolve("factoryBean");
+        assertNotNull(result);
+    }
+
+    @Test
+    void testRegisterDynamicTriggersWarmup() {
+        var definition = new com.warmup.core.registry.BeanDefinition<>(TestService.class, "dynamicBean");
+        container.registerDynamic(definition);
+        
+        // Should be registered and warmup triggered without throwing
+        assertTrue(container.contains("dynamicBean"));
+    }
+
     public static class TestService {
         private final String name = "test";
 
@@ -101,6 +234,22 @@ class HybridContainerTest {
 
         public String getName() {
             return name;
+        }
+    }
+
+    public static class DependencyService {
+        public DependencyService() {}
+    }
+
+    public static class DependentService {
+        private final DependencyService dependency;
+
+        public DependentService(DependencyService dependency) {
+            this.dependency = dependency;
+        }
+
+        public DependencyService getDependency() {
+            return dependency;
         }
     }
 

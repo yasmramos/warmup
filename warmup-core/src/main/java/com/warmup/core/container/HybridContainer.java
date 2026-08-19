@@ -42,6 +42,12 @@ public class HybridContainer {
     // Compile-time factories (injected from annotation processor)
     private final Map<String, CompiledFactory<?>> compileTimeFactories = new ConcurrentHashMap<>();
     
+    // JIT factory cache to avoid recompiling the same bean type
+    private final Map<String, CompiledFactory<?>> jitFactoryCache = new ConcurrentHashMap<>();
+    
+    // Empty array constant to avoid allocation for beans without dependencies
+    private static final Object[] EMPTY_ARGS = new Object[0];
+    
     // Diagnostic mode flag
     private final boolean diagnosticMode;
     private final List<ResolutionDiagnostic> diagnostics = new ArrayList<>();
@@ -178,7 +184,7 @@ public class HybridContainer {
             throw new IllegalStateException("Bean not found: " + name);
         }
         
-        T instance = registry.getInstance(name, () -> createBean(definition));
+        T instance = registry.getInstance(definition, () -> createBean(definition));
         
         recordMetrics(definition, System.nanoTime() - startTime);
         
@@ -283,7 +289,6 @@ public class HybridContainer {
     @SuppressWarnings("unchecked")
     private <T> T createBean(BeanDefinition<T> definition) {
         String name = definition.name();
-        long startTime = System.nanoTime();
         long compileTimeNs = 0;
         ResolutionDiagnostic.ResolutionPath path;
         
@@ -301,24 +306,31 @@ public class HybridContainer {
             fallbackCount.add(1);
             return createViaReflection(definition);
         } else {
-            // Try JIT compilation
-            try {
-                factory = jitCompiler.compile(definition.type(), getDependencyClasses(definition));
+            // Check JIT factory cache first
+            factory = (CompiledFactory<T>) jitFactoryCache.get(name);
+            if (factory != null) {
                 path = ResolutionDiagnostic.ResolutionPath.JIT;
                 jitHits.add(1);
-            } catch (CompilationException e) {
-                // Fallback (should not happen in production)
-                path = ResolutionDiagnostic.ResolutionPath.REFLECTION_FALLBACK;
-                fallbackCount.add(1);
-                return createViaReflection(definition);
+            } else {
+                // Try JIT compilation
+                try {
+                    factory = jitCompiler.compile(definition.type(), getDependencyClasses(definition));
+                    // Cache the compiled factory for future resolutions
+                    jitFactoryCache.put(name, factory);
+                    path = ResolutionDiagnostic.ResolutionPath.JIT;
+                    jitHits.add(1);
+                } catch (CompilationException e) {
+                    // Fallback (should not happen in production)
+                    path = ResolutionDiagnostic.ResolutionPath.REFLECTION_FALLBACK;
+                    fallbackCount.add(1);
+                    return createViaReflection(definition);
+                }
             }
         }
         
         // Create instance using factory
         Object[] deps = resolveDependencies(definition);
         T instance = factory.create(deps);
-        
-        long resolutionTime = System.nanoTime() - startTime;
         
         // Record diagnostic if enabled
         if (diagnosticMode) {
@@ -384,6 +396,11 @@ public class HybridContainer {
     }
 
     private Object[] resolveDependencies(BeanDefinition<?> definition) {
+        // Return empty array constant if no dependencies to avoid allocation
+        if (definition.dependencies().length == 0) {
+            return EMPTY_ARGS;
+        }
+        
         Object[] deps = new Object[definition.dependencies().length];
         for (int i = 0; i < definition.dependencies().length; i++) {
             Object dep = definition.dependencies()[i];
