@@ -1,5 +1,6 @@
 package com.warmup.benchmarks;
 
+import com.warmup.core.container.ContainerMetrics;
 import com.warmup.core.container.HybridContainer;
 import com.warmup.core.jit.CompiledFactory;
 import com.warmup.core.registry.BeanDefinition;
@@ -118,5 +119,23 @@ public class ResolutionBenchmark {
     @Benchmark
     public Object compiledFactoryCreate() {
         return simpleFactory.create();
+    }
+
+    /**
+     * TearDown method to print container metrics after each benchmark run.
+     * Shows cache hit/miss rates and resolution counts to validate O(1) resolution claim.
+     */
+    @TearDown(Level.Iteration)
+    public void tearDown() {
+        if (container != null) {
+            ContainerMetrics metrics = container.getMetrics();
+            System.out.println("\n=== Container Metrics ===");
+            System.out.println("Total Resolutions: " + metrics.totalResolutions());
+            System.out.println("Compile-time Hits: " + metrics.compileTimeHits());
+            System.out.println("JIT Hits: " + metrics.jitHits());
+            System.out.println("Fallback Count: " + metrics.fallbackCount());
+            System.out.printf("Hit Rate: %.2f%%%n", metrics.cacheHitRate());
+            System.out.println("=========================\n");
+        }
     }
 }
