@@ -7,15 +7,14 @@ target/
 *.ear
 
 # Dependencies
-.m2/
-.gradle/
+lib/
+libs/
 
-# IDE files
+# IDE
 .idea/
 *.iml
 *.ipr
 *.iws
-.vscode/
 
 # Logs
 *.log
@@ -25,12 +24,11 @@ target/
 .env.local
 *.env.*
 
-# OS generated files
+# OS
 .DS_Store
 Thumbs.db
 
-# Test coverage
-coverage/
-htmlcov/
-.coverage
+# Build system
+.mvn/
+mvn/
 ```
