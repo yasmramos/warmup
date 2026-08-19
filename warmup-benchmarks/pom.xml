@@ -82,7 +82,7 @@
                 </configuration>
             </plugin>
             
-            <!-- First pass: Generate Avaje Inject factories (without JMH processor) -->
+            <!-- First pass: Generate Avaje Inject factories -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>
@@ -106,7 +106,7 @@
                             </annotationProcessorPaths>
                         </configuration>
                     </execution>
-                    <!-- Second execution: Warmup processor + JMH generator -->
+                    <!-- Second execution: Compile with all processors (Avaje + Warmup + JMH) -->
                     <execution>
                         <id>default-compile</id>
                         <phase>compile</phase>
@@ -115,6 +115,11 @@
                         </goals>
                         <configuration>
                             <annotationProcessorPaths>
+                                <path>
+                                    <groupId>io.avaje</groupId>
+                                    <artifactId>avaje-inject-generator</artifactId>
+                                    <version>12.6</version>
+                                </path>
                                 <path>
                                     <groupId>com.warmup</groupId>
                                     <artifactId>warmup-processor</artifactId>
