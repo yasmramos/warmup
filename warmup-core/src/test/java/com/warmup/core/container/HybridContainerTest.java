@@ -93,6 +93,29 @@ class HybridContainerTest {
         assertNotNull(stats);
     }
 
+    @Test
+    void testGetBeanNames() {
+        container.register(new com.warmup.core.registry.BeanDefinition<>(TestService.class, "bean1"), null);
+        container.register(new com.warmup.core.registry.BeanDefinition<>(TestService.class, "bean2"), null);
+        
+        var names = container.getBeanNames();
+        assertTrue(names.contains("bean1"));
+        assertTrue(names.contains("bean2"));
+    }
+
+    @Test
+    void testRegisterFactory() {
+        var definition = new com.warmup.core.registry.BeanDefinition<>(TestService.class, "factoryBean");
+        CompiledFactory<TestService> factory = deps -> new TestService();
+        
+        container.register(definition, null);
+        container.registerFactory("factoryBean", factory);
+        
+        // Should use the registered factory
+        TestService result = container.resolve("factoryBean");
+        assertNotNull(result);
+    }
+
     public static class TestService {
         private final String name = "test";
 

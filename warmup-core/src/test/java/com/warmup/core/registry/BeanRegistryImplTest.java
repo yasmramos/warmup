@@ -132,6 +132,40 @@ class BeanRegistryImplTest {
         assertEquals("testService", result.get().name());
     }
 
+    @Test
+    void testGetInstanceWithBeanDefinition() {
+        String beanName = "definitionBean";
+        TestService expected = new TestService("definition");
+        BeanDefinition<TestService> definition = new BeanDefinition<>(TestService.class, beanName);
+
+        registry.register(definition);
+
+        // Use the overload that takes BeanDefinition directly
+        TestService result1 = registry.getInstance(definition, () -> expected);
+        TestService result2 = registry.getInstance(definition, () -> expected);
+
+        assertSame(expected, result1);
+        assertSame(expected, result2);
+        assertSame(result1, result2);
+    }
+
+    @Test
+    void testGetInstancePrototypeWithDefinition() {
+        String beanName = "prototypeDefBean";
+        AtomicInteger counter = new AtomicInteger(0);
+        BeanDefinition<TestService> definition = new BeanDefinition<>(TestService.class, beanName, com.warmup.core.scope.Scope.PROTOTYPE);
+
+        registry.register(definition);
+
+        // Use the overload that takes BeanDefinition directly
+        TestService result1 = registry.getInstance(definition, () -> new TestService("proto-def-" + counter.incrementAndGet()));
+        TestService result2 = registry.getInstance(definition, () -> new TestService("proto-def-" + counter.incrementAndGet()));
+
+        assertNotNull(result1);
+        assertNotNull(result2);
+        assertNotSame(result1, result2);
+    }
+
     static class TestService {
         private final String name;
 
