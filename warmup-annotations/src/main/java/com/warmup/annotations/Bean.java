@@ -6,22 +6,22 @@ import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
 
 /**
- * Marks a class as a managed bean in the Warmup container.
- * The annotation processor will generate a CompiledFactory for compile-time resolution.
+ * Marks a class as a bean managed by the Warmup container.
+ * The container will generate a factory for creating instances of this bean.
  */
 @Target(ElementType.TYPE)
-@Retention(RetentionPolicy.SOURCE)
-public @interface WarmupBean {
+@Retention(RetentionPolicy.RUNTIME)
+public @interface Bean {
     /**
-     * Optional bean name. If not specified, uses the simple class name.
+     * The name of the bean. If not specified, the simple class name is used.
      */
     String value() default "";
-    
+
     /**
-     * Scope of the bean. Default is SINGLETON.
+     * The scope of the bean. Defaults to SINGLETON.
      */
     Scope scope() default Scope.SINGLETON;
-    
+
     enum Scope {
         SINGLETON,
         PROTOTYPE,

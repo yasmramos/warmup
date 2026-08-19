@@ -1,6 +1,6 @@
 package com.warmup.javafx;
 
-import com.warmup.annotations.WarmupInject;
+import com.warmup.annotations.Inject;
 import com.warmup.core.container.HybridContainer;
 import com.warmup.core.jit.CompiledFactory;
 import com.warmup.core.jit.CompilationException;
@@ -27,7 +27,7 @@ class FxLoaderTest {
     }
 
     @Test
-    void testFieldInjectionWithWarmupInject() throws Exception {
+    void testFieldInjectionWithInject() throws Exception {
         // Register a service bean
         var serviceDef = new BeanDefinition<>(TestService.class, "testService");
         container.register(serviceDef, null);
@@ -35,8 +35,8 @@ class FxLoaderTest {
         // CreateController returns the injected controller instance
         TestController controller = fxLoader.createController(TestController.class);
 
-        // Verify that the field was injected via @WarmupInject
-        assertNotNull(controller.getService(), "Service should be injected via @WarmupInject");
+        // Verify that the field was injected via @Inject
+        assertNotNull(controller.getService(), "Service should be injected via @Inject");
         assertEquals("TestService", controller.getService().getName());
     }
 
@@ -67,7 +67,7 @@ class FxLoaderTest {
     }
 
     public static class TestController {
-        @WarmupInject
+        @Inject
         private TestService service;
 
         public TestService getService() {

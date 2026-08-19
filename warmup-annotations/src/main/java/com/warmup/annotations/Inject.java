@@ -6,13 +6,13 @@ import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
 
 /**
- * Marks a field or constructor parameter for dependency injection.
+ * Marks a constructor or field for injection by the Warmup container.
  */
-@Target({ElementType.FIELD, ElementType.PARAMETER})
+@Target({ElementType.CONSTRUCTOR, ElementType.FIELD})
 @Retention(RetentionPolicy.RUNTIME)
-public @interface WarmupInject {
+public @interface Inject {
     /**
-     * Optional bean name. If not specified, resolves by type.
+     * The name of the dependency to inject. If not specified, the type is used.
      */
     String value() default "";
 }

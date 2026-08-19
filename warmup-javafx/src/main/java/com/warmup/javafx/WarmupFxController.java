@@ -16,7 +16,7 @@ import java.lang.annotation.Target;
  * <pre>
  * {@code @WarmupFxController}
  * public class MainController implements Initializable {
- *     {@code @WarmupInject} private Service service;
+ *     {@code @Inject} private Service service;
  * }
  * </pre>
  */
