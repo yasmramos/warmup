@@ -369,6 +369,50 @@ public class HybridContainer {
     }
 
     /**
+     * Hot-reloads a bean by invalidating all caches and recompiling its factory.
+     * 
+     * <p>This method performs the following steps atomically with respect to new resolutions:</p>
+     * <ol>
+     *   <li>Evicts the cached singleton instance and applies destroy callbacks</li>
+     *   <li>Removes entries from {@code compileTimeFactories} and {@code jitFactoryCache}</li>
+     *   <li>Unloads the previous ASM factory via {@code jitCompiler.unloadFactory()}</li>
+     *   <li>Triggers background recompilation</li>
+     * </ol>
+     * 
+     * <p><strong>Note:</strong> Hot-reload guarantees that NEW resolutions will use the reloaded factory.
+     * However, existing instances of the bean that were already returned to callers will continue to exist
+     * until they are garbage collected or re-resolved. This method does not introduce proxies.</p>
+     * 
+     * <p>Concurrent reloads of the same bean should be serialized externally if strict ordering is required.</p>
+     * 
+     * @param name the bean name to reload
+     * @return true if the bean existed and was reloaded, false if the bean was not found
+     * @param <T> the bean type
+     */
+    @SuppressWarnings("unchecked")
+    public <T> boolean reload(String name) {
+        BeanDefinition<T> definition = (BeanDefinition<T>) registry.getDefinition(name).orElse(null);
+        if (definition == null) {
+            return false;
+        }
+        
+        // Step 1: Evict cached singleton instance and apply destroy callback
+        registry.evictInstance(name);
+        
+        // Step 2: Remove from factory caches
+        compileTimeFactories.remove(name);
+        jitFactoryCache.remove(name);
+        
+        // Step 3: Unload the previous ASM factory to free ClassLoader and metaspace
+        jitCompiler.unloadFactory(definition.type());
+        
+        // Step 4: Trigger background recompilation
+        triggerBackgroundWarmup(definition);
+        
+        return true;
+    }
+
+    /**
      * Registers a compile-time factory for a bean.
      * Called by generated code from annotation processor.
      */

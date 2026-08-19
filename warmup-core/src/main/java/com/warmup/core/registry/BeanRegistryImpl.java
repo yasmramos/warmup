@@ -172,6 +172,19 @@ public class BeanRegistryImpl implements BeanRegistry {
     }
 
     @Override
+    public boolean evictInstance(String name) {
+        Object instance = singletonInstances.remove(name);
+        if (instance != null) {
+            BeanDefinition<?> definition = definitionsByName.get(name);
+            if (definition != null && definition.hasLifecycle() && definition.lifecycle().onDestroy() != null) {
+                applyDestroyCallback(instance, definition);
+            }
+            return true;
+        }
+        return false;
+    }
+
+    @Override
     public void clear() {
         // Apply destroy callbacks before clearing
         definitionsByName.forEach((name, definition) -> {

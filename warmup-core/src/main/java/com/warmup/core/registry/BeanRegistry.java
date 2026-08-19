@@ -82,6 +82,16 @@ public interface BeanRegistry {
     boolean remove(String name);
 
     /**
+     * Evicts only the cached singleton instance for a bean, applying destroy callback if applicable.
+     * The bean definition is preserved for future resolutions.
+     * Used for hot-reload scenarios where the factory needs to be recompiled.
+     * 
+     * @param name the bean name
+     * @return true if an instance was evicted
+     */
+    boolean evictInstance(String name);
+
+    /**
      * Clears all beans from the registry.
      * Used primarily for testing container reset.
      */

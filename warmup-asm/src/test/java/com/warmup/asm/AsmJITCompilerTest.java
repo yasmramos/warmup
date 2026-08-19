@@ -156,6 +156,54 @@ class AsmJITCompilerTest {
         assertTrue(stats.getAverageCompilationTimeMs() >= 0);
     }
 
+    @Test
+    void testCompileUnloadAndRecompileSameClass() throws CompilationException {
+        // First compilation
+        CompiledFactory<SimpleBean> factory1 = compiler.compile(SimpleBean.class);
+        assertNotNull(factory1);
+        SimpleBean bean1 = factory1.create();
+        assertNotNull(bean1);
+        assertTrue(compiler.hasCompiledFactory(SimpleBean.class));
+        
+        // Unload the factory
+        boolean unloaded = compiler.unloadFactory(SimpleBean.class);
+        assertTrue(unloaded);
+        assertFalse(compiler.hasCompiledFactory(SimpleBean.class));
+        
+        // Recompile the same class - should succeed without LinkageError
+        CompiledFactory<SimpleBean> factory2 = compiler.compile(SimpleBean.class);
+        assertNotNull(factory2);
+        SimpleBean bean2 = factory2.create();
+        assertNotNull(bean2);
+        
+        // Verify both factories work and produce different instances
+        assertNotSame(bean1, bean2);
+        assertEquals("created", bean1.getStatus());
+        assertEquals("created", bean2.getStatus());
+    }
+
+    @Test
+    void testMultipleReloadsSameClass() throws CompilationException {
+        // Compile multiple times to simulate hot-reload scenarios
+        for (int i = 0; i < 3; i++) {
+            CompiledFactory<SimpleBean> factory = compiler.compile(SimpleBean.class);
+            assertNotNull(factory);
+            SimpleBean bean = factory.create();
+            assertNotNull(bean);
+            
+            // Unload after each compilation
+            compiler.unloadFactory(SimpleBean.class);
+            assertFalse(compiler.hasCompiledFactory(SimpleBean.class));
+        }
+        
+        // Final compile should still work
+        CompiledFactory<SimpleBean> finalFactory = compiler.compile(SimpleBean.class);
+        assertNotNull(finalFactory);
+        SimpleBean finalBean = finalFactory.create();
+        assertNotNull(finalBean);
+        assertEquals("created", finalBean.getStatus());
+    }
+
     public static class SimpleBean {
         private final String status = "created";
 
