@@ -76,4 +76,114 @@ public class WarmupTest {
         assertTrue(noOp.getCachedFactory(String.class).isEmpty());
         assertEquals(0, noOp.getStats().totalCompilations());
     }
+
+    @Test
+    public void testWarmupRegisterWithFactory() {
+        try (Warmup warmup = Warmup.create()) {
+            var definition = new com.warmup.core.registry.BeanDefinition<>(String.class, "testBean");
+            warmup.register(definition, deps -> "test");
+            assertTrue(warmup.contains("testBean"));
+        }
+    }
+
+    @Test
+    public void testWarmupRegisterDynamic() {
+        try (Warmup warmup = Warmup.create()) {
+            var definition = new com.warmup.core.registry.BeanDefinition<>(String.class, "dynamicBean");
+            warmup.registerDynamic(definition);
+            assertTrue(warmup.contains("dynamicBean"));
+        }
+    }
+
+    @Test
+    public void testWarmupResolveByName() {
+        try (Warmup warmup = Warmup.create()) {
+            var definition = new com.warmup.core.registry.BeanDefinition<>(String.class, "resolveBean");
+            warmup.register(definition, deps -> "resolved");
+            Object result = warmup.resolve("resolveBean");
+            assertEquals("resolved", result);
+        }
+    }
+
+    @Test
+    public void testWarmupResolveByType() {
+        try (Warmup warmup = Warmup.create()) {
+            var definition = new com.warmup.core.registry.BeanDefinition<>(String.class, "typeBean");
+            warmup.register(definition, deps -> "byType");
+            Object result = warmup.resolve(String.class);
+            assertEquals("byType", result);
+        }
+    }
+
+    @Test
+    public void testWarmupContainsByName() {
+        try (Warmup warmup = Warmup.create()) {
+            var definition = new com.warmup.core.registry.BeanDefinition<>(String.class, "containsBean");
+            warmup.register(definition, deps -> "test");
+            assertTrue(warmup.contains("containsBean"));
+            assertFalse(warmup.contains("nonexistent"));
+        }
+    }
+
+    @Test
+    public void testWarmupContainsByType() {
+        try (Warmup warmup = Warmup.create()) {
+            var definition = new com.warmup.core.registry.BeanDefinition<>(String.class, "containsTypeBean");
+            warmup.register(definition, deps -> "test");
+            assertTrue(warmup.contains(String.class));
+            assertFalse(warmup.contains(Integer.class));
+        }
+    }
+
+    @Test
+    public void testWarmupGetBeanNames() {
+        try (Warmup warmup = Warmup.create()) {
+            var def1 = new com.warmup.core.registry.BeanDefinition<>(String.class, "bean1");
+            var def2 = new com.warmup.core.registry.BeanDefinition<>(Integer.class, "bean2");
+            warmup.register(def1, deps -> "test1");
+            warmup.register(def2, deps -> 42);
+            var names = warmup.getBeanNames();
+            assertTrue(names.contains("bean1"));
+            assertTrue(names.contains("bean2"));
+        }
+    }
+
+    @Test
+    public void testWarmupGetDiagnostics() {
+        Warmup warmup = Warmup.builder().diagnostic(true).build();
+        var def = new com.warmup.core.registry.BeanDefinition<>(String.class, "diagBean");
+        warmup.register(def, deps -> "test");
+        warmup.resolve("diagBean");
+        var diagnostics = warmup.getDiagnostics();
+        assertNotNull(diagnostics);
+        assertFalse(diagnostics.isEmpty());
+        warmup.shutdown();
+    }
+
+    @Test
+    public void testWarmupGetCompilationStats() {
+        try (Warmup warmup = Warmup.create()) {
+            var stats = warmup.getCompilationStats();
+            assertNotNull(stats);
+        }
+    }
+
+    @Test
+    public void testWarmupRegisterFactory() {
+        try (Warmup warmup = Warmup.create()) {
+            var definition = new com.warmup.core.registry.BeanDefinition<>(String.class, "factoryBean");
+            warmup.register(definition, null);
+            warmup.registerFactory("factoryBean", deps -> "fromFactory");
+            Object result = warmup.resolve("factoryBean");
+            assertEquals("fromFactory", result);
+        }
+    }
+
+    @Test
+    public void testWarmupClose() {
+        Warmup warmup = Warmup.create();
+        warmup.close();
+        // Should not throw after close
+        assertDoesNotThrow(() -> warmup.shutdown());
+    }
 }

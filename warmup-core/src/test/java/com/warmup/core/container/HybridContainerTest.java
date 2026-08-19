@@ -226,6 +226,183 @@ class HybridContainerTest {
         assertTrue(container.contains("dynamicBean"));
     }
 
+    @Test
+    void testFindConstructorParameterType() {
+        // Test the private method indirectly through createBean with dependencies
+        var depDef = new com.warmup.core.registry.BeanDefinition<>(DependencyService.class, "dep");
+        container.register(depDef, null);
+        
+        var def = new com.warmup.core.registry.BeanDefinition<>(
+            DependentService.class, "dependent", 
+            com.warmup.core.scope.Scope.SINGLETON,
+            com.warmup.core.lifecycle.LifecycleCallbacks.empty(),
+            false,
+            new Object[]{"dep"}
+        );
+        CompiledFactory<DependentService> factory = deps -> new DependentService((DependencyService) deps[0]);
+        container.register(def, factory);
+        
+        DependentService result = container.resolve("dependent");
+        assertNotNull(result);
+        assertNotNull(result.getDependency());
+    }
+
+    @Test
+    void testTriggerBackgroundWarmupWithMissingDependency() {
+        // Register a bean with a dependency that doesn't exist yet
+        var def = new com.warmup.core.registry.BeanDefinition<>(
+            DependentService.class, "dependentWithMissingDep", 
+            com.warmup.core.scope.Scope.SINGLETON,
+            com.warmup.core.lifecycle.LifecycleCallbacks.empty(),
+            false,
+            new Object[]{"missingDep"}
+        );
+        // Should not throw even with missing dependency
+        assertDoesNotThrow(() -> container.registerDynamic(def));
+    }
+
+    @Test
+    void testCreateViaReflectionFallback() {
+        // Register a simple bean without factory to trigger reflection fallback
+        var definition = new com.warmup.core.registry.BeanDefinition<>(TestService.class, "reflectionBean");
+        container.register(definition, null);
+        
+        TestService result = container.resolve("reflectionBean");
+        assertNotNull(result);
+    }
+
+    @Test
+    void testResolveDependenciesEmpty() {
+        // Test with no dependencies - uses EMPTY_ARGS constant
+        var definition = new com.warmup.core.registry.BeanDefinition<>(TestService.class, "noDeps");
+        container.register(definition, null);
+        
+        TestService result = container.resolve("noDeps");
+        assertNotNull(result);
+    }
+
+    @Test
+    void testGetDependencyClassesWithDependencies() {
+        // Register dependency
+        var depDef = new com.warmup.core.registry.BeanDefinition<>(DependencyService.class, "dep");
+        container.register(depDef, null);
+        
+        // Register bean with dependency
+        var def = new com.warmup.core.registry.BeanDefinition<>(
+            DependentService.class, "dependent", 
+            com.warmup.core.scope.Scope.SINGLETON,
+            com.warmup.core.lifecycle.LifecycleCallbacks.empty(),
+            false,
+            new Object[]{"dep"}
+        );
+        CompiledFactory<DependentService> factory = deps -> new DependentService((DependencyService) deps[0]);
+        container.register(def, factory);
+        
+        // Get dependency classes - this exercises getDependencyClasses
+        DependentService result = container.resolve("dependent");
+        assertNotNull(result);
+        assertNotNull(result.getDependency());
+    }
+
+    @Test
+    void testGetDependencyClassesEmpty() {
+        // Register bean without dependencies
+        var definition = new com.warmup.core.registry.BeanDefinition<>(TestService.class, "noDepsBean");
+        container.register(definition, null);
+        
+        TestService result = container.resolve("noDepsBean");
+        assertNotNull(result);
+    }
+
+    @Test
+    void testComputeNativeImage() {
+        // This tests the computeNativeImage method which checks system property
+        // By default should return false since property is not set
+        var definition = new com.warmup.core.registry.BeanDefinition<>(TestService.class, "nativeBean");
+        container.register(definition, null);
+        
+        TestService result = container.resolve("nativeBean");
+        assertNotNull(result);
+    }
+
+    @Test
+    void testTriggerBackgroundWarmupSuccessPath() {
+        // Register dependency first
+        var depDef = new com.warmup.core.registry.BeanDefinition<>(DependencyService.class, "bgDep");
+        container.register(depDef, null);
+        
+        // Register dynamic bean with dependency already present
+        var def = new com.warmup.core.registry.BeanDefinition<>(
+            DependentService.class, "bgDependent", 
+            com.warmup.core.scope.Scope.SINGLETON,
+            com.warmup.core.lifecycle.LifecycleCallbacks.empty(),
+            false,
+            new Object[]{"bgDep"}
+        );
+        
+        // Should complete warmup successfully without throwing
+        assertDoesNotThrow(() -> container.registerDynamic(def));
+        
+        // Verify bean is available
+        assertTrue(container.contains("bgDependent"));
+    }
+
+    @Test
+    void testTriggerBackgroundWarmupWithCompilationError() {
+        // Use a JIT compiler that throws during compilation
+        HybridContainer containerWithErrorJit = new HybridContainer(new ErrorJITCompiler(), false);
+        
+        var def = new com.warmup.core.registry.BeanDefinition<>(TestService.class, "errorBean");
+        
+        // Should not throw even if compilation fails
+        assertDoesNotThrow(() -> containerWithErrorJit.registerDynamic(def));
+    }
+
+    @Test
+    void testCreateViaReflectionDirectly() {
+        // Register bean without factory to force reflection path
+        var definition = new com.warmup.core.registry.BeanDefinition<>(SimpleBean.class, "simpleBean");
+        container.register(definition, null);
+        
+        SimpleBean result = container.resolve("simpleBean");
+        assertNotNull(result);
+    }
+
+    @Test
+    void testLambdaNewRunnable() {
+        // Test the lambda:new$0 that wraps Runnable
+        var definition = new com.warmup.core.registry.BeanDefinition<>(TestService.class, "lambdaBean");
+        container.register(definition, null);
+        
+        // Shutdown exercises the lambda
+        assertDoesNotThrow(() -> container.shutdown());
+    }
+
+    @Test
+    void testResolvePrototypeMultipleTimes() {
+        var definition = new com.warmup.core.registry.BeanDefinition<>(
+            TestService.class, "protoBean", 
+            com.warmup.core.scope.Scope.PROTOTYPE
+        );
+        container.register(definition, null);
+        
+        // Resolve multiple times - each should create new instance
+        TestService s1 = container.resolve("protoBean");
+        TestService s2 = container.resolve("protoBean");
+        TestService s3 = container.resolve("protoBean");
+        
+        assertNotNull(s1);
+        assertNotNull(s2);
+        assertNotNull(s3);
+        assertNotSame(s1, s2);
+        assertNotSame(s2, s3);
+    }
+
+    // Simple bean class for reflection testing
+    public static class SimpleBean {
+        public SimpleBean() {}
+    }
+
     public static class TestService {
         private final String name = "test";
 
@@ -290,6 +467,45 @@ class HybridContainerTest {
         @Override
         public boolean unloadFactory(Class<?> beanClass) {
             return true;
+        }
+
+        @Override
+        public com.warmup.core.jit.CompilationStats getStats() {
+            return new com.warmup.core.jit.CompilationStats(0, 0, 0, 0, 0);
+        }
+
+        @Override
+        public void clear() {
+        }
+    }
+
+    // Error JIT Compiler for testing error paths
+    private static class ErrorJITCompiler implements JITCompiler {
+        @Override
+        public <T> CompiledFactory<T> compile(Class<T> type, Class<?>... dependencies) throws CompilationException {
+            throw new CompilationException("Test compilation error", new RuntimeException("test"));
+        }
+
+        @Override
+        public <T> CompletableFuture<CompiledFactory<T>> compileAsync(Class<T> type, Class<?>... dependencies) {
+            CompletableFuture<CompiledFactory<T>> future = new CompletableFuture<>();
+            future.completeExceptionally(new CompilationException("Async test error", new RuntimeException("test")));
+            return future;
+        }
+
+        @Override
+        public boolean hasCompiledFactory(Class<?> beanClass) {
+            return false;
+        }
+
+        @Override
+        public <T> java.util.Optional<CompiledFactory<T>> getCachedFactory(Class<T> beanClass) {
+            return java.util.Optional.empty();
+        }
+
+        @Override
+        public boolean unloadFactory(Class<?> beanClass) {
+            return false;
         }
 
         @Override
