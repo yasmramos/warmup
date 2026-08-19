@@ -259,11 +259,25 @@ public class HybridContainer {
             throw new IllegalStateException("Bean not found: " + name);
         }
         
-        long startTime = System.nanoTime();
-        T instance = registry.getInstance(definition, () -> createBean(definition));
-        
-        if (metricsEnabled) {
-            recordMetrics(definition, System.nanoTime() - startTime);
+        // Optimize prototype path: avoid lambda allocation by calling createBean directly
+        // Only use Supplier for SINGLETON scope which needs thread-safe lazy init
+        T instance;
+        if (definition.scope() == Scope.PROTOTYPE) {
+            if (metricsEnabled) {
+                long startTime = System.nanoTime();
+                instance = createBean(definition);
+                recordMetrics(definition, System.nanoTime() - startTime);
+            } else {
+                instance = createBean(definition);
+            }
+        } else {
+            if (metricsEnabled) {
+                long startTime = System.nanoTime();
+                instance = registry.getInstance(definition, () -> createBean(definition));
+                recordMetrics(definition, System.nanoTime() - startTime);
+            } else {
+                instance = registry.getInstance(definition, () -> createBean(definition));
+            }
         }
         
         return instance;
@@ -355,6 +369,50 @@ public class HybridContainer {
     }
 
     /**
+     * Hot-reloads a bean by invalidating all caches and recompiling its factory.
+     * 
+     * <p>This method performs the following steps atomically with respect to new resolutions:</p>
+     * <ol>
+     *   <li>Evicts the cached singleton instance and applies destroy callbacks</li>
+     *   <li>Removes entries from {@code compileTimeFactories} and {@code jitFactoryCache}</li>
+     *   <li>Unloads the previous ASM factory via {@code jitCompiler.unloadFactory()}</li>
+     *   <li>Triggers background recompilation</li>
+     * </ol>
+     * 
+     * <p><strong>Note:</strong> Hot-reload guarantees that NEW resolutions will use the reloaded factory.
+     * However, existing instances of the bean that were already returned to callers will continue to exist
+     * until they are garbage collected or re-resolved. This method does not introduce proxies.</p>
+     * 
+     * <p>Concurrent reloads of the same bean should be serialized externally if strict ordering is required.</p>
+     * 
+     * @param name the bean name to reload
+     * @return true if the bean existed and was reloaded, false if the bean was not found
+     * @param <T> the bean type
+     */
+    @SuppressWarnings("unchecked")
+    public <T> boolean reload(String name) {
+        BeanDefinition<T> definition = (BeanDefinition<T>) registry.getDefinition(name).orElse(null);
+        if (definition == null) {
+            return false;
+        }
+        
+        // Step 1: Evict cached singleton instance and apply destroy callback
+        registry.evictInstance(name);
+        
+        // Step 2: Remove from factory caches
+        compileTimeFactories.remove(name);
+        jitFactoryCache.remove(name);
+        
+        // Step 3: Unload the previous ASM factory to free ClassLoader and metaspace
+        jitCompiler.unloadFactory(definition.type());
+        
+        // Step 4: Trigger background recompilation
+        triggerBackgroundWarmup(definition);
+        
+        return true;
+    }
+
+    /**
      * Registers a compile-time factory for a bean.
      * Called by generated code from annotation processor.
      */
@@ -373,37 +431,39 @@ public class HybridContainer {
         // Check if running in GraalVM native image mode - disable JIT
         boolean nativeImage = IS_NATIVE_IMAGE;
         
-        // Try compile-time factory first (zero-overhead path)
-        CompiledFactory<T> factory = (CompiledFactory<T>) compileTimeFactories.get(name);
+        // Optimized single lookup for hot path: check JIT cache first for prototype beans
+        // since they're most likely to be JIT-compiled dynamic beans.
+        // For compile-time registered beans, check compileTimeFactories first.
+        CompiledFactory<T> factory = (CompiledFactory<T>) jitFactoryCache.get(name);
         if (factory != null) {
-            path = ResolutionDiagnostic.ResolutionPath.COMPILE_TIME;
-            compileTimeHits.add(1);
-        } else if (nativeImage) {
-            // In native image, skip JIT and go directly to fallback
-            path = ResolutionDiagnostic.ResolutionPath.REFLECTION_FALLBACK;
-            fallbackCount.add(1);
-            return createViaReflection(definition);
-        } else {
-            // Check JIT factory cache first
-            factory = (CompiledFactory<T>) jitFactoryCache.get(name);
+            // Hot path: factory already JIT-compiled and cached
+            path = ResolutionDiagnostic.ResolutionPath.JIT;
+            jitHits.add(1);
+        } else if (!nativeImage) {
+            // Not in native image, try compile-time factories
+            factory = (CompiledFactory<T>) compileTimeFactories.get(name);
             if (factory != null) {
-                path = ResolutionDiagnostic.ResolutionPath.JIT;
-                jitHits.add(1);
+                path = ResolutionDiagnostic.ResolutionPath.COMPILE_TIME;
+                compileTimeHits.add(1);
             } else {
-                // Try JIT compilation
+                // Try JIT compilation and cache the result
                 try {
                     factory = jitCompiler.compile(definition.type(), getDependencyClasses(definition));
-                    // Cache the compiled factory for future resolutions
                     jitFactoryCache.put(name, factory);
                     path = ResolutionDiagnostic.ResolutionPath.JIT;
                     jitHits.add(1);
                 } catch (CompilationException e) {
-                    // Fallback (should not happen in production)
+                    // Fallback to reflection
                     path = ResolutionDiagnostic.ResolutionPath.REFLECTION_FALLBACK;
                     fallbackCount.add(1);
                     return createViaReflection(definition);
                 }
             }
+        } else {
+            // Native image mode: skip JIT, go directly to fallback
+            path = ResolutionDiagnostic.ResolutionPath.REFLECTION_FALLBACK;
+            fallbackCount.add(1);
+            return createViaReflection(definition);
         }
         
         // Create instance using factory

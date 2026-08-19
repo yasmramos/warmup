@@ -22,46 +22,25 @@
       <plugin>
         <artifactId>maven-compiler-plugin</artifactId>
         <version>3.12.1</version>
-        <executions>
-          <execution>
-            <id>avaje-generate</id>
-            <phase>generate-sources</phase>
-            <goals>
-              <goal>compile</goal>
-            </goals>
-            <configuration>
-              <proc>only</proc>
-              <annotationProcessorPaths>
-                <path>
-                  <groupId>io.avaje</groupId>
-                  <artifactId>avaje-inject-generator</artifactId>
-                  <version>12.6</version>
-                </path>
-              </annotationProcessorPaths>
-            </configuration>
-          </execution>
-          <execution>
-            <id>default-compile</id>
-            <phase>compile</phase>
-            <goals>
-              <goal>compile</goal>
-            </goals>
-            <configuration>
-              <annotationProcessorPaths>
-                <path>
-                  <groupId>com.warmup</groupId>
-                  <artifactId>warmup-processor</artifactId>
-                  <version>${project.version}</version>
-                </path>
-                <path>
-                  <groupId>org.openjdk.jmh</groupId>
-                  <artifactId>jmh-generator-annprocess</artifactId>
-                  <version>${jmh.version}</version>
-                </path>
-              </annotationProcessorPaths>
-            </configuration>
-          </execution>
-        </executions>
+        <configuration>
+          <annotationProcessorPaths>
+            <path>
+              <groupId>io.avaje</groupId>
+              <artifactId>avaje-inject-generator</artifactId>
+              <version>12.6</version>
+            </path>
+            <path>
+              <groupId>com.warmup</groupId>
+              <artifactId>warmup-processor</artifactId>
+              <version>${project.version}</version>
+            </path>
+            <path>
+              <groupId>org.openjdk.jmh</groupId>
+              <artifactId>jmh-generator-annprocess</artifactId>
+              <version>${jmh.version}</version>
+            </path>
+          </annotationProcessorPaths>
+        </configuration>
       </plugin>
       <plugin>
         <artifactId>maven-shade-plugin</artifactId>

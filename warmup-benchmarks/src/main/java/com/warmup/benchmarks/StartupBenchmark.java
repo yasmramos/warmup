@@ -18,9 +18,6 @@ import java.util.concurrent.TimeUnit;
 @State(org.openjdk.jmh.annotations.Scope.Benchmark)
 @BenchmarkMode(Mode.AverageTime)
 @OutputTimeUnit(TimeUnit.MILLISECONDS)
-@org.openjdk.jmh.annotations.Warmup(iterations = 2, time = 2)
-@Measurement(iterations = 3, time = 2)
-@Fork(1)
 public class StartupBenchmark {
 
     @Param({"10", "100", "1000"})

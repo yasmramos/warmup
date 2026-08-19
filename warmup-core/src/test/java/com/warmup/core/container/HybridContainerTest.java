@@ -398,6 +398,36 @@ class HybridContainerTest {
         assertNotSame(s2, s3);
     }
 
+    @Test
+    void testHotReloadBean() {
+        // Register a bean with compile-time factory
+        var definition = new com.warmup.core.registry.BeanDefinition<>(TestService.class, "reloadBean");
+        CompiledFactory<TestService> factory1 = deps -> new TestService();
+        container.register(definition, factory1);
+        
+        // First resolution uses factory1
+        TestService instance1 = container.resolve("reloadBean");
+        assertNotNull(instance1);
+        
+        // Hot-reload the bean
+        boolean reloaded = container.reload("reloadBean");
+        assertTrue(reloaded);
+        
+        // After reload, resolve again - should use newly compiled factory
+        TestService instance2 = container.resolve("reloadBean");
+        assertNotNull(instance2);
+        
+        // Instances should be different (old one was destroyed, new one created)
+        assertNotSame(instance1, instance2);
+    }
+
+    @Test
+    void testHotReloadNonExistentBean() {
+        // Reload non-existent bean should return false
+        boolean reloaded = container.reload("nonExistent");
+        assertFalse(reloaded);
+    }
+
     // Simple bean class for reflection testing
     public static class SimpleBean {
         public SimpleBean() {}

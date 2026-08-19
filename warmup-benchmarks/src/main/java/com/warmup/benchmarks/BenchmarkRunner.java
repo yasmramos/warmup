@@ -15,9 +15,9 @@ public class BenchmarkRunner {
     public static void main(String[] args) throws RunnerException {
         Options opt = new OptionsBuilder()
                 .include(".*Benchmark") // Automatically includes all classes ending with "Benchmark"
-                .forks(1)
-                .warmupIterations(2)
-                .measurementIterations(3)
+                .forks(3)
+                .warmupIterations(5)
+                .measurementIterations(10)
                 .warmupTime(TimeValue.seconds(2))
                 .measurementTime(TimeValue.seconds(3))
                 .shouldFailOnError(true)

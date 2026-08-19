@@ -124,13 +124,20 @@ public class BeanRegistryImpl implements BeanRegistry {
             case PROTOTYPE -> {
                 // Always create new instance for prototype scope
                 T instance = factory.get();
-                applyInitCallback(instance, definition);
+                // Only apply init callback if the bean has lifecycle callbacks defined
+                // Avoid the method call and lifecycle check overhead for beans without lifecycle
+                if (definition.lifecycle().onInit() != null) {
+                    definition.lifecycle().onInit().onInit(instance);
+                }
                 yield instance;
             }
             case CUSTOM -> {
                 // Custom scopes handled by extensions
                 T instance = factory.get();
-                applyInitCallback(instance, definition);
+                // Only apply init callback if the bean has lifecycle callbacks defined
+                if (definition.lifecycle().onInit() != null) {
+                    definition.lifecycle().onInit().onInit(instance);
+                }
                 yield instance;
             }
         };
@@ -158,6 +165,19 @@ public class BeanRegistryImpl implements BeanRegistry {
             // Remove type mapping if this was the primary bean
             if (definition.isPrimary()) {
                 typeToNameMap.remove(definition.type());
+            }
+            return true;
+        }
+        return false;
+    }
+
+    @Override
+    public boolean evictInstance(String name) {
+        Object instance = singletonInstances.remove(name);
+        if (instance != null) {
+            BeanDefinition<?> definition = definitionsByName.get(name);
+            if (definition != null && definition.hasLifecycle() && definition.lifecycle().onDestroy() != null) {
+                applyDestroyCallback(instance, definition);
             }
             return true;
         }
