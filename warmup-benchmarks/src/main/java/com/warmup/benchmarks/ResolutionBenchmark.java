@@ -29,9 +29,6 @@ import java.util.concurrent.TimeUnit;
 @State(org.openjdk.jmh.annotations.Scope.Benchmark)
 @BenchmarkMode(Mode.AverageTime)
 @OutputTimeUnit(TimeUnit.NANOSECONDS)
-@org.openjdk.jmh.annotations.Warmup(iterations = 5, time = 1)
-@Measurement(iterations = 10, time = 1)
-@Fork(3)
 public class ResolutionBenchmark {
 
     // Test beans with varying complexity
