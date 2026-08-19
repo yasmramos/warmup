@@ -98,6 +98,11 @@
                             <artifactId>warmup-processor</artifactId>
                             <version>${project.version}</version>
                         </path>
+                        <path>
+                            <groupId>org.openjdk.jmh</groupId>
+                            <artifactId>jmh-generator-annprocess</artifactId>
+                            <version>${jmh.version}</version>
+                        </path>
                     </annotationProcessorPaths>
                 </configuration>
             </plugin>
