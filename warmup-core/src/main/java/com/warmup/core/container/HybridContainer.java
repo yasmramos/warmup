@@ -58,6 +58,28 @@ public class HybridContainer {
     private final Semaphore warmupSemaphore;
 
     /**
+     * Cached flag indicating if running in GraalVM native image mode.
+     * Computed once at class load time to avoid repeated reflection overhead.
+     */
+    private static final boolean IS_NATIVE_IMAGE = computeNativeImage();
+
+    /**
+     * Computes whether running in GraalVM native image mode.
+     * Uses reflection to check for GraalVM's ImageInfo class.
+     * Returns false if GraalVM is not available or any error occurs.
+     */
+    private static boolean computeNativeImage() {
+        try {
+            Class<?> imageInfoClass = Class.forName("org.graalvm.nativeimage.ImageInfo");
+            Object inImageCode = imageInfoClass.getMethod("inImageCode").invoke(null);
+            return Boolean.TRUE.equals(inImageCode);
+        } catch (ReflectiveOperationException e) {
+            // Not running in GraalVM or ImageInfo not available
+            return false;
+        }
+    }
+
+    /**
      * Creates a new HybridContainer with default settings.
      * 
      * @param jitCompiler the JIT compiler for runtime factory generation
@@ -266,7 +288,7 @@ public class HybridContainer {
         ResolutionDiagnostic.ResolutionPath path;
         
         // Check if running in GraalVM native image mode - disable JIT
-        boolean nativeImage = isNativeImage();
+        boolean nativeImage = IS_NATIVE_IMAGE;
         
         // Try compile-time factory first (zero-overhead path)
         CompiledFactory<T> factory = (CompiledFactory<T>) compileTimeFactories.get(name);
@@ -417,20 +439,5 @@ public class HybridContainer {
     private void recordMetrics(BeanDefinition<?> definition, long resolutionTimeNs) {
         totalResolutions.add(1);
         resolutionTimeAccumulator.add(resolutionTimeNs);
-    }
-
-    /**
-     * Checks if running in GraalVM native image mode.
-     * In native image, JIT compilation is disabled and only compile-time/fallback paths are used.
-     */
-    private boolean isNativeImage() {
-        try {
-            Class<?> imageInfoClass = Class.forName("org.graalvm.nativeimage.ImageInfo");
-            Object inImageCode = imageInfoClass.getMethod("inImageCode").invoke(null);
-            return Boolean.TRUE.equals(inImageCode);
-        } catch (ReflectiveOperationException e) {
-            // Not running in GraalVM or ImageInfo not available
-            return false;
-        }
     }
 }
