@@ -164,17 +164,20 @@ public class DependencyGraph {
 
     /**
      * Checks if adding an edge would create a cycle.
-     * Uses DFS to check if there's a path from target to source.
+     * When registering "beanName depends on dep", a cycle exists if
+     * dep can already reach beanName by following existing dependencies.
+     * Uses DFS on reverseAdjacency (bean -> its dependencies).
      */
-    private boolean wouldCreateCycle(String source, String target) {
-        // If target can reach source, adding source->target creates a cycle
-        return canReach(target, source, new HashSet<>());
+    private boolean wouldCreateCycle(String beanName, String dep) {
+        // Check if beanName is reachable from dep by following dependencies
+        // This means: does dep (or anything dep depends on) eventually depend on beanName?
+        return canReachViaDependencies(dep, beanName, new HashSet<>());
     }
 
     /**
-     * DFS to check if target can reach destination.
+     * DFS to check if destination can be reached from current by following dependencies.
      */
-    private boolean canReach(String current, String destination, Set<String> visited) {
+    private boolean canReachViaDependencies(String current, String destination, Set<String> visited) {
         if (current.equals(destination)) {
             return true;
         }
@@ -183,9 +186,9 @@ public class DependencyGraph {
             return false; // Already visited
         }
         
-        Set<String> dependents = adjacencyList.getOrDefault(current, Set.of());
-        for (String dependent : dependents) {
-            if (canReach(dependent, destination, visited)) {
+        Set<String> dependencies = reverseAdjacency.getOrDefault(current, Set.of());
+        for (String dependency : dependencies) {
+            if (canReachViaDependencies(dependency, destination, visited)) {
                 return true;
             }
         }
@@ -195,15 +198,18 @@ public class DependencyGraph {
 
     /**
      * Finds and returns the cycle path when a cycle is detected.
+     * Returns a list representing the cycle: source -> target -> ... -> source
      */
     private List<String> findCycle(String source, String target) {
         List<String> path = new ArrayList<>();
         path.add(source);
+        
+        // Find path from source to target and back to source
+        // Start by adding target to the path
         path.add(target);
         
-        // Find path from target back to source
+        // Find path from target back to source using reverse edges (dependencies)
         findPath(target, source, new HashSet<>(), path);
-        path.add(source); // Complete the cycle
         
         return path;
     }
@@ -220,6 +226,10 @@ public class DependencyGraph {
         // Follow reverse edges (dependencies)
         Set<String> dependencies = reverseAdjacency.getOrDefault(current, Set.of());
         for (String dep : dependencies) {
+            if (dep.equals(destination)) {
+                path.add(dep);
+                return true;
+            }
             path.add(dep);
             if (findPath(dep, destination, visited, path)) {
                 return true;
