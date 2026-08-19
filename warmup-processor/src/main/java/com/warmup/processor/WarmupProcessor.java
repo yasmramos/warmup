@@ -120,6 +120,9 @@ public class WarmupProcessor extends AbstractProcessor {
     /**
      * Generates a CompiledFactory implementation for the given bean class.
      * Returns the simple name of the generated factory class.
+     * 
+     * Handles default package: if packageName is empty, omits the package declaration
+     * and creates the source file without a package prefix.
      */
     private String generateFactory(TypeElement beanClass, Bean annotation, Filer filer) 
             throws IOException {
@@ -135,7 +138,12 @@ public class WarmupProcessor extends AbstractProcessor {
             : Collections.emptyList();
         
         StringBuilder code = new StringBuilder();
-        code.append("package ").append(packageName).append(";\n\n");
+        
+        // Only add package declaration if not in default package
+        if (!packageName.isEmpty()) {
+            code.append("package ").append(packageName).append(";\n\n");
+        }
+        
         code.append("import com.warmup.core.jit.CompiledFactory;\n");
         code.append("import java.lang.Class;\n\n");
         
@@ -204,8 +212,13 @@ public class WarmupProcessor extends AbstractProcessor {
         
         code.append("}\n");
         
-        // Write the file
-        Writer writer = filer.createSourceFile(packageName + "." + factoryClassName).openWriter();
+        // Write the file - handle default package
+        Writer writer;
+        if (packageName.isEmpty()) {
+            writer = filer.createSourceFile(factoryClassName).openWriter();
+        } else {
+            writer = filer.createSourceFile(packageName + "." + factoryClassName).openWriter();
+        }
         try {
             writer.write(code.toString());
         } finally {
@@ -268,7 +281,12 @@ public class WarmupProcessor extends AbstractProcessor {
 
     /**
      * Derives the bean name from the type element and annotation.
-     * Uses the explicit name from @Bean if provided, otherwise uses the decapitalized class name.
+     * 
+     * Convention: If @Bean.value() is empty, uses the simple class name as-is.
+     * This matches the documentation in Bean.java: "if not specified, the simple class name is used".
+     * 
+     * For users building BeanDefinition manually: both the simple class name and the fully
+     * qualified name are registered as keys, so resolution works regardless of which name was used.
      */
     private String deriveBeanName(TypeElement typeElement, Bean bean) {
         // If explicit name is provided in annotation, use it
@@ -276,25 +294,16 @@ public class WarmupProcessor extends AbstractProcessor {
             return bean.value();
         }
         
-        // Otherwise, use decapitalized simple class name (following JavaBeans convention)
-        String className = typeElement.getSimpleName().toString();
-        if (className.length() == 0) {
-            return "";
-        }
-        
-        // Decapitalize: first letter lowercase, rest unchanged
-        char[] chars = className.toCharArray();
-        if (chars.length > 1 && Character.isUpperCase(chars[0]) && Character.isUpperCase(chars[1])) {
-            // Special case: if first two letters are uppercase (e.g., "URL"), keep as is
-            return className;
-        }
-        chars[0] = Character.toLowerCase(chars[0]);
-        return new String(chars);
+        // Otherwise, use simple class name as-is (no decapitalization)
+        return typeElement.getSimpleName().toString();
     }
 
     /**
      * Generates the FactoryRegistrar implementation and service file.
      * This creates a single registrar class that registers all factories from this module.
+     * 
+     * Handles default package: if packageName is empty, omits the package declaration
+     * and uses simple class names for factory references.
      */
     private void generateFactoryRegistrar(Filer filer) throws IOException {
         if (processedBeans.isEmpty()) {
@@ -304,10 +313,17 @@ public class WarmupProcessor extends AbstractProcessor {
         // Use the package of the first bean for the registrar
         String registrarPackage = processedBeans.get(0).packageName;
         String registrarClassName = "GeneratedFactoryRegistrar";
-        String fullyQualifiedRegistrarName = registrarPackage + "." + registrarClassName;
+        String fullyQualifiedRegistrarName = registrarPackage.isEmpty() 
+            ? registrarClassName 
+            : registrarPackage + "." + registrarClassName;
 
         StringBuilder code = new StringBuilder();
-        code.append("package ").append(registrarPackage).append(";\n\n");
+        
+        // Only add package declaration if not in default package
+        if (!registrarPackage.isEmpty()) {
+            code.append("package ").append(registrarPackage).append(";\n\n");
+        }
+        
         code.append("import com.warmup.core.jit.FactoryRegistrar;\n");
         code.append("import com.warmup.core.jit.CompiledFactory;\n");
         code.append("import java.util.function.BiConsumer;\n");
@@ -324,18 +340,36 @@ public class WarmupProcessor extends AbstractProcessor {
         code.append("    @Override\n");
         code.append("    public void registerAll(BiConsumer<String, CompiledFactory<?>> sink) {\n");
 
-        // Register each factory
+        // Register each factory with both simple name and FQN for robustness
         for (BeanInfo beanInfo : processedBeans) {
+            String factoryRef = beanInfo.packageName.isEmpty()
+                ? beanInfo.factoryClassName
+                : beanInfo.packageName + "." + beanInfo.factoryClassName;
+            
+            // Register with simple class name as primary key
             code.append("        sink.accept(\"").append(beanInfo.beanName)
-                .append("\", new ").append(beanInfo.packageName)
-                .append(".").append(beanInfo.factoryClassName).append("());\n");
+                .append("\", new ").append(factoryRef).append("());\n");
+            
+            // Also register with fully qualified name for robustness
+            String fqnKey = beanInfo.packageName.isEmpty()
+                ? beanInfo.className
+                : beanInfo.packageName + "." + beanInfo.className;
+            if (!fqnKey.equals(beanInfo.beanName)) {
+                code.append("        sink.accept(\"").append(fqnKey)
+                    .append("\", new ").append(factoryRef).append("());\n");
+            }
         }
 
         code.append("    }\n");
         code.append("}\n");
 
         // Write the registrar class
-        Writer writer = filer.createSourceFile(fullyQualifiedRegistrarName).openWriter();
+        Writer writer;
+        if (registrarPackage.isEmpty()) {
+            writer = filer.createSourceFile(registrarClassName).openWriter();
+        } else {
+            writer = filer.createSourceFile(fullyQualifiedRegistrarName).openWriter();
+        }
         try {
             writer.write(code.toString());
         } finally {
