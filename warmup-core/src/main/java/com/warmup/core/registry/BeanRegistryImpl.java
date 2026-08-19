@@ -124,13 +124,20 @@ public class BeanRegistryImpl implements BeanRegistry {
             case PROTOTYPE -> {
                 // Always create new instance for prototype scope
                 T instance = factory.get();
-                applyInitCallback(instance, definition);
+                // Only apply init callback if the bean has lifecycle callbacks defined
+                // Avoid the method call and lifecycle check overhead for beans without lifecycle
+                if (definition.lifecycle().onInit() != null) {
+                    definition.lifecycle().onInit().onInit(instance);
+                }
                 yield instance;
             }
             case CUSTOM -> {
                 // Custom scopes handled by extensions
                 T instance = factory.get();
-                applyInitCallback(instance, definition);
+                // Only apply init callback if the bean has lifecycle callbacks defined
+                if (definition.lifecycle().onInit() != null) {
+                    definition.lifecycle().onInit().onInit(instance);
+                }
                 yield instance;
             }
         };
