@@ -1,51 +1,36 @@
 ```
-# Compiled and build artifacts
-*.class
-*.o
-*.obj
-*.out
-build/
+# Java/Maven build artifacts
 target/
+*.class
+*.jar
+*.war
+*.ear
 
 # Dependencies
+.m2/
 .gradle/
-lib/
-jars/
 
-# Logs and temp files
-*.log
-*.tmp
-*.swp
-
-# Editors
-.vscode/
+# IDE files
 .idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+
+# Logs
+*.log
 
 # Environment
 .env
 .env.local
 *.env.*
 
-# Coverage
-coverage/
-htmlcov/
-.coverage
-
-# Package manager
-node_modules/
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-
 # OS generated files
 .DS_Store
 Thumbs.db
 
-# Archives
-*.zip
-*.tar.gz
-*.tgz
-*.gz
-*.rar
-*.7z
+# Test coverage
+coverage/
+htmlcov/
+.coverage
 ```
