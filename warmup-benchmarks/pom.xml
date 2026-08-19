@@ -82,29 +82,53 @@
                 </configuration>
             </plugin>
             
-            <!-- Configure annotation processors -->
+            <!-- First pass: Generate Avaje Inject factories (without JMH processor) -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>
-                <configuration>
-                    <annotationProcessorPaths>
-                        <path>
-                            <groupId>io.avaje</groupId>
-                            <artifactId>avaje-inject-generator</artifactId>
-                            <version>11.4</version>
-                        </path>
-                        <path>
-                            <groupId>com.warmup</groupId>
-                            <artifactId>warmup-processor</artifactId>
-                            <version>${project.version}</version>
-                        </path>
-                        <path>
-                            <groupId>org.openjdk.jmh</groupId>
-                            <artifactId>jmh-generator-annprocess</artifactId>
-                            <version>${jmh.version}</version>
-                        </path>
-                    </annotationProcessorPaths>
-                </configuration>
+                <executions>
+                    <execution>
+                        <id>avaje-generate</id>
+                        <phase>generate-sources</phase>
+                        <goals>
+                            <goal>compile</goal>
+                        </goals>
+                        <configuration>
+                            <proc>only</proc>
+                            <annotationProcessorPaths>
+                                <path>
+                                    <groupId>io.avaje</groupId>
+                                    <artifactId>avaje-inject-generator</artifactId>
+                                    <version>11.4</version>
+                                </path>
+                            </annotationProcessorPaths>
+                            <compilerArgs>
+                                <arg>-AsmoothBuild=true</arg>
+                            </compilerArgs>
+                        </configuration>
+                    </execution>
+                    <execution>
+                        <id>default-compile</id>
+                        <phase>compile</phase>
+                        <goals>
+                            <goal>compile</goal>
+                        </goals>
+                        <configuration>
+                            <annotationProcessorPaths>
+                                <path>
+                                    <groupId>com.warmup</groupId>
+                                    <artifactId>warmup-processor</artifactId>
+                                    <version>${project.version}</version>
+                                </path>
+                                <path>
+                                    <groupId>org.openjdk.jmh</groupId>
+                                    <artifactId>jmh-generator-annprocess</artifactId>
+                                    <version>${jmh.version}</version>
+                                </path>
+                            </annotationProcessorPaths>
+                        </configuration>
+                    </execution>
+                </executions>
             </plugin>
             
             <!-- Build executable JAR with all dependencies -->
