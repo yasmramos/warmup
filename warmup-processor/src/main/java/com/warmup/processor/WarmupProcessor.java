@@ -8,6 +8,8 @@ import javax.lang.model.SourceVersion;
 import javax.lang.model.element.*;
 import javax.lang.model.type.TypeMirror;
 import javax.tools.Diagnostic;
+import javax.tools.FileObject;
+import javax.tools.StandardLocation;
 import java.io.IOException;
 import java.io.Writer;
 import java.util.*;
@@ -50,6 +52,26 @@ import java.util.*;
 @SupportedSourceVersion(SourceVersion.RELEASE_17)
 public class WarmupProcessor extends AbstractProcessor {
 
+    private final List<BeanInfo> processedBeans = new ArrayList<>();
+    private boolean processingOver = false;
+
+    /**
+     * Holds information about a processed bean for later registrar generation.
+     */
+    private static class BeanInfo {
+        final String packageName;
+        final String className;
+        final String beanName;
+        final String factoryClassName;
+
+        BeanInfo(String packageName, String className, String beanName, String factoryClassName) {
+            this.packageName = packageName;
+            this.className = className;
+            this.beanName = beanName;
+            this.factoryClassName = factoryClassName;
+        }
+    }
+
     @Override
     public boolean process(Set<? extends TypeElement> annotations, RoundEnvironment roundEnv) {
         Filer filer = processingEnv.getFiler();
@@ -67,10 +89,28 @@ public class WarmupProcessor extends AbstractProcessor {
             Bean bean = typeElement.getAnnotation(Bean.class);
             
             try {
-                generateFactory(typeElement, bean, filer);
+                String factoryClassName = generateFactory(typeElement, bean, filer);
+                
+                // Store bean info for registrar generation
+                String packageName = getPackageName(typeElement);
+                String className = typeElement.getSimpleName().toString();
+                String beanName = deriveBeanName(typeElement, bean);
+                processedBeans.add(new BeanInfo(packageName, className, beanName, factoryClassName));
+                
             } catch (IOException e) {
                 messager.printMessage(Diagnostic.Kind.ERROR, 
                     "Failed to generate factory: " + e.getMessage(), element);
+            }
+        }
+        
+        // Generate registrar when processing is complete
+        if (roundEnv.processingOver() && !processingOver && !processedBeans.isEmpty()) {
+            processingOver = true;
+            try {
+                generateFactoryRegistrar(filer);
+            } catch (IOException e) {
+                messager.printMessage(Diagnostic.Kind.ERROR,
+                    "Failed to generate FactoryRegistrar: " + e.getMessage());
             }
         }
         
@@ -79,8 +119,9 @@ public class WarmupProcessor extends AbstractProcessor {
 
     /**
      * Generates a CompiledFactory implementation for the given bean class.
+     * Returns the simple name of the generated factory class.
      */
-    private void generateFactory(TypeElement beanClass, Bean annotation, Filer filer) 
+    private String generateFactory(TypeElement beanClass, Bean annotation, Filer filer) 
             throws IOException {
         
         String packageName = getPackageName(beanClass);

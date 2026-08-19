@@ -4,6 +4,7 @@ import com.warmup.core.graph.DependencyGraph;
 import com.warmup.core.jit.CompiledFactory;
 import com.warmup.core.jit.CompilationException;
 import com.warmup.core.jit.CompilationStats;
+import com.warmup.core.jit.FactoryRegistrar;
 import com.warmup.core.jit.JITCompiler;
 import com.warmup.core.lifecycle.LifecycleCallbacks;
 import com.warmup.core.registry.BeanDefinition;
@@ -19,7 +20,9 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.LongAdder;
+import java.util.function.BiConsumer;
 import java.util.function.Function;
+import java.util.ServiceLoader;
 
 /**
  * Hybrid DI container combining compile-time and JIT compilation.
@@ -62,6 +65,13 @@ public class HybridContainer {
     // Background warmup executor with semaphore for backpressure
     private final ExecutorService warmupExecutor;
     private final Semaphore warmupSemaphore;
+    
+    /**
+     * Flag to enable/disable auto-discovery of FactoryRegistrar via ServiceLoader.
+     * Enabled by default for convenience, but can be disabled for minimal startup
+     * or when using manual factory registration.
+     */
+    private final boolean autoDiscoverFactories;
 
     /**
      * Cached flag indicating if running in GraalVM native image mode.
@@ -87,24 +97,40 @@ public class HybridContainer {
 
     /**
      * Creates a new HybridContainer with default settings.
+     * Auto-discovers FactoryRegistrar implementations via ServiceLoader.
      * 
      * @param jitCompiler the JIT compiler for runtime factory generation
      * @param diagnosticMode if true, logs resolution path for each bean
      */
     public HybridContainer(JITCompiler jitCompiler, boolean diagnosticMode) {
-        this(jitCompiler, diagnosticMode, 10);
+        this(jitCompiler, diagnosticMode, 10, true);
     }
 
     /**
      * Creates a new HybridContainer with custom warmup configuration.
+     * Auto-discovers FactoryRegistrar implementations via ServiceLoader.
      * 
      * @param jitCompiler the JIT compiler for runtime factory generation
      * @param diagnosticMode if true, logs resolution path for each bean
      * @param maxPendingCompilations maximum concurrent background compilations
      */
     public HybridContainer(JITCompiler jitCompiler, boolean diagnosticMode, int maxPendingCompilations) {
+        this(jitCompiler, diagnosticMode, maxPendingCompilations, true);
+    }
+
+    /**
+     * Creates a new HybridContainer with full configuration.
+     * 
+     * @param jitCompiler the JIT compiler for runtime factory generation
+     * @param diagnosticMode if true, logs resolution path for each bean
+     * @param maxPendingCompilations maximum concurrent background compilations
+     * @param autoDiscoverFactories if true, automatically discovers and registers
+     *        compile-time factories via ServiceLoader at startup (default: true)
+     */
+    public HybridContainer(JITCompiler jitCompiler, boolean diagnosticMode, int maxPendingCompilations, boolean autoDiscoverFactories) {
         this.jitCompiler = jitCompiler;
         this.diagnosticMode = diagnosticMode;
+        this.autoDiscoverFactories = autoDiscoverFactories;
         this.warmupSemaphore = new Semaphore(maxPendingCompilations);
         this.warmupExecutor = Executors.newFixedThreadPool(
             Math.max(2, Runtime.getRuntime().availableProcessors() / 2),
@@ -114,6 +140,24 @@ public class HybridContainer {
                 return t;
             }
         );
+        
+        // Auto-discover and register compile-time factories once at startup
+        if (autoDiscoverFactories) {
+            discoverAndRegisterFactories();
+        }
+    }
+    
+    /**
+     * Discovers all FactoryRegistrar implementations via ServiceLoader and registers
+     * their factories. This is a one-time startup cost, not on the resolution path.
+     * 
+     * <p>If no registrars are found (empty ServiceLoader), this method does nothing.</p>
+     */
+    private void discoverAndRegisterFactories() {
+        ServiceLoader<FactoryRegistrar> loader = ServiceLoader.load(FactoryRegistrar.class);
+        for (FactoryRegistrar registrar : loader) {
+            registrar.registerAll((name, factory) -> registerFactory(name, factory));
+        }
     }
 
     /**
