@@ -56,11 +56,19 @@ public class HybridContainer {
     private final List<ResolutionDiagnostic> diagnostics = new ArrayList<>();
     
     // Metrics tracking using LongAdder for thread-safe increments
+    // Only updated when metricsEnabled is true to avoid overhead on fast path
     private final LongAdder totalResolutions = new LongAdder();
     private final LongAdder compileTimeHits = new LongAdder();
     private final LongAdder jitHits = new LongAdder();
     private final LongAdder fallbackCount = new LongAdder();
     private final LongAdder resolutionTimeAccumulator = new LongAdder();
+    
+    /**
+     * Flag to enable/disable metrics collection.
+     * When false, the fast path avoids all timing, Optional allocations, and LongAdder updates.
+     * Default is true for backward compatibility.
+     */
+    private final boolean metricsEnabled;
     
     // Background warmup executor with semaphore for backpressure
     private final ExecutorService warmupExecutor;
@@ -98,28 +106,31 @@ public class HybridContainer {
     /**
      * Creates a new HybridContainer with default settings.
      * Auto-discovers FactoryRegistrar implementations via ServiceLoader.
+     * Metrics are enabled by default for backward compatibility.
      * 
      * @param jitCompiler the JIT compiler for runtime factory generation
      * @param diagnosticMode if true, logs resolution path for each bean
      */
     public HybridContainer(JITCompiler jitCompiler, boolean diagnosticMode) {
-        this(jitCompiler, diagnosticMode, 10, true);
+        this(jitCompiler, diagnosticMode, 10, true, true);
     }
 
     /**
      * Creates a new HybridContainer with custom warmup configuration.
      * Auto-discovers FactoryRegistrar implementations via ServiceLoader.
+     * Metrics are enabled by default for backward compatibility.
      * 
      * @param jitCompiler the JIT compiler for runtime factory generation
      * @param diagnosticMode if true, logs resolution path for each bean
      * @param maxPendingCompilations maximum concurrent background compilations
      */
     public HybridContainer(JITCompiler jitCompiler, boolean diagnosticMode, int maxPendingCompilations) {
-        this(jitCompiler, diagnosticMode, maxPendingCompilations, true);
+        this(jitCompiler, diagnosticMode, maxPendingCompilations, true, true);
     }
 
     /**
      * Creates a new HybridContainer with full configuration.
+     * Metrics are enabled by default for backward compatibility.
      * 
      * @param jitCompiler the JIT compiler for runtime factory generation
      * @param diagnosticMode if true, logs resolution path for each bean
@@ -128,9 +139,25 @@ public class HybridContainer {
      *        compile-time factories via ServiceLoader at startup (default: true)
      */
     public HybridContainer(JITCompiler jitCompiler, boolean diagnosticMode, int maxPendingCompilations, boolean autoDiscoverFactories) {
+        this(jitCompiler, diagnosticMode, maxPendingCompilations, autoDiscoverFactories, true);
+    }
+
+    /**
+     * Creates a new HybridContainer with full configuration including metrics toggle.
+     * 
+     * @param jitCompiler the JIT compiler for runtime factory generation
+     * @param diagnosticMode if true, logs resolution path for each bean
+     * @param maxPendingCompilations maximum concurrent background compilations
+     * @param autoDiscoverFactories if true, automatically discovers and registers
+     *        compile-time factories via ServiceLoader at startup (default: true)
+     * @param metricsEnabled if true, enables metrics collection (totalResolutions, timing, etc.);
+     *        when false, the fast path avoids all timing, Optional allocations, and LongAdder updates
+     */
+    public HybridContainer(JITCompiler jitCompiler, boolean diagnosticMode, int maxPendingCompilations, boolean autoDiscoverFactories, boolean metricsEnabled) {
         this.jitCompiler = jitCompiler;
         this.diagnosticMode = diagnosticMode;
         this.autoDiscoverFactories = autoDiscoverFactories;
+        this.metricsEnabled = metricsEnabled;
         this.warmupSemaphore = new Semaphore(maxPendingCompilations);
         this.warmupExecutor = Executors.newFixedThreadPool(
             Math.max(2, Runtime.getRuntime().availableProcessors() / 2),
@@ -204,7 +231,8 @@ public class HybridContainer {
     /**
      * Resolves a bean by name.
      * Uses compile-time factory if available, otherwise JIT-compiles or falls back.
-     * Time is always measured for accurate metrics.
+     * When metrics are disabled, the fast path (cached singleton) avoids all timing,
+     * Optional allocations, and LongAdder updates for minimal overhead.
      * 
      * @param <T> the bean type
      * @param name the bean name
@@ -212,13 +240,16 @@ public class HybridContainer {
      */
     @SuppressWarnings("unchecked")
     public <T> T resolve(String name) {
-        long startTime = System.nanoTime();
-        
-        // Fast-path: check if singleton is already cached (avoid Optional allocation and lambda creation)
+        // Fast-path: check if singleton is already cached
         T cachedInstance = registry.getIfPresent(name);
         if (cachedInstance != null) {
-            BeanDefinition<T> definition = (BeanDefinition<T>) registry.getDefinition(name).orElseThrow(() -> new IllegalStateException("Bean not found: " + name));
-            recordMetrics(definition, System.nanoTime() - startTime);
+            // When metrics enabled: record timing and resolution count
+            // When metrics disabled: bare return with no overhead
+            if (metricsEnabled) {
+                long startTime = System.nanoTime();
+                BeanDefinition<T> definition = (BeanDefinition<T>) registry.getDefinition(name).orElseThrow(() -> new IllegalStateException("Bean not found: " + name));
+                recordMetrics(definition, System.nanoTime() - startTime);
+            }
             return cachedInstance;
         }
         
@@ -228,9 +259,12 @@ public class HybridContainer {
             throw new IllegalStateException("Bean not found: " + name);
         }
         
+        long startTime = System.nanoTime();
         T instance = registry.getInstance(definition, () -> createBean(definition));
         
-        recordMetrics(definition, System.nanoTime() - startTime);
+        if (metricsEnabled) {
+            recordMetrics(definition, System.nanoTime() - startTime);
+        }
         
         return instance;
     }

@@ -67,8 +67,9 @@ public class ResolutionBenchmark {
     public void setup() throws Exception {
         // Using explicit constructor for benchmark measurement
         // In production, use: com.warmup.core.Warmup warmup = com.warmup.core.Warmup.create();
+        // Note: metricsEnabled=false to measure bare fast-path overhead without instrumentation
         com.warmup.asm.AsmJITCompiler jitCompiler = new com.warmup.asm.AsmJITCompiler();
-        container = new HybridContainer(jitCompiler, false);
+        container = new HybridContainer(jitCompiler, false, 10, true, false);
 
         // Register simple bean with JIT compilation (SINGLETON)
         BeanDefinition<SimpleBean> singletonDef = new BeanDefinition<>(
