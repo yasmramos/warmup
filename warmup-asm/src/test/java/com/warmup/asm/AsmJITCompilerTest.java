@@ -89,6 +89,73 @@ class AsmJITCompilerTest {
         assertFalse(compiler.hasCompiledFactory(DependentBean.class));
     }
 
+    @Test
+    void testCompileAsync() throws Exception {
+        var future = compiler.compileAsync(SimpleBean.class);
+        
+        assertNotNull(future);
+        CompiledFactory<SimpleBean> factory = future.get();
+        assertNotNull(factory);
+        
+        SimpleBean bean = factory.create();
+        assertNotNull(bean);
+        assertEquals("created", bean.getStatus());
+    }
+
+    @Test
+    void testCompileAsyncWithDependencies() throws Exception {
+        SimpleBean dependency = new SimpleBean();
+        
+        var future = compiler.compileAsync(DependentBean.class, SimpleBean.class);
+        
+        assertNotNull(future);
+        CompiledFactory<DependentBean> factory = future.get();
+        assertNotNull(factory);
+        
+        DependentBean bean = factory.create(dependency);
+        assertNotNull(bean);
+        assertSame(dependency, bean.getDependency());
+    }
+
+    @Test
+    void testGetCachedFactory() throws CompilationException {
+        // Before compilation, cache should be empty
+        assertTrue(compiler.getCachedFactory(SimpleBean.class).isEmpty());
+        
+        // After compilation, cache should contain the factory
+        compiler.compile(SimpleBean.class);
+        var cachedFactory = compiler.getCachedFactory(SimpleBean.class);
+        assertFalse(cachedFactory.isEmpty());
+        
+        // Verify the cached factory works
+        SimpleBean bean = cachedFactory.get().create();
+        assertNotNull(bean);
+    }
+
+    @Test
+    void testUnloadFactoryNonExistent() {
+        // Unloading a non-existent factory should return false
+        assertFalse(compiler.unloadFactory(SimpleBean.class));
+    }
+
+    @Test
+    void testCompilationStatsWithFailure() {
+        // Get initial stats
+        var initialStats = compiler.getStats();
+        long initialTotal = initialStats.totalCompilations();
+        
+        // Compile successfully
+        assertDoesNotThrow(() -> compiler.compile(SimpleBean.class));
+        
+        var stats = compiler.getStats();
+        assertTrue(stats.totalCompilations() > initialTotal);
+        assertTrue(stats.successfulCompilations() > 0);
+        assertEquals(0, stats.failedCompilations());
+        
+        // Verify average compilation time is non-negative
+        assertTrue(stats.getAverageCompilationTimeMs() >= 0);
+    }
+
     public static class SimpleBean {
         private final String status = "created";
 
