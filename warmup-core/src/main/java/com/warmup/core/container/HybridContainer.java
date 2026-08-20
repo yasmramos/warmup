@@ -42,11 +42,12 @@ public class HybridContainer {
     private final DependencyGraph dependencyGraph = new DependencyGraph();
     private final JITCompiler jitCompiler;
     
-    // Compile-time factories (injected from annotation processor)
-    private final Map<String, CompiledFactory<?>> compileTimeFactories = new ConcurrentHashMap<>();
+    // Unified factory cache: combines both compile-time and JIT factories
+    // Key: bean name, Value: factory with metadata about origin for metrics
+    private final Map<String, CompiledFactory<?>> factoryCache = new ConcurrentHashMap<>();
     
-    // JIT factory cache to avoid recompiling the same bean type
-    private final Map<String, CompiledFactory<?>> jitFactoryCache = new ConcurrentHashMap<>();
+    // Track which factories are from compile-time vs JIT for metrics
+    private final Set<String> compileTimeFactoryNames = ConcurrentHashMap.newKeySet();
     
     // Empty array constant to avoid allocation for beans without dependencies
     private static final Object[] EMPTY_ARGS = new Object[0];
@@ -198,7 +199,8 @@ public class HybridContainer {
         registry.register(definition);
         
         if (factory != null) {
-            compileTimeFactories.put(definition.name(), factory);
+            factoryCache.put(definition.name(), factory);
+            compileTimeFactoryNames.add(definition.name());
         }
         
         // Register in dependency graph
@@ -263,14 +265,25 @@ public class HybridContainer {
         // Only use Supplier for SINGLETON scope which needs thread-safe lazy init
         T instance;
         if (definition.scope() == Scope.PROTOTYPE) {
+            // Direct path for PROTOTYPE: no lambda, no Supplier, no Optional allocation
+            // Apply init callback inline if lifecycle exists
             if (metricsEnabled) {
                 long startTime = System.nanoTime();
                 instance = createBean(definition);
+                // Apply init callback for prototype if lifecycle callbacks exist
+                if (definition.lifecycle().onInit() != null) {
+                    definition.lifecycle().onInit().onInit(instance);
+                }
                 recordMetrics(definition, System.nanoTime() - startTime);
             } else {
                 instance = createBean(definition);
+                // Apply init callback for prototype if lifecycle callbacks exist
+                if (definition.lifecycle().onInit() != null) {
+                    definition.lifecycle().onInit().onInit(instance);
+                }
             }
         } else {
+            // SINGLETON and CUSTOM scopes use registry.getInstance with Supplier
             if (metricsEnabled) {
                 long startTime = System.nanoTime();
                 instance = registry.getInstance(definition, () -> createBean(definition));
@@ -399,9 +412,9 @@ public class HybridContainer {
         // Step 1: Evict cached singleton instance and apply destroy callback
         registry.evictInstance(name);
         
-        // Step 2: Remove from factory caches
-        compileTimeFactories.remove(name);
-        jitFactoryCache.remove(name);
+        // Step 2: Remove from unified factory cache and tracking set
+        factoryCache.remove(name);
+        compileTimeFactoryNames.remove(name);
         
         // Step 3: Unload the previous ASM factory to free ClassLoader and metaspace
         jitCompiler.unloadFactory(definition.type());
@@ -417,7 +430,8 @@ public class HybridContainer {
      * Called by generated code from annotation processor.
      */
     public void registerFactory(String beanName, CompiledFactory<?> factory) {
-        compileTimeFactories.put(beanName, factory);
+        factoryCache.put(beanName, factory);
+        compileTimeFactoryNames.add(beanName);
     }
 
     // Internal methods
@@ -431,33 +445,29 @@ public class HybridContainer {
         // Check if running in GraalVM native image mode - disable JIT
         boolean nativeImage = IS_NATIVE_IMAGE;
         
-        // Optimized single lookup for hot path: check JIT cache first for prototype beans
-        // since they're most likely to be JIT-compiled dynamic beans.
-        // For compile-time registered beans, check compileTimeFactories first.
-        CompiledFactory<T> factory = (CompiledFactory<T>) jitFactoryCache.get(name);
+        // Single lookup in unified factory cache for hot path
+        CompiledFactory<T> factory = (CompiledFactory<T>) factoryCache.get(name);
         if (factory != null) {
-            // Hot path: factory already JIT-compiled and cached
-            path = ResolutionDiagnostic.ResolutionPath.JIT;
-            jitHits.add(1);
-        } else if (!nativeImage) {
-            // Not in native image, try compile-time factories
-            factory = (CompiledFactory<T>) compileTimeFactories.get(name);
-            if (factory != null) {
+            // Hot path: factory already cached, determine origin for metrics
+            if (compileTimeFactoryNames.contains(name)) {
                 path = ResolutionDiagnostic.ResolutionPath.COMPILE_TIME;
                 compileTimeHits.add(1);
             } else {
-                // Try JIT compilation and cache the result
-                try {
-                    factory = jitCompiler.compile(definition.type(), getDependencyClasses(definition));
-                    jitFactoryCache.put(name, factory);
-                    path = ResolutionDiagnostic.ResolutionPath.JIT;
-                    jitHits.add(1);
-                } catch (CompilationException e) {
-                    // Fallback to reflection
-                    path = ResolutionDiagnostic.ResolutionPath.REFLECTION_FALLBACK;
-                    fallbackCount.add(1);
-                    return createViaReflection(definition);
-                }
+                path = ResolutionDiagnostic.ResolutionPath.JIT;
+                jitHits.add(1);
+            }
+        } else if (!nativeImage) {
+            // Try JIT compilation and cache the result
+            try {
+                factory = jitCompiler.compile(definition.type(), getDependencyClasses(definition));
+                factoryCache.put(name, factory);
+                path = ResolutionDiagnostic.ResolutionPath.JIT;
+                jitHits.add(1);
+            } catch (CompilationException e) {
+                // Fallback to reflection
+                path = ResolutionDiagnostic.ResolutionPath.REFLECTION_FALLBACK;
+                fallbackCount.add(1);
+                return createViaReflection(definition);
             }
         } else {
             // Native image mode: skip JIT, go directly to fallback
