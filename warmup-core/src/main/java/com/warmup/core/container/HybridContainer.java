@@ -16,6 +16,7 @@ import com.warmup.core.scope.Scope;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Semaphore;
@@ -55,7 +56,13 @@ public class HybridContainer implements HotReloadCapable {
     
     // Diagnostic mode flag
     private final boolean diagnosticMode;
-    private final List<ResolutionDiagnostic> diagnostics = new ArrayList<>();
+    /**
+     * Thread-safe list for collecting resolution diagnostics.
+     * Uses CopyOnWriteArrayList to ensure thread safety during concurrent writes
+     * when diagnosticMode is enabled. This has write overhead but is acceptable
+     * since diagnostics are only collected in diagnostic mode (not production default).
+     */
+    private final List<ResolutionDiagnostic> diagnostics = new CopyOnWriteArrayList<>();
     
     // Metrics tracking using LongAdder for thread-safe increments
     // Only updated when metricsEnabled is true to avoid overhead on fast path
@@ -333,10 +340,18 @@ public class HybridContainer implements HotReloadCapable {
     }
 
     /**
-     * Gets diagnostic information for the last resolution.
+     * Gets diagnostic information for all resolutions collected so far.
+     * Returns an unmodifiable snapshot of the diagnostics list.
+     * 
+     * @apiNote Diagnostics are only collected when {@code diagnosticMode} is true.
+     * In production (diagnosticMode=false), this method returns an empty list and
+     * no data is collected, ensuring zero overhead on the resolution path.
+     * The returned list is thread-safe and represents a consistent snapshot.
      */
     public List<ResolutionDiagnostic> getDiagnostics() {
-        return Collections.unmodifiableList(diagnostics);
+        // CopyOnWriteArrayList already provides a safe snapshot via iterator
+        // Return an unmodifiable wrapper to prevent external modification
+        return Collections.unmodifiableList(new ArrayList<>(diagnostics));
     }
 
     /**
