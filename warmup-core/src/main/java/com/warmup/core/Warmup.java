@@ -3,6 +3,7 @@ package com.warmup.core;
 import com.warmup.core.annotation.InternalApi;
 import com.warmup.core.container.HotReloadCapable;
 import com.warmup.core.container.HybridContainer;
+import com.warmup.core.container.HybridContainerConfig;
 import com.warmup.core.jit.JITCompiler;
 import com.warmup.core.jit.NoOpJITCompiler;
 import com.warmup.core.registry.BeanDefinition;
@@ -297,6 +298,8 @@ public class Warmup implements AutoCloseable {
         private JITCompiler jitCompiler;
         private boolean diagnostic = false;
         private int maxPendingCompilations = 10;
+        private boolean autoDiscoverFactories = true;
+        private boolean metricsEnabled = false;
 
         /**
          * Enables or disables diagnostic mode.
@@ -335,6 +338,39 @@ public class Warmup implements AutoCloseable {
         }
 
         /**
+         * Enables or disables auto-discovery of FactoryRegistrar via ServiceLoader.
+         * Enabled by default for convenience, but can be disabled for minimal startup
+         * or when using manual factory registration.
+         * 
+         * @param autoDiscoverFactories true to enable auto-discovery (default: true)
+         * @return this builder
+         */
+        public Builder autoDiscoverFactories(boolean autoDiscoverFactories) {
+            this.autoDiscoverFactories = autoDiscoverFactories;
+            return this;
+        }
+
+        /**
+         * Enables or disables metrics collection.
+         * <p>
+         * When enabled, the container tracks total resolutions, compile-time hits,
+         * JIT hits, fallback count, and average resolution time. This incurs a small
+         * overhead on the resolution path (two System.nanoTime() calls and LongAdder updates).
+         * </p>
+         * <p>
+         * <strong>Disabled by default</strong> to avoid silent performance impact in production.
+         * Enable explicitly for monitoring, profiling, or troubleshooting.
+         * </p>
+         * 
+         * @param metricsEnabled true to enable metrics (default: false)
+         * @return this builder
+         */
+        public Builder metrics(boolean metricsEnabled) {
+            this.metricsEnabled = metricsEnabled;
+            return this;
+        }
+
+        /**
          * Builds the Warmup instance.
          * 
          * Discovers JITCompiler via ServiceLoader if not explicitly set.
@@ -347,7 +383,13 @@ public class Warmup implements AutoCloseable {
             if (compiler == null) {
                 compiler = discoverJITCompiler();
             }
-            return new Warmup(new HybridContainer(compiler, diagnostic, maxPendingCompilations));
+            HybridContainerConfig config = new HybridContainerConfig(
+                diagnostic,
+                maxPendingCompilations,
+                autoDiscoverFactories,
+                metricsEnabled
+            );
+            return new Warmup(new HybridContainer(config, compiler));
         }
 
         /**

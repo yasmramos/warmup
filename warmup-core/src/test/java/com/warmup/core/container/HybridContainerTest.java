@@ -174,6 +174,88 @@ class HybridContainerTest {
     }
 
     @Test
+    void testGetDiagnosticsConcurrentAccess() throws InterruptedException {
+        // Test concurrent writes and reads to diagnostics list
+        HybridContainer diagnosticContainer = new HybridContainer(jitCompiler, true);
+        // Use PROTOTYPE scope so each resolution calls createBean and records diagnostics
+        var definition = new com.warmup.core.registry.BeanDefinition<>(
+            TestService.class, "concurrentBean", 
+            com.warmup.core.scope.Scope.PROTOTYPE
+        );
+        diagnosticContainer.register(definition, null);
+        
+        int numThreads = 10;
+        int resolutionsPerThread = 50;
+        Thread[] writers = new Thread[numThreads];
+        final java.util.concurrent.CountDownLatch startLatch = new java.util.concurrent.CountDownLatch(1);
+        final java.util.concurrent.CountDownLatch doneLatch = new java.util.concurrent.CountDownLatch(numThreads);
+        
+        // Start multiple threads resolving beans (writing to diagnostics)
+        for (int i = 0; i < numThreads; i++) {
+            final int threadId = i;
+            writers[i] = new Thread(() -> {
+                try {
+                    startLatch.await(); // Wait for signal to start
+                    for (int j = 0; j < resolutionsPerThread; j++) {
+                        diagnosticContainer.resolve("concurrentBean");
+                    }
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                } finally {
+                    doneLatch.countDown();
+                }
+            }, "Writer-" + threadId);
+            writers[i].start();
+        }
+        
+        // Start a reader thread that continuously calls getDiagnostics()
+        Thread reader = new Thread(() -> {
+            try {
+                // Wait for writers to start
+                startLatch.countDown();
+                for (int i = 0; i < 200; i++) {
+                    var diagnostics = diagnosticContainer.getDiagnostics();
+                    // Should not throw ConcurrentModificationException
+                    assertNotNull(diagnostics);
+                    // Access size to force iteration
+                    int size = diagnostics.size();
+                    assertTrue(size >= 0);
+                    Thread.sleep(1);
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }, "Reader");
+        reader.start();
+        
+        // Wait for all writers to finish
+        doneLatch.await();
+        reader.join();
+        
+        // Verify all resolutions were recorded
+        var finalDiagnostics = diagnosticContainer.getDiagnostics();
+        assertEquals(numThreads * resolutionsPerThread, finalDiagnostics.size(), 
+            "All resolutions should be recorded");
+    }
+
+    @Test
+    void testDiagnosticsNotCollectedWhenDisabled() {
+        // Verify that in production mode (diagnosticMode=false), no diagnostics are collected
+        HybridContainer productionContainer = new HybridContainer(jitCompiler, false);
+        var definition = new com.warmup.core.registry.BeanDefinition<>(TestService.class, "prodBean");
+        productionContainer.register(definition, null);
+        
+        // Resolve multiple times
+        for (int i = 0; i < 100; i++) {
+            productionContainer.resolve("prodBean");
+        }
+        
+        var diagnostics = productionContainer.getDiagnostics();
+        assertNotNull(diagnostics);
+        assertTrue(diagnostics.isEmpty(), "Diagnostics should be empty when diagnosticMode is false");
+    }
+
+    @Test
     void testResolvePrototypeScope() {
         var definition = new com.warmup.core.registry.BeanDefinition<>(
             TestService.class, "prototypeBean", 
@@ -237,13 +319,19 @@ class HybridContainerTest {
 
     @Test
     void testGetMetricsAfterResolutions() {
+        // Create container with metrics explicitly enabled for this test
+        var metricsContainer = new HybridContainer(
+            new HybridContainerConfig(false, 10, true, true),  // metricsEnabled=true
+            jitCompiler
+        );
+        
         var definition = new com.warmup.core.registry.BeanDefinition<>(TestService.class, "metricsBean");
-        container.register(definition, null);
+        metricsContainer.register(definition, null);
         
-        container.resolve("metricsBean");
-        container.resolve("metricsBean");
+        metricsContainer.resolve("metricsBean");
+        metricsContainer.resolve("metricsBean");
         
-        var metrics = container.getMetrics();
+        var metrics = metricsContainer.getMetrics();
         assertEquals(2, metrics.totalResolutions());
         assertTrue(metrics.averageResolutionTimeNs() >= 0);
         assertTrue(metrics.cacheHitRate() >= 0);

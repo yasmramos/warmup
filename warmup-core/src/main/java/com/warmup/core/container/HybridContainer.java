@@ -16,6 +16,7 @@ import com.warmup.core.scope.Scope;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Semaphore;
@@ -55,7 +56,13 @@ public class HybridContainer implements HotReloadCapable {
     
     // Diagnostic mode flag
     private final boolean diagnosticMode;
-    private final List<ResolutionDiagnostic> diagnostics = new ArrayList<>();
+    /**
+     * Thread-safe list for collecting resolution diagnostics.
+     * Uses CopyOnWriteArrayList to ensure thread safety during concurrent writes
+     * when diagnosticMode is enabled. This has write overhead but is acceptable
+     * since diagnostics are only collected in diagnostic mode (not production default).
+     */
+    private final List<ResolutionDiagnostic> diagnostics = new CopyOnWriteArrayList<>();
     
     // Metrics tracking using LongAdder for thread-safe increments
     // Only updated when metricsEnabled is true to avoid overhead on fast path
@@ -68,7 +75,7 @@ public class HybridContainer implements HotReloadCapable {
     /**
      * Flag to enable/disable metrics collection.
      * When false, the fast path avoids all timing, Optional allocations, and LongAdder updates.
-     * Default is true for backward compatibility.
+     * Default is false for performance; enable explicitly for monitoring or diagnostics.
      */
     private final boolean metricsEnabled;
     
@@ -108,40 +115,46 @@ public class HybridContainer implements HotReloadCapable {
     /**
      * Creates a new HybridContainer with default settings.
      * Auto-discovers FactoryRegistrar implementations via ServiceLoader.
-     * Metrics are enabled by default for backward compatibility.
+     * Metrics are disabled by default for performance.
      * 
      * @param jitCompiler the JIT compiler for runtime factory generation
      * @param diagnosticMode if true, logs resolution path for each bean
+     * @deprecated Use {@link #HybridContainer(HybridContainerConfig)} or {@link Warmup#builder()} for explicit configuration.
      */
+    @Deprecated(since = "2.0", forRemoval = false)
     public HybridContainer(JITCompiler jitCompiler, boolean diagnosticMode) {
-        this(jitCompiler, diagnosticMode, 10, true, true);
+        this(jitCompiler, diagnosticMode, 10, true, false);
     }
 
     /**
      * Creates a new HybridContainer with custom warmup configuration.
      * Auto-discovers FactoryRegistrar implementations via ServiceLoader.
-     * Metrics are enabled by default for backward compatibility.
+     * Metrics are disabled by default for performance.
      * 
      * @param jitCompiler the JIT compiler for runtime factory generation
      * @param diagnosticMode if true, logs resolution path for each bean
      * @param maxPendingCompilations maximum concurrent background compilations
+     * @deprecated Use {@link #HybridContainer(HybridContainerConfig)} or {@link Warmup#builder()} for explicit configuration.
      */
+    @Deprecated(since = "2.0", forRemoval = false)
     public HybridContainer(JITCompiler jitCompiler, boolean diagnosticMode, int maxPendingCompilations) {
-        this(jitCompiler, diagnosticMode, maxPendingCompilations, true, true);
+        this(jitCompiler, diagnosticMode, maxPendingCompilations, true, false);
     }
 
     /**
      * Creates a new HybridContainer with full configuration.
-     * Metrics are enabled by default for backward compatibility.
+     * Metrics are disabled by default for performance.
      * 
      * @param jitCompiler the JIT compiler for runtime factory generation
      * @param diagnosticMode if true, logs resolution path for each bean
      * @param maxPendingCompilations maximum concurrent background compilations
      * @param autoDiscoverFactories if true, automatically discovers and registers
      *        compile-time factories via ServiceLoader at startup (default: true)
+     * @deprecated Use {@link #HybridContainer(HybridContainerConfig)} or {@link Warmup#builder()} for explicit configuration.
      */
+    @Deprecated(since = "2.0", forRemoval = false)
     public HybridContainer(JITCompiler jitCompiler, boolean diagnosticMode, int maxPendingCompilations, boolean autoDiscoverFactories) {
-        this(jitCompiler, diagnosticMode, maxPendingCompilations, autoDiscoverFactories, true);
+        this(jitCompiler, diagnosticMode, maxPendingCompilations, autoDiscoverFactories, false);
     }
 
     /**
@@ -154,13 +167,25 @@ public class HybridContainer implements HotReloadCapable {
      *        compile-time factories via ServiceLoader at startup (default: true)
      * @param metricsEnabled if true, enables metrics collection (totalResolutions, timing, etc.);
      *        when false, the fast path avoids all timing, Optional allocations, and LongAdder updates
+     * @deprecated Use {@link #HybridContainer(HybridContainerConfig)} or {@link Warmup#builder()} for explicit configuration.
      */
+    @Deprecated(since = "2.0", forRemoval = false)
     public HybridContainer(JITCompiler jitCompiler, boolean diagnosticMode, int maxPendingCompilations, boolean autoDiscoverFactories, boolean metricsEnabled) {
+        this(new HybridContainerConfig(diagnosticMode, maxPendingCompilations, autoDiscoverFactories, metricsEnabled), jitCompiler);
+    }
+    
+    /**
+     * Creates a new HybridContainer with the specified configuration.
+     * 
+     * @param config the configuration object containing all flags
+     * @param jitCompiler the JIT compiler for runtime factory generation
+     */
+    public HybridContainer(HybridContainerConfig config, JITCompiler jitCompiler) {
         this.jitCompiler = jitCompiler;
-        this.diagnosticMode = diagnosticMode;
-        this.autoDiscoverFactories = autoDiscoverFactories;
-        this.metricsEnabled = metricsEnabled;
-        this.warmupSemaphore = new Semaphore(maxPendingCompilations);
+        this.diagnosticMode = config.diagnosticMode();
+        this.autoDiscoverFactories = config.autoDiscoverFactories();
+        this.metricsEnabled = config.metricsEnabled();
+        this.warmupSemaphore = new Semaphore(config.maxPendingCompilations());
         this.warmupExecutor = Executors.newFixedThreadPool(
             Math.max(2, Runtime.getRuntime().availableProcessors() / 2),
             r -> {
@@ -333,10 +358,18 @@ public class HybridContainer implements HotReloadCapable {
     }
 
     /**
-     * Gets diagnostic information for the last resolution.
+     * Gets diagnostic information for all resolutions collected so far.
+     * Returns an unmodifiable snapshot of the diagnostics list.
+     * 
+     * @apiNote Diagnostics are only collected when {@code diagnosticMode} is true.
+     * In production (diagnosticMode=false), this method returns an empty list and
+     * no data is collected, ensuring zero overhead on the resolution path.
+     * The returned list is thread-safe and represents a consistent snapshot.
      */
     public List<ResolutionDiagnostic> getDiagnostics() {
-        return Collections.unmodifiableList(diagnostics);
+        // CopyOnWriteArrayList already provides a safe snapshot via iterator
+        // Return an unmodifiable wrapper to prevent external modification
+        return Collections.unmodifiableList(new ArrayList<>(diagnostics));
     }
 
     /**
