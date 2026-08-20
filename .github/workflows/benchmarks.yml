@@ -25,17 +25,26 @@ jobs:
     - name: Build project and benchmarks JAR
       run: mvn -B package -DskipTests -pl warmup-benchmarks -am
 
-    - name: Run Benchmarks
+    - name: Run All Benchmarks
       run: |
-        echo "Running all benchmarks automatically..."
-        java -jar warmup-benchmarks/target/benchmarks.jar
-
-    - name: Upload Benchmark Results
+        echo "=== Running All Warmup Benchmarks ==="
+        java -jar warmup-benchmarks/target/benchmarks.jar > benchmark-full-log.txt 2>&1 || true
+        
+        # Extract only the benchmark results section (from "Benchmark" to "Run complete")
+        awk '/^Benchmark/,/Run complete/' benchmark-full-log.txt > benchmark-results.txt
+        
+        # If no results found, use full log as fallback
+        if [ ! -s benchmark-results.txt ]; then
+          cp benchmark-full-log.txt benchmark-results.txt
+        fi
+        
+        echo "=== Benchmark Results ==="
+        cat benchmark-results.txt
+    
+    - name: Upload benchmark results
       uses: actions/upload-artifact@v4
       if: always()
       with:
         name: benchmark-results
-        path: |
-          **/target/jmh-result.json
-          **/target/jmh-result.csv
+        path: benchmark-results.txt
         retention-days: 30
