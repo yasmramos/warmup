@@ -109,11 +109,54 @@ class HybridContainerTest {
         CompiledFactory<TestService> factory = deps -> new TestService();
         
         container.register(definition, null);
-        container.registerFactory("factoryBean", factory);
+        container.registerFactory("factoryBean", TestService.class, factory);
         
         // Should use the registered factory
         TestService result = container.resolve("factoryBean");
         assertNotNull(result);
+    }
+
+    @Test
+    void testRegisterFactoryTypeSafe() {
+        var definition = new com.warmup.core.registry.BeanDefinition<>(TestService.class, "typeSafeBean");
+        CompiledFactory<TestService> factory = deps -> new TestService();
+        
+        container.register(definition, null);
+        // Use type-safe overload
+        container.registerFactory("typeSafeBean", TestService.class, factory);
+        
+        TestService result = container.resolve("typeSafeBean");
+        assertNotNull(result);
+    }
+
+    @Test
+    void testRegisterFactoryFailsForUnknownBean() {
+        CompiledFactory<TestService> factory = deps -> new TestService();
+        
+        // Should throw because bean is not registered
+        IllegalStateException thrown = assertThrows(
+            IllegalStateException.class,
+            () -> container.registerFactory("unknownBean", TestService.class, factory)
+        );
+        assertTrue(thrown.getMessage().contains("Cannot register factory for unknown bean"));
+    }
+
+    @Test
+    void testRegisterFactoryFailsForTypeMismatch() {
+        // Register bean as TestService
+        var definition = new com.warmup.core.registry.BeanDefinition<>(TestService.class, "mismatchBean");
+        container.register(definition, null);
+        
+        // Try to register a factory that produces a different type
+        CompiledFactory<Object> wrongFactory = deps -> new Object();
+        
+        IllegalStateException thrown = assertThrows(
+            IllegalStateException.class,
+            () -> container.registerFactory("mismatchBean", Object.class, wrongFactory)
+        );
+        assertTrue(thrown.getMessage().contains("Type mismatch"));
+        assertTrue(thrown.getMessage().contains("factory produces"));
+        assertTrue(thrown.getMessage().contains("but bean definition expects"));
     }
 
     @Test

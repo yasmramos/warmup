@@ -245,11 +245,35 @@ public class Warmup implements AutoCloseable {
     }
 
     /**
+     * Registers a compile-time factory for a bean with type-safe validation.
+     * <p>
+     * This method validates at registration time that the factory's type is compatible
+     * with the bean definition's type, failing fast instead of deferring the error
+     * to the first {@code resolve()} call.
+     * </p>
+     * 
+     * @param <T> the bean type
+     * @param beanName the bean name
+     * @param type the expected bean type (used for validation)
+     * @param factory the compiled factory
+     * @throws IllegalStateException if no bean definition exists for this name,
+     *         or if the factory's type is not assignable to the bean's declared type
+     */
+    public <T> void registerFactory(String beanName, Class<T> type, com.warmup.core.jit.CompiledFactory<T> factory) {
+        container.registerFactory(beanName, type, factory);
+    }
+
+    /**
      * Registers a compile-time factory for a bean by name.
      * 
      * @param beanName the bean name
      * @param factory the compiled factory
+     * @deprecated Use {@link #registerFactory(String, Class, CompiledFactory)} for type-safe registration.
+     * This wildcard version does not validate types and may cause {@code ClassCastException}
+     * at resolution time if the factory type doesn't match the bean definition.
+     * Kept for backward compatibility with generated code.
      */
+    @Deprecated(since = "1.0", forRemoval = false)
     public void registerFactory(String beanName, com.warmup.core.jit.CompiledFactory<?> factory) {
         container.registerFactory(beanName, factory);
     }

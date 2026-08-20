@@ -427,9 +427,51 @@ public class HybridContainer implements HotReloadCapable {
     }
 
     /**
+     * Registers a compile-time factory for a bean with type-safe validation.
+     * <p>
+     * This method validates at registration time that the factory's type is compatible
+     * with the bean definition's type, failing fast instead of deferring the error
+     * to the first {@code resolve()} call.
+     * </p>
+     * 
+     * @param <T> the bean type
+     * @param name the bean name
+     * @param type the expected bean type (used for validation)
+     * @param factory the compiled factory
+     * @throws IllegalStateException if no bean definition exists for this name,
+     *         or if the factory's type is not assignable to the bean's declared type
+     */
+    public <T> void registerFactory(String name, Class<T> type, CompiledFactory<T> factory) {
+        // Validate that a bean definition exists for this name
+        BeanDefinition<?> definition = registry.getDefinition(name)
+            .orElseThrow(() -> new IllegalStateException(
+                "Cannot register factory for unknown bean: '" + name + "'. " +
+                "Register the bean definition first."));
+        
+        // Validate type compatibility: the bean definition's type must be assignable from the factory's type
+        // This ensures the factory produces instances compatible with what the container expects
+        if (!definition.type().isAssignableFrom(type)) {
+            throw new IllegalStateException(
+                "Type mismatch for bean '" + name + "': " +
+                "factory produces '" + type.getName() + "' but bean definition expects '" + 
+                definition.type().getName() + "'. " +
+                "The factory type must be assignable to the bean definition type.");
+        }
+        
+        factoryCache.put(name, factory);
+        compileTimeFactoryNames.add(name);
+    }
+
+    /**
      * Registers a compile-time factory for a bean.
      * Called by generated code from annotation processor.
+     * 
+     * @deprecated Use {@link #registerFactory(String, Class, CompiledFactory)} for type-safe registration.
+     * This wildcard version does not validate types and may cause {@code ClassCastException}
+     * at resolution time if the factory type doesn't match the bean definition.
+     * Kept for backward compatibility with generated code.
      */
+    @Deprecated(since = "1.0", forRemoval = false)
     public void registerFactory(String beanName, CompiledFactory<?> factory) {
         factoryCache.put(beanName, factory);
         compileTimeFactoryNames.add(beanName);
