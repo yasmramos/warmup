@@ -1,5 +1,7 @@
 package com.warmup.core;
 
+import com.warmup.core.annotation.InternalApi;
+import com.warmup.core.container.HotReloadCapable;
 import com.warmup.core.container.HybridContainer;
 import com.warmup.core.jit.JITCompiler;
 import com.warmup.core.jit.NoOpJITCompiler;
@@ -98,9 +100,49 @@ public class Warmup implements AutoCloseable {
     /**
      * Returns the underlying HybridContainer for advanced operations.
      * 
+     * <p><strong>This method is deprecated.</strong> The {@code HybridContainer} exposes internal
+     * and potentially dangerous operations that should not be part of the stable public API.
+     * For hot-reload capabilities, use {@link #hotReload()} instead. For other advanced needs,
+     * consider that this escape hatch may change or be removed in future versions.</p>
+     * 
      * @return the wrapped container
+     * @deprecated Use specific capability methods like {@link #hotReload()} instead.
+     *             This method will be removed in a future version.
      */
+    @Deprecated(since = "2.0", forRemoval = true)
     public HybridContainer container() {
+        return container;
+    }
+
+    /**
+     * Returns the hot-reload capability if available.
+     * 
+     * <p>This provides explicit opt-in access to hot-reload functionality without exposing
+     * the full internal container API. The returned capability allows reloading bean factories
+     * at runtime.</p>
+     * 
+     * <p><strong>Important:</strong> Hot-reload only affects NEW resolutions. Existing references
+     * to previously resolved instances are NOT replaced automatically.</p>
+     * 
+     * @return Optional containing the hot-reload capability (always present for standard Warmup instances)
+     * @see HotReloadCapable#reload(String)
+     */
+    public HotReloadCapable hotReload() {
+        return container;
+    }
+
+    /**
+     * Returns the underlying HybridContainer for internal/advanced operations.
+     * 
+     * <p><strong>Warning:</strong> This method exposes internal API that may change without notice.
+     * Use only for testing or advanced integration scenarios where no other option exists.</p>
+     * 
+     * @return the wrapped container
+     * @apiNote This is an internal escape hatch. Prefer using the stable API methods on {@code Warmup}
+     *          or specific capabilities like {@link #hotReload()} whenever possible.
+     */
+    @InternalApi
+    public HybridContainer unsafeContainer() {
         return container;
     }
 

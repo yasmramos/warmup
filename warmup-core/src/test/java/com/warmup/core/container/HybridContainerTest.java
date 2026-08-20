@@ -377,9 +377,9 @@ class HybridContainerTest {
             var serviceDef = new com.warmup.core.registry.BeanDefinition<>(TestService.class, "testService");
             noopContainer.register(serviceDef, null);
             
-            // Register bean with dependency
+            // Register bean with dependency - use full constructor with all parameters
             var beanDef = new com.warmup.core.registry.BeanDefinition<>(BeanWithDependency.class, "beanWithDep", 
-                com.warmup.core.scope.Scope.PROTOTYPE, new Object[]{"testService"});
+                com.warmup.core.scope.Scope.PROTOTYPE, com.warmup.core.lifecycle.LifecycleCallbacks.empty(), false, new Object[]{"testService"});
             noopContainer.register(beanDef, null);
             
             BeanWithDependency result = noopContainer.resolve("beanWithDep");
@@ -402,9 +402,9 @@ class HybridContainerTest {
             noopContainer.register(service1Def, null);
             noopContainer.register(service2Def, null);
             
-            // Register bean with multiple dependencies
+            // Register bean with multiple dependencies - use full constructor with all parameters
             var beanDef = new com.warmup.core.registry.BeanDefinition<>(BeanWithMultipleDependencies.class, "beanWithMultiDep",
-                com.warmup.core.scope.Scope.PROTOTYPE, new Object[]{"service1", "service2"});
+                com.warmup.core.scope.Scope.PROTOTYPE, com.warmup.core.lifecycle.LifecycleCallbacks.empty(), false, new Object[]{"service1", "service2"});
             noopContainer.register(beanDef, null);
             
             BeanWithMultipleDependencies result = noopContainer.resolve("beanWithMultiDep");
