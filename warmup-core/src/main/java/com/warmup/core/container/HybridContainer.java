@@ -563,9 +563,34 @@ public class HybridContainer {
 
     @SuppressWarnings("unchecked")
     private <T> T createViaReflection(BeanDefinition<T> definition) {
-        // Fallback implementation - should rarely be used
+        // Fallback implementation for native image or when JIT is unavailable
+        // Resolves dependencies and invokes the appropriate constructor
         try {
-            return definition.type().getDeclaredConstructor().newInstance();
+            Object[] args = resolveDependencies(definition);
+            
+            if (args.length == 0) {
+                // No dependencies: use no-arg constructor
+                return definition.type().getDeclaredConstructor().newInstance();
+            } else {
+                // Has dependencies: find constructor matching dependency types
+                Class<?>[] argTypes = new Class<?>[args.length];
+                for (int i = 0; i < args.length; i++) {
+                    argTypes[i] = args[i].getClass();
+                }
+                
+                java.lang.reflect.Constructor<T> constructor = definition.type()
+                    .getDeclaredConstructor(argTypes);
+                constructor.setAccessible(true);
+                return constructor.newInstance(args);
+            }
+        } catch (NoSuchMethodException e) {
+            throw new RuntimeException(
+                "Failed to create bean via reflection: " + definition.type().getName() + 
+                ". No constructor found matching dependencies: " + Arrays.toString(
+                    Arrays.stream(definition.dependencies())
+                        .map(d -> d instanceof String ? d : ((Object)d).getClass().getName())
+                        .toArray()
+                ), e);
         } catch (Exception e) {
             throw new RuntimeException("Failed to create bean via reflection: " + definition.type().getName(), e);
         }

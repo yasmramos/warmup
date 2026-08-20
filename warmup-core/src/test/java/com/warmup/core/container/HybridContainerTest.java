@@ -369,6 +369,55 @@ class HybridContainerTest {
     }
 
     @Test
+    void testCreateViaReflectionWithDependencies() {
+        // Use NoOpJITCompiler to force reflection fallback
+        var noopContainer = new HybridContainer(new NoOpJITCompiler(), false, 10, false, false);
+        try {
+            // Register dependency first
+            var serviceDef = new com.warmup.core.registry.BeanDefinition<>(TestService.class, "testService");
+            noopContainer.register(serviceDef, null);
+            
+            // Register bean with dependency
+            var beanDef = new com.warmup.core.registry.BeanDefinition<>(BeanWithDependency.class, "beanWithDep", 
+                com.warmup.core.scope.Scope.PROTOTYPE, new Object[]{"testService"});
+            noopContainer.register(beanDef, null);
+            
+            BeanWithDependency result = noopContainer.resolve("beanWithDep");
+            assertNotNull(result);
+            assertNotNull(result.getService());
+            assertEquals("test", result.getService().getName());
+        } finally {
+            noopContainer.shutdown();
+        }
+    }
+
+    @Test
+    void testCreateViaReflectionWithMultipleDependencies() {
+        // Use NoOpJITCompiler to force reflection fallback
+        var noopContainer = new HybridContainer(new NoOpJITCompiler(), false, 10, false, false);
+        try {
+            // Register dependencies first
+            var service1Def = new com.warmup.core.registry.BeanDefinition<>(TestService.class, "service1");
+            var service2Def = new com.warmup.core.registry.BeanDefinition<>(DependencyService.class, "service2");
+            noopContainer.register(service1Def, null);
+            noopContainer.register(service2Def, null);
+            
+            // Register bean with multiple dependencies
+            var beanDef = new com.warmup.core.registry.BeanDefinition<>(BeanWithMultipleDependencies.class, "beanWithMultiDep",
+                com.warmup.core.scope.Scope.PROTOTYPE, new Object[]{"service1", "service2"});
+            noopContainer.register(beanDef, null);
+            
+            BeanWithMultipleDependencies result = noopContainer.resolve("beanWithMultiDep");
+            assertNotNull(result);
+            assertNotNull(result.getService1());
+            assertNotNull(result.getService2());
+            assertEquals("test", result.getService1().getName());
+        } finally {
+            noopContainer.shutdown();
+        }
+    }
+
+    @Test
     void testLambdaNewRunnable() {
         // Test the lambda:new$0 that wraps Runnable
         var definition = new com.warmup.core.registry.BeanDefinition<>(TestService.class, "lambdaBean");
@@ -431,6 +480,38 @@ class HybridContainerTest {
     // Simple bean class for reflection testing
     public static class SimpleBean {
         public SimpleBean() {}
+    }
+
+    // Bean with dependencies for testing reflection fallback with constructor injection
+    public static class BeanWithDependency {
+        private final TestService service;
+
+        public BeanWithDependency(TestService service) {
+            this.service = service;
+        }
+
+        public TestService getService() {
+            return service;
+        }
+    }
+
+    // Bean with multiple dependencies for testing nested reflection
+    public static class BeanWithMultipleDependencies {
+        private final TestService service1;
+        private final DependencyService service2;
+
+        public BeanWithMultipleDependencies(TestService service1, DependencyService service2) {
+            this.service1 = service1;
+            this.service2 = service2;
+        }
+
+        public TestService getService1() {
+            return service1;
+        }
+
+        public DependencyService getService2() {
+            return service2;
+        }
     }
 
     public static class TestService {
@@ -497,6 +578,46 @@ class HybridContainerTest {
         @Override
         public boolean unloadFactory(Class<?> beanClass) {
             return true;
+        }
+
+        @Override
+        public com.warmup.core.jit.CompilationStats getStats() {
+            return new com.warmup.core.jit.CompilationStats(0, 0, 0, 0, 0);
+        }
+
+        @Override
+        public void clear() {
+        }
+    }
+
+    /**
+     * JIT compiler that always returns null to force reflection fallback.
+     * Used to test the createViaReflection path with dependencies.
+     */
+    private static class NoOpJITCompiler implements JITCompiler {
+        @Override
+        public <T> CompiledFactory<T> compile(Class<T> type, Class<?>... dependencies) throws CompilationException {
+            return null;
+        }
+
+        @Override
+        public <T> CompletableFuture<CompiledFactory<T>> compileAsync(Class<T> type, Class<?>... dependencies) {
+            return CompletableFuture.completedFuture(null);
+        }
+
+        @Override
+        public boolean hasCompiledFactory(Class<?> beanClass) {
+            return false;
+        }
+
+        @Override
+        public <T> java.util.Optional<CompiledFactory<T>> getCachedFactory(Class<T> beanClass) {
+            return java.util.Optional.empty();
+        }
+
+        @Override
+        public boolean unloadFactory(Class<?> beanClass) {
+            return false;
         }
 
         @Override
