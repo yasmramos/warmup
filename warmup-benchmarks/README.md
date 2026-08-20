@@ -25,10 +25,25 @@ Measures bean resolution performance across different paths:
 - `prototypeResolve`: Prototype bean resolution (creation overhead)
 
 ### StartupBenchmark
-Measures container initialization time with varying bean counts (10, 100, 1000).
+Measures Warmup container initialization time with varying bean counts (10, 100, 1000).
+This benchmark dynamically registers N beans at runtime and measures the total startup time.
 
 ### AvajeStartupBenchmark
-Measures Avaje IoC `BeanScope` initialization time for comparison with Warmup.
+Measures Avaje IoC `BeanScope` initialization time. 
+
+**Important:** Unlike Warmup's `StartupBenchmark`, Avaje uses compile-time annotation 
+processing, so the number of beans is fixed at compile time (3 beans in the default 
+module). This benchmark cannot be parametrized with different bean counts at runtime.
+
+The comparison between `StartupBenchmark` and `AvajeStartupBenchmark` measures 
+fundamentally different approaches:
+- **Warmup**: Dynamic bean registration at runtime + container initialization
+- **Avaje**: Pre-compiled module build at runtime (beans registered at compile-time)
+
+These benchmarks should not be interpreted as "X is faster than Y" without understanding 
+that Warmup pays the cost of dynamic registration while Avaje's beans are pre-registered 
+at compile-time. For a fair comparison, one would need to generate N bean classes at 
+compile-time for both frameworks.
 
 ### AvajeInjectBenchmark
 Compares Warmup vs Avaje IoC resolution performance for beans with dependencies.
@@ -40,7 +55,7 @@ Compares Warmup vs Avaje IoC resolution performance for beans with dependencies.
 The `GCProfiler` reports allocation rates in bytes per operation. Key claims:
 
 - **0 bytes/op on singleton cached path**: The fast-path (`singletonCachedResolve`) should show zero or near-zero allocations, validating the "zero allocations on hot path" claim.
-  
+
 - **Prototype path allocations**: The `prototypeResolve` benchmark may show allocations from:
   - The lambda `() -> createBean(definition)` passed to `registry.getInstance()`
   - `Optional` allocation in the fast-path definition lookup
@@ -70,10 +85,14 @@ These metrics validate the **O(1) resolution** claim:
 
 ### Startup Comparison
 
-Compare `StartupBenchmark` (Warmup) vs `AvajeStartupBenchmark` (Avaje) results:
-- Both measure initialization time in milliseconds
-- Same bean counts (10, 100, 1000) for direct comparison
-- Lower is better
+Compare `StartupBenchmark` (Warmup) vs `AvajeStartupBenchmark` (Avaje) results with caution:
+
+- **Warmup**: Measures dynamic registration of N beans + container initialization. Time scales with N.
+- **Avaje**: Measures `BeanScope.builder().build()` with a fixed compile-time module (3 beans). Time is constant.
+
+These measure different scenarios and are not directly comparable unless both frameworks 
+are configured with the same number of beans registered in the same way (both dynamic or 
+both compile-time).
 
 ## Configuration
 
