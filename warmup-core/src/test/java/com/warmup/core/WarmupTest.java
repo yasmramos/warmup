@@ -19,7 +19,8 @@ public class WarmupTest {
         // Should work with ServiceLoader-discovered JITCompiler (AsmJITCompiler if on classpath)
         try (Warmup warmup = Warmup.create()) {
             assertNotNull(warmup);
-            assertNotNull(warmup.container());
+            // Use hotReload capability instead of deprecated container() method
+            assertNotNull(warmup.hotReload());
         }
     }
 
@@ -31,7 +32,8 @@ public class WarmupTest {
                 .build();
         
         assertNotNull(warmup);
-        assertNotNull(warmup.container());
+        // Use hotReload capability instead of deprecated container() method
+        assertNotNull(warmup.hotReload());
         warmup.shutdown();
     }
 

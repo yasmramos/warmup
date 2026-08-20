@@ -1,56 +1,41 @@
 ```
-# Build artifacts
-target/
-build/
-dist/
-*.jar
-*.war
+# Compiled and build artifacts
 *.class
+*.o
+*.obj
+*.out
+build/
+target/
 
 # Dependencies
-.m2/
 .gradle/
+__pycache__/
+.mypy_cache/
+.pytest_cache/
+venv/
+.venv/
 node_modules/
-vendor/
 
-# IDE files
-.vscode/
-.idea/
-*.iml
-*.ipr
-*.iws
-
-# Logs
+# Logs and temp files
 *.log
+*.tmp
+*.swp
 
 # Environment
 .env
 .env.local
 *.env.*
 
-# OS files
+# Editors
+.vscode/
+.idea/
+
+# Coverage
+coverage/
+htmlcov/
+.coverage
+
+# System
 .DS_Store
 Thumbs.db
-
-# Python
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-.Python
-env/
-venv/
-.venv/
-
-# Java
-*.class
-*.jar
-*.war
-*.ear
-hs_err_pid*
-
-# Maven
-pom.xml.tag
-pom.xml.releaseBackup
-dependency-reduced-pom.xml
 ```

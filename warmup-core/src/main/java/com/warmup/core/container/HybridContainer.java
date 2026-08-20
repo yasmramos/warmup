@@ -1,5 +1,6 @@
 package com.warmup.core.container;
 
+import com.warmup.core.annotation.InternalApi;
 import com.warmup.core.graph.DependencyGraph;
 import com.warmup.core.jit.CompiledFactory;
 import com.warmup.core.jit.CompilationException;
@@ -36,7 +37,7 @@ import java.util.ServiceLoader;
  * - All operations are thread-safe using lock-free data structures
  * - Background warmup uses dedicated executor with backpressure handling
  */
-public class HybridContainer {
+public class HybridContainer implements HotReloadCapable {
 
     private final BeanRegistry registry = new BeanRegistryImpl();
     private final DependencyGraph dependencyGraph = new DependencyGraph();
@@ -426,9 +427,51 @@ public class HybridContainer {
     }
 
     /**
+     * Registers a compile-time factory for a bean with type-safe validation.
+     * <p>
+     * This method validates at registration time that the factory's type is compatible
+     * with the bean definition's type, failing fast instead of deferring the error
+     * to the first {@code resolve()} call.
+     * </p>
+     * 
+     * @param <T> the bean type
+     * @param name the bean name
+     * @param type the expected bean type (used for validation)
+     * @param factory the compiled factory
+     * @throws IllegalStateException if no bean definition exists for this name,
+     *         or if the factory's type is not assignable to the bean's declared type
+     */
+    public <T> void registerFactory(String name, Class<T> type, CompiledFactory<T> factory) {
+        // Validate that a bean definition exists for this name
+        BeanDefinition<?> definition = registry.getDefinition(name)
+            .orElseThrow(() -> new IllegalStateException(
+                "Cannot register factory for unknown bean: '" + name + "'. " +
+                "Register the bean definition first."));
+        
+        // Validate type compatibility: the bean definition's type must be assignable from the factory's type
+        // This ensures the factory produces instances compatible with what the container expects
+        if (!definition.type().isAssignableFrom(type)) {
+            throw new IllegalStateException(
+                "Type mismatch for bean '" + name + "': " +
+                "factory produces '" + type.getName() + "' but bean definition expects '" + 
+                definition.type().getName() + "'. " +
+                "The factory type must be assignable to the bean definition type.");
+        }
+        
+        factoryCache.put(name, factory);
+        compileTimeFactoryNames.add(name);
+    }
+
+    /**
      * Registers a compile-time factory for a bean.
      * Called by generated code from annotation processor.
+     * 
+     * @deprecated Use {@link #registerFactory(String, Class, CompiledFactory)} for type-safe registration.
+     * This wildcard version does not validate types and may cause {@code ClassCastException}
+     * at resolution time if the factory type doesn't match the bean definition.
+     * Kept for backward compatibility with generated code.
      */
+    @Deprecated(since = "1.0", forRemoval = false)
     public void registerFactory(String beanName, CompiledFactory<?> factory) {
         factoryCache.put(beanName, factory);
         compileTimeFactoryNames.add(beanName);
@@ -460,9 +503,16 @@ public class HybridContainer {
             // Try JIT compilation and cache the result
             try {
                 factory = jitCompiler.compile(definition.type(), getDependencyClasses(definition));
-                factoryCache.put(name, factory);
-                path = ResolutionDiagnostic.ResolutionPath.JIT;
-                jitHits.add(1);
+                if (factory != null) {
+                    factoryCache.put(name, factory);
+                    path = ResolutionDiagnostic.ResolutionPath.JIT;
+                    jitHits.add(1);
+                } else {
+                    // Factory is null (shouldn't happen, but be defensive)
+                    path = ResolutionDiagnostic.ResolutionPath.REFLECTION_FALLBACK;
+                    fallbackCount.add(1);
+                    return createViaReflection(definition);
+                }
             } catch (CompilationException e) {
                 // Fallback to reflection
                 path = ResolutionDiagnostic.ResolutionPath.REFLECTION_FALLBACK;
@@ -568,18 +618,23 @@ public class HybridContainer {
         try {
             Object[] args = resolveDependencies(definition);
             
+            // Validate no null dependencies before proceeding
+            for (int i = 0; i < args.length; i++) {
+                if (args[i] == null) {
+                    throw new IllegalStateException(
+                        "Null dependency at index " + i + " in bean '" + definition.name() + "'"
+                    );
+                }
+            }
+            
             if (args.length == 0) {
                 // No dependencies: use no-arg constructor
                 return definition.type().getDeclaredConstructor().newInstance();
             } else {
                 // Has dependencies: find constructor matching dependency types
-                Class<?>[] argTypes = new Class<?>[args.length];
-                for (int i = 0; i < args.length; i++) {
-                    argTypes[i] = args[i].getClass();
-                }
-                
-                java.lang.reflect.Constructor<T> constructor = definition.type()
-                    .getDeclaredConstructor(argTypes);
+                // Use declared parameter types from constructor signature, not runtime classes
+                // This supports constructors with interface/superclass parameters
+                java.lang.reflect.Constructor<T> constructor = findMatchingConstructor(definition.type(), args);
                 constructor.setAccessible(true);
                 return constructor.newInstance(args);
             }
@@ -594,6 +649,56 @@ public class HybridContainer {
         } catch (Exception e) {
             throw new RuntimeException("Failed to create bean via reflection: " + definition.type().getName(), e);
         }
+    }
+    
+    /**
+     * Find a constructor whose parameter types are compatible with the provided arguments.
+     * Matches constructors where each parameter type is assignable from the corresponding argument's runtime class.
+     */
+    private <T> java.lang.reflect.Constructor<T> findMatchingConstructor(Class<T> beanType, Object[] args) 
+            throws NoSuchMethodException {
+        int argCount = args.length;
+        
+        // Iterate over all declared constructors to find a compatible one
+        for (java.lang.reflect.Constructor<?> ctor : beanType.getDeclaredConstructors()) {
+            Class<?>[] paramTypes = ctor.getParameterTypes();
+            
+            // Check if parameter count matches
+            if (paramTypes.length != argCount) {
+                continue;
+            }
+            
+            // Check if each argument is assignable to the corresponding parameter type
+            boolean compatible = true;
+            for (int i = 0; i < argCount; i++) {
+                if (args[i] == null) {
+                    // Cannot determine compatibility for null; skip this constructor
+                    // (nulls should have been caught earlier, but be defensive)
+                    compatible = false;
+                    break;
+                }
+                if (!paramTypes[i].isAssignableFrom(args[i].getClass())) {
+                    compatible = false;
+                    break;
+                }
+            }
+            
+            if (compatible) {
+                // Found a compatible constructor
+                @SuppressWarnings("unchecked")
+                java.lang.reflect.Constructor<T> typedCtor = (java.lang.reflect.Constructor<T>) ctor;
+                return typedCtor;
+            }
+        }
+        
+        // No compatible constructor found
+        throw new NoSuchMethodException(
+            "No constructor in " + beanType.getName() + 
+            " compatible with argument types: " + 
+            Arrays.toString(Arrays.stream(args)
+                .map(arg -> arg.getClass().getName())
+                .toArray())
+        );
     }
 
     private <T> void triggerBackgroundWarmup(BeanDefinition<T> definition) {
