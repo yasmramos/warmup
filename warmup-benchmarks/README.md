@@ -87,12 +87,34 @@ These metrics validate the **O(1) resolution** claim:
 
 Compare `StartupBenchmark` (Warmup) vs `AvajeStartupBenchmark` (Avaje) results with caution:
 
-- **Warmup**: Measures dynamic registration of N beans + container initialization. Time scales with N.
-- **Avaje**: Measures `BeanScope.builder().build()` with a fixed compile-time module (3 beans). Time is constant.
+- **Warmup**: Measures dynamic registration of N beans at runtime + container initialization. 
+  Time scales linearly with N (10→100→1000 beans). This includes the cost of:
+  - Creating BeanDefinition objects
+  - Registering beans in the container's registry
+  - Initializing the HybridContainer with JIT compiler
+  
+- **Avaje**: Measures `BeanScope.builder().build()` with a fixed compile-time module (3 beans).
+  Time is constant because:
+  - Beans are pre-registered at compile-time via annotation processing
+  - No dynamic registration occurs at runtime
+  - Only the BeanScope construction is measured
 
-These measure different scenarios and are not directly comparable unless both frameworks 
-are configured with the same number of beans registered in the same way (both dynamic or 
-both compile-time).
+**These measure fundamentally different scenarios and are NOT directly comparable.**
+
+The benchmarks answer different questions:
+- Warmup's benchmark: "How long does it take to dynamically register N beans and initialize the container?"
+- Avaje's benchmark: "How long does it take to build a BeanScope with a pre-compiled module?"
+
+For a fair apples-to-apples comparison of startup performance, both frameworks would need to be
+configured with the same number of beans registered in the same way (both dynamic or both
+compile-time). Since Avaje uses compile-time annotation processing, it cannot dynamically
+register beans at runtime. Conversely, Warmup's strength is dynamic registration.
+
+If you need to compare raw container initialization speed (without registration overhead),
+you would need to:
+1. Generate N bean classes at compile-time for both frameworks, OR
+2. Accept that these benchmarks measure different architectural approaches and compare them
+   only as examples of their respective paradigms (dynamic vs compile-time).
 
 ## Configuration
 

@@ -8,7 +8,7 @@ import java.util.concurrent.TimeUnit;
 /**
  * Startup benchmark for Avaje IoC: measures BeanScope initialization time.
  *
- * IMPORTANT: Avaje uses compile-time generated modules, so the number of beans
+ * IMPORTANT: Avaje uses compile-time annotation processing, so the number of beans
  * is fixed at compile time (currently 3 beans in AvajeModule). This benchmark
  * measures the time to build the default Avaje module, which includes all
  * registered beans defined via @Factory and @Bean annotations.
@@ -24,22 +24,28 @@ import java.util.concurrent.TimeUnit;
  *
  * These are fundamentally different approaches and should not be compared as
  * "X is faster than Y" without understanding the architectural differences.
+ *
+ * To compare scalability, one would need to generate N bean classes at compile-time
+ * for both frameworks, which is beyond the scope of this benchmark.
  */
 @State(org.openjdk.jmh.annotations.Scope.Benchmark)
 @BenchmarkMode(Mode.AverageTime)
 @OutputTimeUnit(TimeUnit.MILLISECONDS)
 public class AvajeStartupBenchmark {
 
+    /**
+     * Measures the time to build a BeanScope with the default Avaje module.
+     * The module contains exactly 3 beans defined in AvajeModule:
+     * - AvajeSimpleBean
+     * - AvajeBeanWithOneDependency
+     * - AvajeBeanWithFiveDependencies
+     *
+     * Note: Avaje uses compile-time annotation processing, so bean count
+     * cannot be parametrized at runtime. This measures the fixed module build time.
+     * There is no @Param here because the bean count is fixed at compile time.
+     */
     @Benchmark
     public BeanScope startupWithBeans() {
-        // Build BeanScope with the default Avaje module.
-        // The module contains 3 beans defined in AvajeModule:
-        // - AvajeSimpleBean
-        // - AvajeBeanWithOneDependency
-        // - AvajeBeanWithFiveDependencies
-        //
-        // Note: Avaje uses compile-time annotation processing, so bean count
-        // cannot be parametrized at runtime. This measures the fixed module build time.
         return BeanScope.builder().build();
     }
 }
