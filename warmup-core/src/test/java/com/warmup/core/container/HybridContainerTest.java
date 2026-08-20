@@ -319,13 +319,19 @@ class HybridContainerTest {
 
     @Test
     void testGetMetricsAfterResolutions() {
+        // Create container with metrics explicitly enabled for this test
+        var metricsContainer = new HybridContainer(
+            new HybridContainerConfig(false, 10, true, true),  // metricsEnabled=true
+            jitCompiler
+        );
+        
         var definition = new com.warmup.core.registry.BeanDefinition<>(TestService.class, "metricsBean");
-        container.register(definition, null);
+        metricsContainer.register(definition, null);
         
-        container.resolve("metricsBean");
-        container.resolve("metricsBean");
+        metricsContainer.resolve("metricsBean");
+        metricsContainer.resolve("metricsBean");
         
-        var metrics = container.getMetrics();
+        var metrics = metricsContainer.getMetrics();
         assertEquals(2, metrics.totalResolutions());
         assertTrue(metrics.averageResolutionTimeNs() >= 0);
         assertTrue(metrics.cacheHitRate() >= 0);
