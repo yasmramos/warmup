@@ -38,7 +38,7 @@ import java.util.ServiceLoader;
  * - All operations are thread-safe using lock-free data structures
  * - Background warmup uses dedicated executor with backpressure handling
  */
-public class HybridContainer implements HotReloadCapable {
+public class HybridContainer implements HotReloadCapable, AutoCloseable {
 
     private final BeanRegistry registry = new BeanRegistryImpl();
     private final DependencyGraph dependencyGraph = new DependencyGraph();
@@ -407,12 +407,18 @@ public class HybridContainer implements HotReloadCapable {
     }
 
     /**
-     * Shuts down the container, applying destroy callbacks.
+     * Shuts down the container, applying destroy callbacks and terminating the warmup executor.
+     * Implements AutoCloseable for try-with-resources support.
      */
     public void shutdown() {
-        warmupExecutor.shutdown();
+        warmupExecutor.shutdownNow();
         registry.clear();
         jitCompiler.clear();
+    }
+
+    @Override
+    public void close() {
+        shutdown();
     }
 
     /**

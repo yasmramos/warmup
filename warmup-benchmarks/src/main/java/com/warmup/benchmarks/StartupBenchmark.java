@@ -50,15 +50,23 @@ public class StartupBenchmark {
         containersToClose = new ArrayList<>();
     }
     
-    @TearDown(Level.Iteration)
-    public void tearDownIteration() {
-        // Clean up containers if needed
-        containersToClose.clear();
+    @TearDown(Level.Invocation)
+    public void tearDownInvocation() {
+        // Clean up containers after each invocation to prevent thread pool accumulation
+        if (containersToClose != null) {
+            for (HybridContainer container : containersToClose) {
+                container.close();
+            }
+            containersToClose.clear();
+        }
     }
 
     /**
      * Measures startup time using dynamic registration (JIT path).
      * Each bean is registered via {@code registerDynamic()}, which triggers background JIT compilation.
+     * 
+     * <p>Note: Uses Object.class beans for minimal registration overhead. For realistic
+     * ASM compilation costs, see benchmarks with real bean types.</p>
      */
     @Benchmark
     public HybridContainer startupWithBeansDynamic() {
@@ -87,6 +95,9 @@ public class StartupBenchmark {
      * 
      * <p>This provides a fair comparison against Avaje's compile-time startup,
      * as both frameworks use pre-generated factories discovered at runtime.</p>
+     * 
+     * <p>Note: This scenario measures pure startup without triggering JIT compilation.
+     * The cost is limited to ServiceLoader iteration and factory instantiation.</p>
      */
     @Benchmark
     public HybridContainer startupWithBeansCompileTime() {
