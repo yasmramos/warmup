@@ -11,19 +11,35 @@ import org.openjdk.jmh.infra.Blackhole;
 import java.util.concurrent.TimeUnit;
 
 /**
- * JMH benchmarks comparing Warmup compile-time vs JIT paths.
- *
- * Scenarios:
- * - Direct instantiation (baseline)
- * - Warmup compile-time factory (zero-overhead path)
- * - Warmup JIT-compiled factory (runtime compilation)
- * - Warmup resolve() for singleton (cached lookup)
- * - Warmup resolve() for prototype (creation overhead)
- *
+ * JMH benchmarks comparing Warmup JIT/ASM path performance.
+ * 
+ * <p>This benchmark uses {@code registerDynamic()} which triggers runtime JIT compilation
+ * via ASM. This is NOT the compile-time path - for compile-time benchmarks, see
+ * {@link WarmupCompileTimeBenchmark}.</p>
+ * 
+ * <p>Scenarios measured:</p>
+ * <ul>
+ *   <li>Direct instantiation (baseline - no container overhead)</li>
+ *   <li>Warmup JIT-compiled factory (runtime compilation via ASM)</li>
+ *   <li>Warmup resolve() for singleton (cached lookup after JIT warmup)</li>
+ *   <li>Warmup resolve() for prototype (full creation overhead via JIT factory)</li>
+ * </ul>
+ * 
+ * <p>Important: This benchmark measures the JIT path, which is slower than the pure
+ * compile-time path. For fair comparison with Avaje Inject's compile-time factories,
+ * use {@link WarmupCompileTimeBenchmark} instead.</p>
+ * 
+ * <h3>Path Comparison:</h3>
+ * <ul>
+ *   <li>{@code ResolutionBenchmark}: JIT/ASM path (dynamic registration)</li>
+ *   <li>{@link WarmupCompileTimeBenchmark}: Pure compile-time path (@Bean annotation processing)</li>
+ *   <li>{@link AvajeInjectBenchmark}: Avaje's compile-time path (for comparison)</li>
+ * </ul>
+ * 
  * Metrics:
  * - Resolution time (single bean resolution)
  * - Throughput (resolutions per second)
- *
+ * 
  * Note: This benchmark uses explicit HybridContainer construction for precise
  * performance measurement. For production usage, prefer Warmup.create().
  */
