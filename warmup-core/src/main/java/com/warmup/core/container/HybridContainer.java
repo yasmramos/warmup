@@ -537,7 +537,7 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
     private <T> T createBean(BeanDefinition<T> definition) {
         String name = definition.name();
         long compileTimeNs = 0;
-        ResolutionDiagnostic.ResolutionPath path;
+        ResolutionDiagnostic.ResolutionPath path = null;
         
         // Check if running in GraalVM native image mode - disable JIT
         boolean nativeImage = IS_NATIVE_IMAGE;
@@ -545,13 +545,19 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
         // Single lookup in unified factory cache for hot path
         CompiledFactory<T> factory = (CompiledFactory<T>) factoryCache.get(name);
         if (factory != null) {
-            // Hot path: factory already cached, determine origin for metrics
-            if (compileTimeFactoryNames.contains(name)) {
-                path = ResolutionDiagnostic.ResolutionPath.COMPILE_TIME;
-                compileTimeHits.add(1);
-            } else {
-                path = ResolutionDiagnostic.ResolutionPath.JIT;
-                jitHits.add(1);
+            // Hot path: factory already cached, determine origin for metrics/diagnostic only if enabled
+            if (metricsEnabled || diagnosticMode) {
+                if (compileTimeFactoryNames.contains(name)) {
+                    path = ResolutionDiagnostic.ResolutionPath.COMPILE_TIME;
+                    if (metricsEnabled) {
+                        compileTimeHits.add(1);
+                    }
+                } else {
+                    path = ResolutionDiagnostic.ResolutionPath.JIT;
+                    if (metricsEnabled) {
+                        jitHits.add(1);
+                    }
+                }
             }
         } else if (!nativeImage) {
             // Try JIT compilation and cache the result
