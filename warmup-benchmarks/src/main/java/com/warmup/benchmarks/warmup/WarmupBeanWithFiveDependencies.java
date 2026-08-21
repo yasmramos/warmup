@@ -1,6 +1,6 @@
 package com.warmup.benchmarks.warmup;
 
-import com.warmup.annotations.Bean;
+import com.warmup.annotations.Singleton;
 import com.warmup.annotations.Inject;
 
 /**
@@ -8,7 +8,7 @@ import com.warmup.annotations.Inject;
  * Equivalent to AvajeBeanWithFiveDependencies and ResolutionBenchmark.BeanWithFiveDependencies.
  * Used for fair comparison between Warmup compile-time path and Avaje.
  */
-@Bean
+@Singleton
 public class WarmupBeanWithFiveDependencies {
     private final WarmupSimpleBean d1, d2, d3, d4, d5;
 
