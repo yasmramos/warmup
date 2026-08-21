@@ -567,6 +567,24 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
      */
     @Deprecated(since = "1.0", forRemoval = false)
     public void registerFactory(String beanName, CompiledFactory<?> factory) {
+        // If no BeanDefinition exists for this name, create one from the factory's bean type
+        // This allows compile-time factories discovered via ServiceLoader to work without
+        // explicit BeanDefinition registration.
+        if (!registry.getDefinition(beanName).isPresent()) {
+            Class<?> beanType = factory.getBeanType();
+            if (beanType != null) {
+                // Create a default BeanDefinition with SINGLETON scope and no dependencies
+                // The actual scope and dependencies are encoded in the generated factory
+                @SuppressWarnings("unchecked")
+                BeanDefinition<Object> definition = new BeanDefinition<>(
+                    (Class<Object>) beanType,
+                    beanName,
+                    com.warmup.core.scope.Scope.SINGLETON
+                );
+                registry.register(definition);
+            }
+        }
+        
         factoryCache.put(beanName, factory);
         compileTimeFactoryNames.add(beanName);
     }
