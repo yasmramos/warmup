@@ -53,6 +53,7 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
     
     // Empty array constant to avoid allocation for beans without dependencies
     private static final Object[] EMPTY_ARGS = new Object[0];
+    private static final String[] EMPTY_STRING_ARRAY = new String[0];
     
     // Diagnostic mode flag
     private final boolean diagnosticMode;
@@ -229,10 +230,17 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
             compileTimeFactoryNames.add(definition.name());
         }
         
-        // Register in dependency graph
-        String[] deps = Arrays.stream(definition.dependencies())
-            .map(Object::toString)
-            .toArray(String[]::new);
+        // Register in dependency graph - optimized to avoid Stream allocation
+        String[] deps;
+        Object[] dependencies = definition.dependencies();
+        if (dependencies.length == 0) {
+            deps = EMPTY_STRING_ARRAY;
+        } else {
+            deps = new String[dependencies.length];
+            for (int i = 0; i < dependencies.length; i++) {
+                deps[i] = dependencies[i].toString();
+            }
+        }
         dependencyGraph.registerBean(definition.name(), deps);
     }
 
@@ -246,10 +254,17 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
     public <T> void registerDynamic(BeanDefinition<T> definition) {
         registry.register(definition);
         
-        // Register in dependency graph
-        String[] deps = Arrays.stream(definition.dependencies())
-            .map(Object::toString)
-            .toArray(String[]::new);
+        // Register in dependency graph - optimized to avoid Stream allocation
+        String[] deps;
+        Object[] dependencies = definition.dependencies();
+        if (dependencies.length == 0) {
+            deps = EMPTY_STRING_ARRAY;
+        } else {
+            deps = new String[dependencies.length];
+            for (int i = 0; i < dependencies.length; i++) {
+                deps[i] = dependencies[i].toString();
+            }
+        }
         dependencyGraph.registerBean(definition.name(), deps);
         
         // Trigger background warmup
