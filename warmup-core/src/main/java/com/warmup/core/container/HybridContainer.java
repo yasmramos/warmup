@@ -38,7 +38,7 @@ import java.util.ServiceLoader;
  * - All operations are thread-safe using lock-free data structures
  * - Background warmup uses dedicated executor with backpressure handling
  */
-public class HybridContainer implements HotReloadCapable {
+public class HybridContainer implements HotReloadCapable, AutoCloseable {
 
     private final BeanRegistry registry = new BeanRegistryImpl();
     private final DependencyGraph dependencyGraph = new DependencyGraph();
@@ -53,6 +53,7 @@ public class HybridContainer implements HotReloadCapable {
     
     // Empty array constant to avoid allocation for beans without dependencies
     private static final Object[] EMPTY_ARGS = new Object[0];
+    private static final String[] EMPTY_STRING_ARRAY = new String[0];
     
     // Diagnostic mode flag
     private final boolean diagnosticMode;
@@ -229,10 +230,17 @@ public class HybridContainer implements HotReloadCapable {
             compileTimeFactoryNames.add(definition.name());
         }
         
-        // Register in dependency graph
-        String[] deps = Arrays.stream(definition.dependencies())
-            .map(Object::toString)
-            .toArray(String[]::new);
+        // Register in dependency graph - optimized to avoid Stream allocation
+        String[] deps;
+        Object[] dependencies = definition.dependencies();
+        if (dependencies.length == 0) {
+            deps = EMPTY_STRING_ARRAY;
+        } else {
+            deps = new String[dependencies.length];
+            for (int i = 0; i < dependencies.length; i++) {
+                deps[i] = dependencies[i].toString();
+            }
+        }
         dependencyGraph.registerBean(definition.name(), deps);
     }
 
@@ -246,10 +254,17 @@ public class HybridContainer implements HotReloadCapable {
     public <T> void registerDynamic(BeanDefinition<T> definition) {
         registry.register(definition);
         
-        // Register in dependency graph
-        String[] deps = Arrays.stream(definition.dependencies())
-            .map(Object::toString)
-            .toArray(String[]::new);
+        // Register in dependency graph - optimized to avoid Stream allocation
+        String[] deps;
+        Object[] dependencies = definition.dependencies();
+        if (dependencies.length == 0) {
+            deps = EMPTY_STRING_ARRAY;
+        } else {
+            deps = new String[dependencies.length];
+            for (int i = 0; i < dependencies.length; i++) {
+                deps[i] = dependencies[i].toString();
+            }
+        }
         dependencyGraph.registerBean(definition.name(), deps);
         
         // Trigger background warmup
@@ -337,6 +352,46 @@ public class HybridContainer implements HotReloadCapable {
     }
 
     /**
+     * Resolves a singleton bean by integer index (experimental fast path).
+     * This method bypasses String hashing and Map lookup, using direct array access.
+     * Only works for cached singletons; returns null if the bean is not yet cached.
+     * 
+     * @param <T> the bean type
+     * @param index the bean index (obtained via {@link #indexOf(String)})
+     * @return the cached singleton instance, or null if not present
+     * @experimental Internal API for performance-critical paths
+     */
+    @SuppressWarnings("unchecked")
+    public <T> T resolveByIndex(int index) {
+        // Fast-path: check if singleton is already cached via indexed array access
+        T cachedInstance = (T) registry.getIfPresent(index);
+        if (cachedInstance != null) {
+            // When metrics enabled: record timing and resolution count
+            // When metrics disabled: bare return with no overhead
+            if (metricsEnabled) {
+                long startTime = System.nanoTime();
+                // Note: We can't get the definition by index easily, so skip detailed metrics
+                totalResolutions.add(1);
+                // Assume compile-time hit for indexed path (typical use case)
+                compileTimeHits.add(1);
+            }
+            return cachedInstance;
+        }
+        return null;
+    }
+
+    /**
+     * Returns the integer index for a bean name (experimental).
+     * 
+     * @param name the bean name
+     * @return the bean index, or -1 if not found
+     * @experimental Internal API for performance-critical paths
+     */
+    public int indexOf(String name) {
+        return registry.indexOf(name);
+    }
+
+    /**
      * Checks if a bean is registered.
      */
     public boolean contains(String name) {
@@ -407,12 +462,18 @@ public class HybridContainer implements HotReloadCapable {
     }
 
     /**
-     * Shuts down the container, applying destroy callbacks.
+     * Shuts down the container, applying destroy callbacks and terminating the warmup executor.
+     * Implements AutoCloseable for try-with-resources support.
      */
     public void shutdown() {
-        warmupExecutor.shutdown();
+        warmupExecutor.shutdownNow();
         registry.clear();
         jitCompiler.clear();
+    }
+
+    @Override
+    public void close() {
+        shutdown();
     }
 
     /**
@@ -516,7 +577,7 @@ public class HybridContainer implements HotReloadCapable {
     private <T> T createBean(BeanDefinition<T> definition) {
         String name = definition.name();
         long compileTimeNs = 0;
-        ResolutionDiagnostic.ResolutionPath path;
+        ResolutionDiagnostic.ResolutionPath path = null;
         
         // Check if running in GraalVM native image mode - disable JIT
         boolean nativeImage = IS_NATIVE_IMAGE;
@@ -524,13 +585,19 @@ public class HybridContainer implements HotReloadCapable {
         // Single lookup in unified factory cache for hot path
         CompiledFactory<T> factory = (CompiledFactory<T>) factoryCache.get(name);
         if (factory != null) {
-            // Hot path: factory already cached, determine origin for metrics
-            if (compileTimeFactoryNames.contains(name)) {
-                path = ResolutionDiagnostic.ResolutionPath.COMPILE_TIME;
-                compileTimeHits.add(1);
-            } else {
-                path = ResolutionDiagnostic.ResolutionPath.JIT;
-                jitHits.add(1);
+            // Hot path: factory already cached, determine origin for metrics/diagnostic only if enabled
+            if (metricsEnabled || diagnosticMode) {
+                if (compileTimeFactoryNames.contains(name)) {
+                    path = ResolutionDiagnostic.ResolutionPath.COMPILE_TIME;
+                    if (metricsEnabled) {
+                        compileTimeHits.add(1);
+                    }
+                } else {
+                    path = ResolutionDiagnostic.ResolutionPath.JIT;
+                    if (metricsEnabled) {
+                        jitHits.add(1);
+                    }
+                }
             }
         } else if (!nativeImage) {
             // Try JIT compilation and cache the result

@@ -11,19 +11,51 @@ import org.openjdk.jmh.infra.Blackhole;
 import java.util.concurrent.TimeUnit;
 
 /**
- * JMH benchmarks comparing Warmup compile-time vs JIT paths.
- *
- * Scenarios:
- * - Direct instantiation (baseline)
- * - Warmup compile-time factory (zero-overhead path)
- * - Warmup JIT-compiled factory (runtime compilation)
- * - Warmup resolve() for singleton (cached lookup)
- * - Warmup resolve() for prototype (creation overhead)
- *
+ * JMH benchmarks comparing Warmup JIT/ASM path performance.
+ * 
+ * <p>This benchmark uses {@code registerDynamic()} which triggers runtime JIT compilation
+ * via ASM. This is NOT the compile-time path - for compile-time benchmarks, see
+ * {@link WarmupCompileTimeBenchmark}.</p>
+ * 
+ * <p>Scenarios measured:</p>
+ * <ul>
+ *   <li>{@code javaDirectInstantiation}: Baseline - pure Java instantiation (no container overhead)</li>
+ *   <li>{@code warmupSingletonResolve}: Warmup JIT-compiled singleton resolution (cached lookup by name)</li>
+ *   <li>{@code warmupSingletonResolveIndexed}: Warmup singleton resolution by integer index (experimental fast path)</li>
+ *   <li>{@code warmupPrototypeResolve}: Warmup prototype bean creation via JIT factory</li>
+ *   <li>{@code warmupCompiledFactoryCreate}: Direct compiled factory invocation (Warmup-specific)</li>
+ * </ul>
+ * 
+ * <p>Important: This benchmark measures the JIT path, which is slower than the pure
+ * compile-time path. For fair comparison with Avaje Inject's compile-time factories,
+ * use {@link WarmupCompileTimeBenchmark} instead.</p>
+ * 
+ * <h3>Path Comparison:</h3>
+ * <ul>
+ *   <li>{@code ResolutionBenchmark}: JIT/ASM path (dynamic registration)</li>
+ *   <li>{@link WarmupCompileTimeBenchmark}: Pure compile-time path (@Bean annotation processing)</li>
+ *   <li>{@link AvajeInjectBenchmark}: Avaje's compile-time path (for comparison)</li>
+ * </ul>
+ * 
+ * <h3>Asymmetry Note:</h3>
+ * <p>Only {@code warmupSingletonResolve}, {@code warmupSingletonResolveIndexed}, and beans with 
+ * dependencies (not shown here, see {@link WarmupCompileTimeBenchmark}) are directly comparable 1:1 
+ * with Avaje benchmarks. The following are Warmup-specific metrics with no direct Avaje equivalent:</p>
+ * <ul>
+ *   <li>{@code warmupPrototypeResolve}: Avaje is singleton-first and does not expose prototype scope</li>
+ *   <li>{@code warmupCompiledFactoryCreate}: Avaje does not expose compiled factories for direct invocation</li>
+ *   <li>{@code javaDirectInstantiation}: Pure JVM baseline, not a Warmup metric</li>
+ * </ul>
+ * 
+ * <h3>Indexed Resolution:</h3>
+ * <p>The {@code warmupSingletonResolveIndexed} benchmark uses an experimental integer-indexed
+ * resolution path that bypasses String hashing and Map lookup. It provides a lower-bound
+ * measurement for singleton resolution overhead in Warmup.</p>
+ * 
  * Metrics:
  * - Resolution time (single bean resolution)
  * - Throughput (resolutions per second)
- *
+ * 
  * Note: This benchmark uses explicit HybridContainer construction for precise
  * performance measurement. For production usage, prefer Warmup.create().
  */
@@ -56,6 +88,7 @@ public class ResolutionBenchmark {
     private HybridContainer container;
     private CompiledFactory<SimpleBean> simpleFactory;
     private CompiledFactory<PrototypeBean> prototypeFactory;
+    private int simpleBeanIndex;
 
     public static class PrototypeBean {
         public PrototypeBean() {}
@@ -74,6 +107,9 @@ public class ResolutionBenchmark {
             SimpleBean.class, "simpleBean", Scope.SINGLETON
         );
         container.registerDynamic(singletonDef);
+        
+        // Get the index for indexed resolution benchmark
+        simpleBeanIndex = container.indexOf("simpleBean");
 
         // Register prototype bean to measure creation overhead
         BeanDefinition<PrototypeBean> prototypeDef = new BeanDefinition<>(
@@ -90,7 +126,7 @@ public class ResolutionBenchmark {
     }
 
     @Benchmark
-    public Object directInstantiation() {
+    public Object javaDirectInstantiation() {
         return new SimpleBean();
     }
 
@@ -99,8 +135,19 @@ public class ResolutionBenchmark {
      * This tests the fast-path lookup without bean creation.
      */
     @Benchmark
-    public Object singletonCachedResolve() {
+    public Object warmupSingletonResolve() {
         return container.resolve("simpleBean");
+    }
+
+    /**
+     * Measures resolveByIndex() overhead for a SINGLETON bean that is already cached.
+     * This tests the experimental integer-indexed fast path (avoids String hashing).
+     */
+    @Benchmark
+    public Object warmupSingletonResolveIndexed() {
+        Object result = container.resolveByIndex(simpleBeanIndex);
+        // Fallback to name-based resolve if not yet cached (shouldn't happen after warmup)
+        return result != null ? result : container.resolve("simpleBean");
     }
 
     /**
@@ -108,7 +155,7 @@ public class ResolutionBenchmark {
      * This measures the actual bean creation overhead via JIT factory.
      */
     @Benchmark
-    public Object prototypeResolve() {
+    public Object warmupPrototypeResolve() {
         return container.resolve("prototypeBean");
     }
 
@@ -117,7 +164,7 @@ public class ResolutionBenchmark {
      * Baseline for JIT path.
      */
     @Benchmark
-    public Object compiledFactoryCreate() {
+    public Object warmupCompiledFactoryCreate() {
         return simpleFactory.create();
     }
 
