@@ -352,6 +352,46 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
     }
 
     /**
+     * Resolves a singleton bean by integer index (experimental fast path).
+     * This method bypasses String hashing and Map lookup, using direct array access.
+     * Only works for cached singletons; returns null if the bean is not yet cached.
+     * 
+     * @param <T> the bean type
+     * @param index the bean index (obtained via {@link #indexOf(String)})
+     * @return the cached singleton instance, or null if not present
+     * @experimental Internal API for performance-critical paths
+     */
+    @SuppressWarnings("unchecked")
+    public <T> T resolveByIndex(int index) {
+        // Fast-path: check if singleton is already cached via indexed array access
+        T cachedInstance = (T) registry.getIfPresent(index);
+        if (cachedInstance != null) {
+            // When metrics enabled: record timing and resolution count
+            // When metrics disabled: bare return with no overhead
+            if (metricsEnabled) {
+                long startTime = System.nanoTime();
+                // Note: We can't get the definition by index easily, so skip detailed metrics
+                totalResolutions.add(1);
+                // Assume compile-time hit for indexed path (typical use case)
+                compileTimeHits.add(1);
+            }
+            return cachedInstance;
+        }
+        return null;
+    }
+
+    /**
+     * Returns the integer index for a bean name (experimental).
+     * 
+     * @param name the bean name
+     * @return the bean index, or -1 if not found
+     * @experimental Internal API for performance-critical paths
+     */
+    public int indexOf(String name) {
+        return registry.indexOf(name);
+    }
+
+    /**
      * Checks if a bean is registered.
      */
     public boolean contains(String name) {

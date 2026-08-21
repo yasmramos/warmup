@@ -140,4 +140,31 @@ public interface BeanRegistry {
         // Default implementation returns null - to be overridden by implementations
         return null;
     }
+    
+    /**
+     * Gets a cached singleton instance by index if present, without triggering creation.
+     * This is an experimental fast-path method using integer indexing to avoid String hashing.
+     * 
+     * @param <T> the bean type
+     * @param index the bean index (obtained via indexOf)
+     * @return the cached instance or null if not present/not a singleton
+     * @experimental Internal API for performance-critical paths
+     */
+    @SuppressWarnings("unchecked")
+    default <T> T getIfPresent(int index) {
+        // Default implementation returns null - to be overridden by implementations
+        return null;
+    }
+    
+    /**
+     * Returns the integer index for a bean name, assigning one if not yet assigned.
+     * This enables fast indexed resolution avoiding String hashing overhead.
+     * 
+     * @param name the bean name
+     * @return the bean index (non-negative integer)
+     * @experimental Internal API for performance-critical paths
+     */
+    default int indexOf(String name) {
+        throw new UnsupportedOperationException("Index-based resolution not supported");
+    }
 }

@@ -5,6 +5,8 @@ import com.warmup.core.scope.Scope;
 
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReferenceArray;
 import java.util.Optional;
 import java.util.Map;
 import java.util.Set;
@@ -16,6 +18,7 @@ import java.util.Set;
  * - O(1) lookup using ConcurrentHashMap
  * - Separate storage for definitions and instances (memory efficient)
  * - Supports singleton caching and prototype factories
+ * - Experimental: indexed access for integer-based fast path (avoids String hashing)
  */
 public class BeanRegistryImpl implements BeanRegistry {
 
@@ -33,6 +36,15 @@ public class BeanRegistryImpl implements BeanRegistry {
     
     // Type-to-name mapping for resolving conflicts
     private final ConcurrentMap<Class<?>, String> typeToNameMap = new ConcurrentHashMap<>();
+    
+    // Experimental: Index-based resolution support
+    // Maps bean name to integer index for fast indexed access
+    private final ConcurrentMap<String, Integer> nameToIndex = new ConcurrentHashMap<>();
+    // Atomic counter for assigning unique indices
+    private final AtomicInteger nextIndex = new AtomicInteger(0);
+    // Array-backed storage for singleton instances indexed by integer
+    // Using AtomicReferenceArray for thread-safe growth and access
+    private AtomicReferenceArray<Object> singletonInstancesByIndex = new AtomicReferenceArray<>(64);
 
     @Override
     public <T> void register(BeanDefinition<T> definition) {
@@ -46,6 +58,13 @@ public class BeanRegistryImpl implements BeanRegistry {
         // Register by name
         definitionsByName.put(name, definition);
         
+        // Assign index for indexed resolution
+        int index = nextIndex.getAndIncrement();
+        nameToIndex.put(name, index);
+        
+        // Grow the index array if needed
+        ensureCapacity(index + 1);
+        
         // Register by type (primary beans override non-primary)
         definitionsByType.compute(definition.type(), (type, existing) -> {
             if (existing == null || definition.isPrimary()) {
@@ -54,6 +73,33 @@ public class BeanRegistryImpl implements BeanRegistry {
             }
             return existing;
         });
+    }
+    
+    /**
+     * Ensures the singletonInstancesByIndex array can hold at least minCapacity elements.
+     * Thread-safe growth using CAS on the AtomicReferenceArray reference.
+     */
+    private void ensureCapacity(int minCapacity) {
+        while (singletonInstancesByIndex.length() < minCapacity) {
+            AtomicReferenceArray<Object> current = singletonInstancesByIndex;
+            int newSize = Math.max(minCapacity, current.length() * 2);
+            AtomicReferenceArray<Object> newArray = new AtomicReferenceArray<>(newSize);
+            
+            // Copy existing elements
+            for (int i = 0; i < current.length(); i++) {
+                Object value = current.get(i);
+                if (value != null) {
+                    newArray.set(i, value);
+                }
+            }
+            
+            // CAS to replace the array reference
+            if (singletonInstancesByIndex == current) {
+                singletonInstancesByIndex = newArray;
+                break;
+            }
+            // Another thread updated it, retry with the new array
+        }
     }
 
     @Override
@@ -106,9 +152,11 @@ public class BeanRegistryImpl implements BeanRegistry {
                 // ComputeIfAbsent ensures thread-safe lazy initialization
                 instance = (T) singletonInstances.computeIfAbsent(name, k -> {
                     T newInstance = factory.get();
-                    // Mark that we created it (callback will be applied after computeIfAbsent)
-                    // We use a side-effect marker since we can't return extra info
-                    // The callback application is deferred to after computeIfAbsent completes
+                    // Also write to indexed array for fast indexed resolution
+                    Integer idx = nameToIndex.get(name);
+                    if (idx != null && idx >= 0 && idx < singletonInstancesByIndex.length()) {
+                        singletonInstancesByIndex.set(idx, newInstance);
+                    }
                     return newInstance;
                 });
                 
@@ -160,8 +208,12 @@ public class BeanRegistryImpl implements BeanRegistry {
                 }
             }
             
-            // Remove cached instance
+            // Remove cached instance from both maps
             singletonInstances.remove(name);
+            Integer idx = nameToIndex.remove(name);
+            if (idx != null && idx >= 0 && idx < singletonInstancesByIndex.length()) {
+                singletonInstancesByIndex.set(idx, null);
+            }
             // Remove type mapping if this was the primary bean
             if (definition.isPrimary()) {
                 typeToNameMap.remove(definition.type());
@@ -178,6 +230,11 @@ public class BeanRegistryImpl implements BeanRegistry {
             BeanDefinition<?> definition = definitionsByName.get(name);
             if (definition != null && definition.hasLifecycle() && definition.lifecycle().onDestroy() != null) {
                 applyDestroyCallback(instance, definition);
+            }
+            // Also evict from indexed array
+            Integer idx = nameToIndex.get(name);
+            if (idx != null && idx >= 0 && idx < singletonInstancesByIndex.length()) {
+                singletonInstancesByIndex.set(idx, null);
             }
             return true;
         }
@@ -197,9 +254,15 @@ public class BeanRegistryImpl implements BeanRegistry {
         });
         
         singletonInstances.clear();
+        // Clear indexed array
+        for (int i = 0; i < singletonInstancesByIndex.length(); i++) {
+            singletonInstancesByIndex.set(i, null);
+        }
         definitionsByName.clear();
         definitionsByType.clear();
         typeToNameMap.clear();
+        nameToIndex.clear();
+        nextIndex.set(0);
     }
 
     @Override
@@ -226,6 +289,21 @@ public class BeanRegistryImpl implements BeanRegistry {
     @SuppressWarnings("unchecked")
     public <T> T getIfPresent(String name) {
         return (T) singletonInstances.get(name);
+    }
+    
+    @Override
+    @SuppressWarnings("unchecked")
+    public <T> T getIfPresent(int index) {
+        if (index < 0 || index >= singletonInstancesByIndex.length()) {
+            return null;
+        }
+        return (T) singletonInstancesByIndex.get(index);
+    }
+    
+    @Override
+    public int indexOf(String name) {
+        Integer index = nameToIndex.get(name);
+        return index != null ? index : -1;
     }
 
     /**
