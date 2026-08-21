@@ -19,7 +19,8 @@ import static org.junit.jupiter.api.Assertions.*;
 /**
  * Tests for WarmupProcessor annotation processor.
  * 
- * Note: These tests verify that the processor correctly handles the @Bean and @Inject annotations.
+ * Note: These tests verify that the processor correctly handles the @Singleton, @Prototype, 
+ * @Component and @Factory+@Bean annotations.
  * The generated factory code compilation may fail in isolation due to missing dependencies on the
  * test classpath (CompiledFactory, javax.annotation.Generated), but the processor itself works
  * correctly when warmup-core is available.
@@ -35,9 +36,9 @@ class WarmupProcessorTest {
         JavaFileObject source = JavaFileObjects.forSourceLines(
             "test.SimpleBean",
             "package test;",
-            "import com.warmup.annotations.Bean;",
+            "import com.warmup.annotations.Singleton;",
             "",
-            "@Bean",
+            "@Singleton",
             "public class SimpleBean {",
             "    public SimpleBean() {}",
             "}"
@@ -55,9 +56,9 @@ class WarmupProcessorTest {
         JavaFileObject source = JavaFileObjects.forSourceLines(
             "test.SingleConstructorBean",
             "package test;",
-            "import com.warmup.annotations.Bean;",
+            "import com.warmup.annotations.Singleton;",
             "",
-            "@Bean",
+            "@Singleton",
             "public class SingleConstructorBean {",
             "    private String value;",
             "    ",
@@ -76,10 +77,10 @@ class WarmupProcessorTest {
         JavaFileObject source = JavaFileObjects.forSourceLines(
             "test.InjectBean",
             "package test;",
-            "import com.warmup.annotations.Bean;",
+            "import com.warmup.annotations.Singleton;",
             "import com.warmup.annotations.Inject;",
             "",
-            "@Bean",
+            "@Singleton",
             "public class InjectBean {",
             "    private String dep;",
             "    ",
@@ -97,34 +98,97 @@ class WarmupProcessorTest {
     }
 
     @Test
-    void testBeanOnNonClassProducesError() {
+    void testProcessPrototypeClass() {
         JavaFileObject source = JavaFileObjects.forSourceLines(
-            "test.InvalidBean",
+            "test.PrototypeBean",
             "package test;",
-            "import com.warmup.annotations.Bean;",
+            "import com.warmup.annotations.Prototype;",
             "",
-            "@Bean",
-            "public interface InvalidBean {",
+            "@Prototype",
+            "public class PrototypeBean {",
+            "    public PrototypeBean() {}",
             "}"
         );
 
         Compilation compilation = compiler.compile(source);
-
-        assertThat(compilation).failed();
-        assertThat(compilation)
-            .hadErrorContaining("@Bean only applies to classes");
+        assertTrue(compilation.generatedSourceFile("test.PrototypeBean$$WarmupFactory").isPresent());
     }
 
     @Test
-    void testBeanOnEnumProducesError() {
+    void testProcessComponentClass() {
         JavaFileObject source = JavaFileObjects.forSourceLines(
-            "test.EnumBean",
+            "test.ComponentBean",
             "package test;",
+            "import com.warmup.annotations.Component;",
+            "",
+            "@Component",
+            "public class ComponentBean {",
+            "    public ComponentBean() {}",
+            "}"
+        );
+
+        Compilation compilation = compiler.compile(source);
+        assertTrue(compilation.generatedSourceFile("test.ComponentBean$$WarmupFactory").isPresent());
+    }
+
+    @Test
+    void testProcessFactoryWithBeanMethod() {
+        JavaFileObject source = JavaFileObjects.forSourceLines(
+            "test.AppConfig",
+            "package test;",
+            "import com.warmup.annotations.Factory;",
             "import com.warmup.annotations.Bean;",
             "",
-            "@Bean",
-            "public enum EnumBean {",
-            "    INSTANCE;",
+            "@Factory",
+            "public class AppConfig {",
+            "    @Bean",
+            "    public String dataSource() {",
+            "        return \"DataSource\";",
+            "    }",
+            "}"
+        );
+
+        Compilation compilation = compiler.compile(source);
+        // Should generate a factory for the method
+        assertTrue(compilation.generatedSourceFile("test.AppConfig$$dataSource$$WarmupFactory").isPresent());
+    }
+
+    @Test
+    void testProcessFactoryWithBeanMethodHavingDependencies() {
+        JavaFileObject source = JavaFileObjects.forSourceLines(
+            "test.AppConfig",
+            "package test;",
+            "import com.warmup.annotations.Factory;",
+            "import com.warmup.annotations.Bean;",
+            "import com.warmup.annotations.Inject;",
+            "",
+            "@Factory",
+            "public class AppConfig {",
+            "    @Bean",
+            "    public Service service(Repository repo) {",
+            "        return new Service(repo);",
+            "    }",
+            "",
+            "    public static class Repository {}",
+            "    public static class Service {",
+            "        public Service(Repository repo) {}",
+            "    }",
+            "}"
+        );
+
+        Compilation compilation = compiler.compile(source);
+        assertTrue(compilation.generatedSourceFile("test.AppConfig$$service$$WarmupFactory").isPresent());
+    }
+
+    @Test
+    void testSingletonOnNonClassProducesError() {
+        JavaFileObject source = JavaFileObjects.forSourceLines(
+            "test.InvalidSingleton",
+            "package test;",
+            "import com.warmup.annotations.Singleton;",
+            "",
+            "@Singleton",
+            "public interface InvalidSingleton {",
             "}"
         );
 
@@ -132,6 +196,25 @@ class WarmupProcessorTest {
 
         assertThat(compilation).failed();
         assertThat(compilation)
-            .hadErrorContaining("@Bean only applies to classes");
+            .hadErrorContaining("@Singleton only applies to classes");
+    }
+
+    @Test
+    void testFactoryOnNonClassProducesError() {
+        JavaFileObject source = JavaFileObjects.forSourceLines(
+            "test.InvalidFactory",
+            "package test;",
+            "import com.warmup.annotations.Factory;",
+            "",
+            "@Factory",
+            "public interface InvalidFactory {",
+            "}"
+        );
+
+        Compilation compilation = compiler.compile(source);
+
+        assertThat(compilation).failed();
+        assertThat(compilation)
+            .hadErrorContaining("@Factory only applies to classes");
     }
 }
