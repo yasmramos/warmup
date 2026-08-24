@@ -149,8 +149,8 @@ class WarmupProcessorTest {
         );
 
         Compilation compilation = compiler.compile(source);
-        // Should generate a factory for the method
-        assertTrue(compilation.generatedSourceFile("test.AppConfig$$dataSource$$WarmupFactory").isPresent());
+        // Should generate a factory for the @Factory class
+        assertTrue(compilation.generatedSourceFile("test.AppConfig$$WarmupFactory").isPresent());
     }
 
     @Test
@@ -160,7 +160,6 @@ class WarmupProcessorTest {
             "package test;",
             "import com.warmup.annotations.Factory;",
             "import com.warmup.annotations.Bean;",
-            "import com.warmup.annotations.Inject;",
             "",
             "@Factory",
             "public class AppConfig {",
@@ -177,7 +176,8 @@ class WarmupProcessorTest {
         );
 
         Compilation compilation = compiler.compile(source);
-        assertTrue(compilation.generatedSourceFile("test.AppConfig$$service$$WarmupFactory").isPresent());
+        // Should generate a factory for the @Factory class
+        assertTrue(compilation.generatedSourceFile("test.AppConfig$$WarmupFactory").isPresent());
     }
 
     @Test

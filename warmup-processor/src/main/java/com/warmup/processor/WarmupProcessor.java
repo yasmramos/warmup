@@ -273,9 +273,10 @@ public class WarmupProcessor extends AbstractProcessor {
             depNames.add(simpleName);
         }
         
-        // For method-based beans, we use a composite class name to distinguish from class beans
-        String fullBeanClassName = factoryClassNameStr + "." + methodName;
-        processedBeans.add(new BeanInfo(packageName, fullBeanClassName, beanName, factoryClassName, scope, depNames));
+        // For method-based beans, use the return type as the bean class name
+        // Use the fully qualified return type directly
+        String returnType = method.getReturnType().toString();
+        processedBeans.add(new BeanInfo(packageName, returnType, beanName, factoryClassName, scope, depNames));
     }
     
     /**
