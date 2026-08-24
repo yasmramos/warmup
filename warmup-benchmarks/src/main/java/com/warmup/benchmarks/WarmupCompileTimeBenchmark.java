@@ -37,7 +37,8 @@ import java.util.concurrent.TimeUnit;
  * <ul>
  *   <li>Both Warmup and Avaje use compile-time generated factories for optimal performance</li>
  *   <li>Resolution times are measured in nanoseconds (lower is better)</li>
- *   <li>Use {@code ContainerMetrics} in tearDown to verify compileTimeHits > 0 and jitHits = 0</li>
+ *   <li>Path verification is done in a separate container during trial setup to avoid
+ *       instrumenting the measured hot path</li>
  * </ul>
  * 
  * @see AvajeInjectBenchmark for Avaje's compile-time benchmark
@@ -49,18 +50,21 @@ import java.util.concurrent.TimeUnit;
 public class WarmupCompileTimeBenchmark {
 
     private HybridContainer container;
+    private HybridContainer verificationContainer;
 
     @Setup(Level.Trial)
     public void setup() {
         // Create container with autoDiscoverFactories=true to enable ServiceLoader discovery
         // of GeneratedFactoryRegistrar, which registers all compile-time factories.
-        // metricsEnabled=true to verify we're hitting the COMPILE_TIME path.
+        // CRITICAL: metricsEnabled=false to measure bare fast-path overhead without
+        // System.nanoTime() instrumentation (~50ns per call) that would dominate and mask
+        // the actual resolution cost, making comparison with Avaje unfair.
         AsmJITCompiler jitCompiler = new AsmJITCompiler();
         HybridContainerConfig config = new HybridContainerConfig(
             false,  // diagnosticMode
             10,     // maxPendingCompilations
             true,   // autoDiscoverFactories - enables compile-time factory discovery
-            true    // metricsEnabled - verify compileTimeHits vs jitHits
+            false   // metricsEnabled=false for fair performance measurement (no nanoTime overhead)
         );
         container = new HybridContainer(config, jitCompiler);
 
@@ -72,6 +76,57 @@ public class WarmupCompileTimeBenchmark {
         container.resolve("WarmupSimpleBean");
         container.resolve("WarmupBeanWithOneDependency");
         container.resolve("WarmupBeanWithFiveDependencies");
+        
+        // Separate verification container: verify COMPILE_TIME path is used without
+        // contaminating the measured container's metrics. This container has
+        // metricsEnabled=true solely to validate we're hitting the expected code path.
+        verifyCompileTimePath(jitCompiler);
+    }
+
+    /**
+     * Verifies that the compile-time path is actually being used.
+     * Creates a separate container with metrics enabled, resolves each bean once,
+     * and validates that compileTimeHits > 0 and jitHits == 0.
+     * This verification does NOT affect the measured container's performance.
+     */
+    private void verifyCompileTimePath(AsmJITCompiler jitCompiler) {
+        HybridContainerConfig verifyConfig = new HybridContainerConfig(
+            false,  // diagnosticMode
+            10,     // maxPendingCompilations
+            true,   // autoDiscoverFactories
+            true    // metricsEnabled=true ONLY for path verification
+        );
+        verificationContainer = new HybridContainer(verifyConfig, jitCompiler);
+        
+        // Resolve each bean type once to populate metrics
+        verificationContainer.resolve("WarmupSimpleBean");
+        verificationContainer.resolve("WarmupBeanWithOneDependency");
+        verificationContainer.resolve("WarmupBeanWithFiveDependencies");
+        
+        ContainerMetrics metrics = verificationContainer.getMetrics();
+        
+        // Verify we're using the compile-time path
+        if (metrics.compileTimeHits() == 0) {
+            throw new IllegalStateException(
+                "VERIFICATION FAILED: No compile-time hits detected! " +
+                "Expected compileTimeHits > 0, got " + metrics.compileTimeHits() + ". " +
+                "Check that @Bean classes are processed by the annotation processor."
+            );
+        }
+        
+        if (metrics.jitHits() > 0) {
+            throw new IllegalStateException(
+                "VERIFICATION FAILED: JIT hits detected in compile-time benchmark! " +
+                "Expected jitHits = 0, got " + metrics.jitHits() + ". " +
+                "This indicates misconfiguration or fallback to JIT path."
+            );
+        }
+        
+        System.out.println("\n=== Compile-Time Path Verification PASSED ===");
+        System.out.println("Total Resolutions: " + metrics.totalResolutions());
+        System.out.println("Compile-Time Hits: " + metrics.compileTimeHits());
+        System.out.println("JIT Hits: " + metrics.jitHits());
+        System.out.println("============================================\n");
     }
 
     /**
@@ -105,29 +160,16 @@ public class WarmupCompileTimeBenchmark {
     }
 
     /**
-     * TearDown method to print container metrics after each benchmark run.
-     * Verifies that resolutions are hitting the COMPILE_TIME path (compileTimeHits)
-     * and NOT the JIT path (jitHits should be 0 or very low).
+     * TearDown method called after each benchmark iteration.
+     * Note: The measured container has metricsEnabled=false to avoid instrumentation
+     * overhead (~50ns per resolve). Path verification is performed once during trial
+     * setup using a separate verification container.
      */
     @TearDown(Level.Iteration)
     public void tearDown() {
-        if (container != null) {
-            ContainerMetrics metrics = container.getMetrics();
-            System.out.println("\n=== Warmup Compile-Time Path Metrics ===");
-            System.out.println("Total Resolutions: " + metrics.totalResolutions());
-            System.out.println("Compile-Time Hits: " + metrics.compileTimeHits());
-            System.out.println("JIT Hits: " + metrics.jitHits());
-            System.out.println("Fallback Count: " + metrics.fallbackCount());
-            System.out.printf("Hit Rate: %.2f%%%n", metrics.cacheHitRate());
-            
-            // Verify we're actually using the compile-time path
-            if (metrics.compileTimeHits() == 0 && metrics.totalResolutions() > 0) {
-                System.err.println("WARNING: No compile-time hits detected! Check that @Bean classes are processed.");
-            }
-            if (metrics.jitHits() > 0) {
-                System.err.println("WARNING: JIT hits detected in compile-time benchmark. This may indicate misconfiguration.");
-            }
-            System.out.println("==========================================\n");
-        }
+        // Metrics are disabled on the measured container for fair performance comparison.
+        // Path verification was already performed during @Setup(Level.Trial) using
+        // a separate verification container with metricsEnabled=true.
+        // See verifyCompileTimePath() for verification logic.
     }
 }
