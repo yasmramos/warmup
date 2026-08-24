@@ -211,7 +211,11 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
     private void discoverAndRegisterFactories() {
         ServiceLoader<FactoryRegistrar> loader = ServiceLoader.load(FactoryRegistrar.class);
         for (FactoryRegistrar registrar : loader) {
-            registrar.registerAll((name, factory) -> registerFactory(name, factory));
+            registrar.registerAll((definition, factory) -> {
+                registry.register(definition);
+                factoryCache.put(definition.name(), factory);
+                compileTimeFactoryNames.add(definition.name());
+            });
         }
     }
 

@@ -1,5 +1,6 @@
 package com.warmup.core.jit;
 
+import com.warmup.core.registry.BeanDefinition;
 import java.util.function.BiConsumer;
 
 /**
@@ -14,13 +15,12 @@ import java.util.function.BiConsumer;
  * 
  * @see java.util.ServiceLoader
  */
-@FunctionalInterface
 public interface FactoryRegistrar {
     
     /**
-     * Registers all compile-time factories from this module.
+     * Registers all compile-time factories from this module with full bean definitions.
      * 
-     * @param sink a consumer that accepts bean name and factory pairs for registration
+     * @param sink a consumer that accepts bean definition and factory pairs for registration
      */
-    void registerAll(BiConsumer<String, CompiledFactory<?>> sink);
+    void registerAll(BiConsumer<BeanDefinition<?>, CompiledFactory<?>> sink);
 }

@@ -89,13 +89,19 @@ public class WarmupProcessor extends AbstractProcessor {
         final String beanName;
         final String factoryClassName;
         final String scope;
+        final List<String> dependencyNames;
 
-        BeanInfo(String packageName, String className, String beanName, String factoryClassName, String scope) {
+        BeanInfo(String packageName, String className, String beanName, String factoryClassName, String scope, List<String> dependencyNames) {
             this.packageName = packageName;
             this.className = className;
             this.beanName = beanName;
             this.factoryClassName = factoryClassName;
             this.scope = scope;
+            this.dependencyNames = dependencyNames != null ? dependencyNames : new ArrayList<>();
+        }
+        
+        BeanInfo(String packageName, String className, String beanName, String factoryClassName, String scope) {
+            this(packageName, className, beanName, factoryClassName, scope, new ArrayList<>());
         }
     }
 
@@ -231,7 +237,22 @@ public class WarmupProcessor extends AbstractProcessor {
         String packageName = getPackageName(typeElement);
         String className = typeElement.getSimpleName().toString();
         String beanName = explicitName.isEmpty() ? className : explicitName;
-        processedBeans.add(new BeanInfo(packageName, className, beanName, factoryClassName, scope));
+        
+        // Extract dependency names from constructor
+        ExecutableElement constructor = findInjectableConstructor(typeElement);
+        List<String> depNames = new ArrayList<>();
+        if (constructor != null) {
+            for (VariableElement param : constructor.getParameters()) {
+                // Use simple name of parameter type as dependency name
+                String paramType = param.asType().toString();
+                // Extract simple name from FQN if needed
+                int lastDot = paramType.lastIndexOf('.');
+                String simpleName = lastDot > 0 ? paramType.substring(lastDot + 1) : paramType;
+                depNames.add(simpleName);
+            }
+        }
+        
+        processedBeans.add(new BeanInfo(packageName, className, beanName, factoryClassName, scope, depNames));
     }
     
     /**
@@ -243,9 +264,19 @@ public class WarmupProcessor extends AbstractProcessor {
         String methodName = method.getSimpleName().toString();
         String beanName = beanAnnotation.value().isEmpty() ? methodName : beanAnnotation.value();
         
-        // For method-based beans, we use a composite class name to distinguish from class beans
-        String fullBeanClassName = factoryClassNameStr + "." + methodName;
-        processedBeans.add(new BeanInfo(packageName, fullBeanClassName, beanName, factoryClassName, scope));
+        // Extract dependency names from method parameters
+        List<String> depNames = new ArrayList<>();
+        for (VariableElement param : method.getParameters()) {
+            String paramType = param.asType().toString();
+            int lastDot = paramType.lastIndexOf('.');
+            String simpleName = lastDot > 0 ? paramType.substring(lastDot + 1) : paramType;
+            depNames.add(simpleName);
+        }
+        
+        // For method-based beans, use the return type as the bean class name
+        // Use the fully qualified return type directly
+        String returnType = method.getReturnType().toString();
+        processedBeans.add(new BeanInfo(packageName, returnType, beanName, factoryClassName, scope, depNames));
     }
     
     /**
@@ -664,6 +695,8 @@ public class WarmupProcessor extends AbstractProcessor {
         
         code.append("import com.warmup.core.jit.FactoryRegistrar;\n");
         code.append("import com.warmup.core.jit.CompiledFactory;\n");
+        code.append("import com.warmup.core.registry.BeanDefinition;\n");
+        code.append("import com.warmup.core.scope.Scope;\n");
         code.append("import java.util.function.BiConsumer;\n");
         code.append("import javax.annotation.processing.Generated;\n\n");
 
@@ -676,7 +709,7 @@ public class WarmupProcessor extends AbstractProcessor {
             .append(" implements FactoryRegistrar {\n\n");
 
         code.append("    @Override\n");
-        code.append("    public void registerAll(BiConsumer<String, CompiledFactory<?>> sink) {\n");
+        code.append("    public void registerAll(BiConsumer<BeanDefinition<?>, CompiledFactory<?>> sink) {\n");
 
         // Register each factory with both simple name and FQN for robustness
         for (BeanInfo beanInfo : processedBeans) {
@@ -684,18 +717,32 @@ public class WarmupProcessor extends AbstractProcessor {
                 ? beanInfo.factoryClassName
                 : beanInfo.packageName + "." + beanInfo.factoryClassName;
             
-            // Register with simple class name as primary key
-            code.append("        sink.accept(\"").append(beanInfo.beanName)
-                .append("\", new ").append(factoryRef).append("());\n");
-            
-            // Also register with fully qualified name for robustness
-            String fqnKey = beanInfo.packageName.isEmpty()
-                ? beanInfo.className
-                : beanInfo.packageName + "." + beanInfo.className;
-            if (!fqnKey.equals(beanInfo.beanName)) {
-                code.append("        sink.accept(\"").append(fqnKey)
-                    .append("\", new ").append(factoryRef).append("());\n");
+            // Build dependency names array for BeanDefinition
+            String depsArray;
+            if (beanInfo.dependencyNames.isEmpty()) {
+                depsArray = "new String[0]";
+            } else {
+                depsArray = "new String[]{";
+                for (int i = 0; i < beanInfo.dependencyNames.size(); i++) {
+                    if (i > 0) depsArray += ", ";
+                    depsArray += "\"" + beanInfo.dependencyNames.get(i) + "\"";
+                }
+                depsArray += "}";
             }
+            
+            // Create BeanDefinition with type, name, scope, and dependencies
+            String beanType = beanInfo.packageName.isEmpty() 
+                ? beanInfo.className 
+                : beanInfo.packageName + "." + beanInfo.className;
+            String scopeEnum = beanInfo.scope.equals("prototype") ? "Scope.PROTOTYPE" : "Scope.SINGLETON";
+            
+            code.append("        sink.accept(\n");
+            code.append("            new BeanDefinition<>(").append(beanType).append(".class, \"")
+                .append(beanInfo.beanName).append("\", ").append(scopeEnum)
+                .append(", com.warmup.core.lifecycle.LifecycleCallbacks.empty(), false, ")
+                .append(depsArray).append("),\n");
+            code.append("            new ").append(factoryRef).append("()\n");
+            code.append("        );\n");
         }
 
         code.append("    }\n");
