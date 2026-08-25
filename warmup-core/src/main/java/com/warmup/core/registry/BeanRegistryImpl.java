@@ -6,7 +6,8 @@ import com.warmup.core.scope.Scope;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicReferenceArray;
+import java.lang.invoke.VarHandle;
+import java.lang.invoke.MethodHandles;
 import java.util.Optional;
 import java.util.Map;
 import java.util.Set;
@@ -43,8 +44,18 @@ public class BeanRegistryImpl implements BeanRegistry {
     // Atomic counter for assigning unique indices
     private final AtomicInteger nextIndex = new AtomicInteger(0);
     // Array-backed storage for singleton instances indexed by integer
-    // Using AtomicReferenceArray for thread-safe growth and access
-    private AtomicReferenceArray<Object> singletonInstancesByIndex = new AtomicReferenceArray<>(64);
+    // Using Object[] with VarHandle for cheaper reads than AtomicReferenceArray volatile access
+    // VarHandle.getOpaque provides acquire semantics for safe publication without full volatile cost
+    private Object[] singletonInstancesByIndex = new Object[64];
+    // VarHandle for array element access with acquire/release semantics
+    private static final VarHandle ARRAY_ELEMENT_HANDLE;
+    static {
+        try {
+            ARRAY_ELEMENT_HANDLE = MethodHandles.arrayElementVarHandle(Object[].class);
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to initialize VarHandle", e);
+        }
+    }
 
     @Override
     public <T> void register(BeanDefinition<T> definition) {
@@ -77,26 +88,28 @@ public class BeanRegistryImpl implements BeanRegistry {
     
     /**
      * Ensures the singletonInstancesByIndex array can hold at least minCapacity elements.
-     * Thread-safe growth using CAS on the AtomicReferenceArray reference.
+     * Thread-safe growth using CAS on the array reference with acquire/release semantics.
      */
     private void ensureCapacity(int minCapacity) {
-        while (singletonInstancesByIndex.length() < minCapacity) {
-            AtomicReferenceArray<Object> current = singletonInstancesByIndex;
-            int newSize = Math.max(minCapacity, current.length() * 2);
-            AtomicReferenceArray<Object> newArray = new AtomicReferenceArray<>(newSize);
+        while (singletonInstancesByIndex.length < minCapacity) {
+            Object[] current = singletonInstancesByIndex;
+            int newSize = Math.max(minCapacity, current.length * 2);
+            Object[] newArray = new Object[newSize];
             
-            // Copy existing elements
-            for (int i = 0; i < current.length(); i++) {
-                Object value = current.get(i);
+            // Copy existing elements using volatile read for safety
+            for (int i = 0; i < current.length; i++) {
+                Object value = ARRAY_ELEMENT_HANDLE.getOpaque(current, i);
                 if (value != null) {
-                    newArray.set(i, value);
+                    ARRAY_ELEMENT_HANDLE.setRelease(newArray, i, value);
                 }
             }
             
             // CAS to replace the array reference
-            if (singletonInstancesByIndex == current) {
-                singletonInstancesByIndex = newArray;
-                break;
+            synchronized (this) {
+                if (singletonInstancesByIndex == current) {
+                    singletonInstancesByIndex = newArray;
+                    break;
+                }
             }
             // Another thread updated it, retry with the new array
         }
@@ -110,6 +123,12 @@ public class BeanRegistryImpl implements BeanRegistry {
             return Optional.empty();
         }
         return Optional.of((BeanDefinition<T>) definition);
+    }
+
+    @Override
+    @SuppressWarnings("unchecked")
+    public <T> BeanDefinition<T> getDefinitionOrNull(String name) {
+        return (BeanDefinition<T>) definitionsByName.get(name);
     }
 
     @Override
@@ -152,10 +171,10 @@ public class BeanRegistryImpl implements BeanRegistry {
                 // ComputeIfAbsent ensures thread-safe lazy initialization
                 instance = (T) singletonInstances.computeIfAbsent(name, k -> {
                     T newInstance = factory.get();
-                    // Also write to indexed array for fast indexed resolution
+                    // Also write to indexed array for fast indexed resolution using release semantics
                     Integer idx = nameToIndex.get(name);
-                    if (idx != null && idx >= 0 && idx < singletonInstancesByIndex.length()) {
-                        singletonInstancesByIndex.set(idx, newInstance);
+                    if (idx != null && idx >= 0 && idx < singletonInstancesByIndex.length) {
+                        ARRAY_ELEMENT_HANDLE.setRelease(singletonInstancesByIndex, idx, newInstance);
                     }
                     return newInstance;
                 });
@@ -211,8 +230,8 @@ public class BeanRegistryImpl implements BeanRegistry {
             // Remove cached instance from both maps
             singletonInstances.remove(name);
             Integer idx = nameToIndex.remove(name);
-            if (idx != null && idx >= 0 && idx < singletonInstancesByIndex.length()) {
-                singletonInstancesByIndex.set(idx, null);
+            if (idx != null && idx >= 0 && idx < singletonInstancesByIndex.length) {
+                ARRAY_ELEMENT_HANDLE.setRelease(singletonInstancesByIndex, idx, null);
             }
             // Remove type mapping if this was the primary bean
             if (definition.isPrimary()) {
@@ -233,8 +252,8 @@ public class BeanRegistryImpl implements BeanRegistry {
             }
             // Also evict from indexed array
             Integer idx = nameToIndex.get(name);
-            if (idx != null && idx >= 0 && idx < singletonInstancesByIndex.length()) {
-                singletonInstancesByIndex.set(idx, null);
+            if (idx != null && idx >= 0 && idx < singletonInstancesByIndex.length) {
+                ARRAY_ELEMENT_HANDLE.setRelease(singletonInstancesByIndex, idx, null);
             }
             return true;
         }
@@ -254,9 +273,9 @@ public class BeanRegistryImpl implements BeanRegistry {
         });
         
         singletonInstances.clear();
-        // Clear indexed array
-        for (int i = 0; i < singletonInstancesByIndex.length(); i++) {
-            singletonInstancesByIndex.set(i, null);
+        // Clear indexed array using release semantics
+        for (int i = 0; i < singletonInstancesByIndex.length; i++) {
+            ARRAY_ELEMENT_HANDLE.setRelease(singletonInstancesByIndex, i, null);
         }
         definitionsByName.clear();
         definitionsByType.clear();
@@ -294,10 +313,11 @@ public class BeanRegistryImpl implements BeanRegistry {
     @Override
     @SuppressWarnings("unchecked")
     public <T> T getIfPresent(int index) {
-        if (index < 0 || index >= singletonInstancesByIndex.length()) {
+        if (index < 0 || index >= singletonInstancesByIndex.length) {
             return null;
         }
-        return (T) singletonInstancesByIndex.get(index);
+        // Use getOpaque for cheaper read than volatile get, with acquire semantics for safe publication
+        return (T) ARRAY_ELEMENT_HANDLE.getOpaque(singletonInstancesByIndex, index);
     }
     
     @Override
