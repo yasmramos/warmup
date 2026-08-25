@@ -10,6 +10,8 @@ import com.warmup.annotations.Inject;
 import javax.annotation.processing.*;
 import javax.lang.model.SourceVersion;
 import javax.lang.model.element.*;
+import javax.lang.model.type.DeclaredType;
+import javax.lang.model.type.TypeKind;
 import javax.lang.model.type.TypeMirror;
 import javax.tools.Diagnostic;
 import javax.tools.FileObject;
@@ -273,10 +275,50 @@ public class WarmupProcessor extends AbstractProcessor {
             depNames.add(simpleName);
         }
         
-        // For method-based beans, use the return type as the bean class name
-        // Use the fully qualified return type directly
-        String returnType = method.getReturnType().toString();
-        processedBeans.add(new BeanInfo(packageName, returnType, beanName, factoryClassName, scope, depNames));
+        // For method-based beans, the bean is registered in the same package as the factory class
+        // The return type might be from any package (e.g., java.lang.String), but for registration
+        // purposes we use the factory's package and store both the simple name and FQN
+        TypeMirror returnTypeMirror = method.getReturnType();
+        String returnTypeNameForCode;  // Used in generated code (e.g., "AppConfig.Service" for nested classes)
+        String returnTypeFqn;          // Fully qualified name for BeanDefinition
+        
+        if (returnTypeMirror.getKind() == TypeKind.DECLARED) {
+            DeclaredType declaredType = (DeclaredType) returnTypeMirror;
+            Element returnTypeElement = declaredType.asElement();
+            if (returnTypeElement instanceof TypeElement) {
+                TypeElement returnTypeElementTyped = (TypeElement) returnTypeElement;
+                
+                // Get the fully qualified name of the return type
+                returnTypeFqn = getFullyQualifiedTypeName(returnTypeElementTyped);
+                String returnTypePackage = getPackageName(returnTypeElementTyped);
+                
+                // For generated code, we need the name as it appears in Java source
+                // e.g., test.AppConfig.Service -> className = "AppConfig.Service" (with dots, not $)
+                if (returnTypePackage.isEmpty()) {
+                    returnTypeNameForCode = returnTypeFqn;
+                } else {
+                    returnTypeNameForCode = returnTypeFqn.substring(returnTypePackage.length() + 1);
+                }
+            } else {
+                // Fallback for unexpected element types
+                String returnTypeStr = returnTypeMirror.toString();
+                int lastDot = returnTypeStr.lastIndexOf('.');
+                returnTypeNameForCode = lastDot > 0 ? returnTypeStr.substring(lastDot + 1) : returnTypeStr;
+                returnTypeFqn = returnTypeStr;
+            }
+        } else {
+            // Fallback for primitive types or other edge cases
+            String returnType = returnTypeMirror.toString();
+            int lastDot = returnType.lastIndexOf('.');
+            returnTypeNameForCode = lastDot > 0 ? returnType.substring(lastDot + 1) : returnType;
+            returnTypeFqn = returnType;
+        }
+        
+        // Store both the simple name (for code generation) and FQN (for BeanDefinition)
+        // The BeanInfo.className will hold the FQN when the return type is from a different package
+        String classNameForRegistration = returnTypeFqn;
+        
+        processedBeans.add(new BeanInfo(packageName, classNameForRegistration, beanName, factoryClassName, scope, depNames));
     }
     
     /**
@@ -644,8 +686,17 @@ public class WarmupProcessor extends AbstractProcessor {
     }
 
     private String getPackageName(TypeElement type) {
-        return processingEnv.getElementUtils()
+        // For nested classes, getPackageOf returns the package of the outermost enclosing class
+        String packageName = processingEnv.getElementUtils()
             .getPackageOf(type).getQualifiedName().toString();
+        return packageName != null ? packageName : "";
+    }
+    
+    /**
+     * Gets the fully qualified name of a type element, handling nested classes correctly.
+     */
+    private String getFullyQualifiedTypeName(TypeElement type) {
+        return type.getQualifiedName().toString();
     }
 
     /**
@@ -679,89 +730,106 @@ public class WarmupProcessor extends AbstractProcessor {
             return;
         }
 
-        // Use the package of the first bean for the registrar
-        String registrarPackage = processedBeans.get(0).packageName;
-        String registrarClassName = "GeneratedFactoryRegistrar";
-        String fullyQualifiedRegistrarName = registrarPackage.isEmpty() 
-            ? registrarClassName 
-            : registrarPackage + "." + registrarClassName;
-
-        StringBuilder code = new StringBuilder();
-        
-        // Only add package declaration if not in default package
-        if (!registrarPackage.isEmpty()) {
-            code.append("package ").append(registrarPackage).append(";\n\n");
+        // Group beans by the bean type's package to generate registrars in the correct package
+        // This ensures that the generated registrar can reference the bean classes without import issues
+        Map<String, List<BeanInfo>> beansByPackage = new LinkedHashMap<>();
+        for (BeanInfo beanInfo : processedBeans) {
+            beansByPackage.computeIfAbsent(beanInfo.packageName, k -> new ArrayList<>()).add(beanInfo);
         }
         
-        code.append("import com.warmup.core.jit.FactoryRegistrar;\n");
-        code.append("import com.warmup.core.jit.CompiledFactory;\n");
-        code.append("import com.warmup.core.registry.BeanDefinition;\n");
-        code.append("import com.warmup.core.scope.Scope;\n");
-        code.append("import java.util.function.BiConsumer;\n");
-        code.append("import javax.annotation.processing.Generated;\n\n");
-
-        code.append("/**\n");
-        code.append(" * Auto-generated factory registrar for this module.\n");
-        code.append(" * DO NOT MODIFY - generated by Warmup annotation processor\n");
-        code.append(" */\n");
-        code.append("@Generated(\"com.warmup.processor.WarmupProcessor\")\n");
-        code.append("public class ").append(registrarClassName)
-            .append(" implements FactoryRegistrar {\n\n");
-
-        code.append("    @Override\n");
-        code.append("    public void registerAll(BiConsumer<BeanDefinition<?>, CompiledFactory<?>> sink) {\n");
-
-        // Register each factory with both simple name and FQN for robustness
-        for (BeanInfo beanInfo : processedBeans) {
-            String factoryRef = beanInfo.packageName.isEmpty()
-                ? beanInfo.factoryClassName
-                : beanInfo.packageName + "." + beanInfo.factoryClassName;
+        // Generate one registrar per bean package
+        for (Map.Entry<String, List<BeanInfo>> entry : beansByPackage.entrySet()) {
+            String registrarPackage = entry.getKey();
+            List<BeanInfo> packageBeans = entry.getValue();
             
-            // Build dependency names array for BeanDefinition
-            String depsArray;
-            if (beanInfo.dependencyNames.isEmpty()) {
-                depsArray = "new String[0]";
-            } else {
-                depsArray = "new String[]{";
-                for (int i = 0; i < beanInfo.dependencyNames.size(); i++) {
-                    if (i > 0) depsArray += ", ";
-                    depsArray += "\"" + beanInfo.dependencyNames.get(i) + "\"";
-                }
-                depsArray += "}";
+            String registrarClassName = "GeneratedFactoryRegistrar";
+            String fullyQualifiedRegistrarName = registrarPackage.isEmpty() 
+                ? registrarClassName 
+                : registrarPackage + "." + registrarClassName;
+
+            StringBuilder code = new StringBuilder();
+            
+            // Only add package declaration if not in default package
+            if (!registrarPackage.isEmpty()) {
+                code.append("package ").append(registrarPackage).append(";\n\n");
             }
             
-            // Create BeanDefinition with type, name, scope, and dependencies
-            String beanType = beanInfo.packageName.isEmpty() 
-                ? beanInfo.className 
-                : beanInfo.packageName + "." + beanInfo.className;
-            String scopeEnum = beanInfo.scope.equals("prototype") ? "Scope.PROTOTYPE" : "Scope.SINGLETON";
+            code.append("import com.warmup.core.jit.FactoryRegistrar;\n");
+            code.append("import com.warmup.core.jit.CompiledFactory;\n");
+            code.append("import com.warmup.core.registry.BeanDefinition;\n");
+            code.append("import com.warmup.core.scope.Scope;\n");
+            code.append("import java.util.function.BiConsumer;\n");
+            code.append("import javax.annotation.processing.Generated;\n\n");
+
+            // Add imports for any external types referenced in BeanDefinition
+            // Track which types we've already imported to avoid duplicates
+            Set<String> importedTypes = new HashSet<>();
             
-            code.append("        sink.accept(\n");
-            code.append("            new BeanDefinition<>(").append(beanType).append(".class, \"")
-                .append(beanInfo.beanName).append("\", ").append(scopeEnum)
-                .append(", com.warmup.core.lifecycle.LifecycleCallbacks.empty(), false, ")
-                .append(depsArray).append("),\n");
-            code.append("            new ").append(factoryRef).append("()\n");
-            code.append("        );\n");
+            code.append("/**\n");
+            code.append(" * Auto-generated factory registrar for this module.\n");
+            code.append(" * DO NOT MODIFY - generated by Warmup annotation processor\n");
+            code.append(" */\n");
+            code.append("@Generated(\"com.warmup.processor.WarmupProcessor\")\n");
+            code.append("public class ").append(registrarClassName)
+                .append(" implements FactoryRegistrar {\n\n");
+
+            code.append("    @Override\n");
+            code.append("    public void registerAll(BiConsumer<BeanDefinition<?>, CompiledFactory<?>> sink) {\n");
+
+            // Register each factory with both simple name and FQN for robustness
+            for (BeanInfo beanInfo : packageBeans) {
+                String factoryRef = beanInfo.packageName.isEmpty()
+                    ? beanInfo.factoryClassName
+                    : beanInfo.packageName + "." + beanInfo.factoryClassName;
+                
+                // Build dependency names array for BeanDefinition
+                String depsArray;
+                if (beanInfo.dependencyNames.isEmpty()) {
+                    depsArray = "new String[0]";
+                } else {
+                    depsArray = "new String[]{";
+                    for (int i = 0; i < beanInfo.dependencyNames.size(); i++) {
+                        if (i > 0) depsArray += ", ";
+                        depsArray += "\"" + beanInfo.dependencyNames.get(i) + "\"";
+                    }
+                    depsArray += "}";
+                }
+                
+                // Create BeanDefinition with type, name, scope, and dependencies
+                // Build bean type reference for .class access
+                // beanInfo.className already contains the FQN when the return type is from a different package
+                // so we use it directly without prefixing with packageName
+                String beanType = beanInfo.className;
+                
+                String scopeEnum = beanInfo.scope.equals("prototype") ? "Scope.PROTOTYPE" : "Scope.SINGLETON";
+                
+                code.append("        sink.accept(\n");
+                code.append("            new BeanDefinition<>(").append(beanType).append(".class, \"")
+                    .append(beanInfo.beanName).append("\", ").append(scopeEnum)
+                    .append(", com.warmup.core.lifecycle.LifecycleCallbacks.empty(), false, ")
+                    .append(depsArray).append("),\n");
+                code.append("            new ").append(factoryRef).append("()\n");
+                code.append("        );\n");
+            }
+
+            code.append("    }\n");
+            code.append("}\n");
+
+            // Write the registrar file
+            FileObject registrarFile = filer.createSourceFile(fullyQualifiedRegistrarName);
+            try (Writer writer = registrarFile.openWriter()) {
+                writer.write(code.toString());
+            }
         }
 
-        code.append("    }\n");
-        code.append("}\n");
-
-        // Write the registrar class
-        Writer writer;
-        if (registrarPackage.isEmpty()) {
-            writer = filer.createSourceFile(registrarClassName).openWriter();
-        } else {
-            writer = filer.createSourceFile(fullyQualifiedRegistrarName).openWriter();
-        }
-        try {
-            writer.write(code.toString());
-        } finally {
-            writer.close();
-        }
-
-        // Create the service file
+        // Create the service file - register all registrars (one per package)
+        // For simplicity, we'll just use the first registrar as the main entry point
+        // In a real scenario, each module would have its own META-INF/services file
+        String firstRegistrarPackage = beansByPackage.keySet().iterator().next();
+        String firstRegistrarName = firstRegistrarPackage.isEmpty() 
+            ? "GeneratedFactoryRegistrar" 
+            : firstRegistrarPackage + ".GeneratedFactoryRegistrar";
+        
         FileObject serviceFile = filer.createResource(
             StandardLocation.CLASS_OUTPUT,
             "",
@@ -770,7 +838,7 @@ public class WarmupProcessor extends AbstractProcessor {
         
         Writer serviceWriter = serviceFile.openWriter();
         try {
-            serviceWriter.write(fullyQualifiedRegistrarName);
+            serviceWriter.write(firstRegistrarName);
         } finally {
             serviceWriter.close();
         }

@@ -149,8 +149,8 @@ class WarmupProcessorTest {
         );
 
         Compilation compilation = compiler.compile(source);
-        // Should generate a factory for the @Factory class
-        assertTrue(compilation.generatedSourceFile("test.AppConfig$$WarmupFactory").isPresent());
+        // Should generate a factory for the @Bean method (named AppConfig$$dataSource$$WarmupFactory)
+        assertTrue(compilation.generatedSourceFile("test.AppConfig$$dataSource$$WarmupFactory").isPresent());
     }
 
     @Test
@@ -176,8 +176,8 @@ class WarmupProcessorTest {
         );
 
         Compilation compilation = compiler.compile(source);
-        // Should generate a factory for the @Factory class
-        assertTrue(compilation.generatedSourceFile("test.AppConfig$$WarmupFactory").isPresent());
+        // Should generate a factory for the @Bean method (named AppConfig$$service$$WarmupFactory)
+        assertTrue(compilation.generatedSourceFile("test.AppConfig$$service$$WarmupFactory").isPresent());
     }
 
     @Test
