@@ -157,6 +157,22 @@ public interface BeanRegistry {
     }
     
     /**
+     * Retrieves a bean definition by name without Optional allocation.
+     * This is a performance-optimized method for hot paths that need to check existence.
+     * 
+     * @param <T> the bean type
+     * @param name the bean name
+     * @return the bean definition if found, null otherwise
+     * @see #getDefinition(String)
+     */
+    @SuppressWarnings("unchecked")
+    default <T> BeanDefinition<T> getDefinitionOrNull(String name) {
+        // Default implementation delegates to getDefinition and unwraps Optional
+        // Implementations should override for better performance
+        return (BeanDefinition<T>) getDefinition(name).orElse(null);
+    }
+    
+    /**
      * Returns the integer index for a bean name, assigning one if not yet assigned.
      * This enables fast indexed resolution avoiding String hashing overhead.
      * 

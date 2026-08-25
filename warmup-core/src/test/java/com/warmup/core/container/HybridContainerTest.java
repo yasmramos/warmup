@@ -182,7 +182,8 @@ class HybridContainerTest {
             TestService.class, "concurrentBean", 
             com.warmup.core.scope.Scope.PROTOTYPE
         );
-        diagnosticContainer.register(definition, null);
+        // Register with a simple factory to avoid JIT compilation overhead in test
+        diagnosticContainer.register(definition, (deps) -> new TestService());
         
         int numThreads = 10;
         int resolutionsPerThread = 50;

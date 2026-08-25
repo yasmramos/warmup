@@ -11,6 +11,7 @@ import com.warmup.core.lifecycle.LifecycleCallbacks;
 import com.warmup.core.registry.BeanDefinition;
 import com.warmup.core.registry.BeanRegistry;
 import com.warmup.core.registry.BeanRegistryImpl;
+import com.warmup.core.registry.ResolvedBeanDefinition;
 import com.warmup.core.scope.Scope;
 
 import java.util.*;
@@ -50,6 +51,10 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
     
     // Track which factories are from compile-time vs JIT for metrics
     private final Set<String> compileTimeFactoryNames = ConcurrentHashMap.newKeySet();
+    
+    // Cache of ResolvedBeanDefinition for performance optimization
+    // Maps bean name to wrapped definition with cached index and factory
+    private final Map<String, ResolvedBeanDefinition<?>> resolvedDefinitions = new ConcurrentHashMap<>();
     
     // Empty array constant to avoid allocation for beans without dependencies
     private static final Object[] EMPTY_ARGS = new Object[0];
@@ -301,40 +306,72 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
         }
         
         // Slow path: bean not yet cached, need to create it
-        BeanDefinition<T> definition = (BeanDefinition<T>) registry.getDefinition(name).orElse(null);
-        if (definition == null) {
+        BeanDefinition<T> baseDefinition = registry.getDefinitionOrNull(name);
+        if (baseDefinition == null) {
             throw new IllegalStateException("Bean not found: " + name);
         }
         
-        // Optimize prototype path: avoid lambda allocation by calling createBean directly
+        // Get or create resolved definition with cached index and factory
+        ResolvedBeanDefinition<T> resolvedDef = getOrComputeResolvedDefinition(baseDefinition);
+        
+        // Optimize prototype path: avoid lambda allocation and redundant factory lookups
         // Only use Supplier for SINGLETON scope which needs thread-safe lazy init
         T instance;
-        if (definition.scope() == Scope.PROTOTYPE) {
-            // Direct path for PROTOTYPE: no lambda, no Supplier, no Optional allocation
+        if (resolvedDef.scope() == Scope.PROTOTYPE) {
+            // Direct path for PROTOTYPE: get cached factory from resolved definition to avoid re-lookup
             // Apply init callback inline if lifecycle exists
             if (metricsEnabled) {
                 long startTime = System.nanoTime();
-                instance = createBean(definition);
-                // Apply init callback for prototype if lifecycle callbacks exist
-                if (definition.lifecycle().onInit() != null) {
-                    definition.lifecycle().onInit().onInit(instance);
+                CompiledFactory<T> factory = resolvedDef.getOrComputeFactory(factoryCache);
+                if (factory != null) {
+                    instance = createBeanWithFactory(resolvedDef, factory);
+                } else {
+                    // Fallback to reflection
+                    instance = createViaReflection(resolvedDef);
                 }
-                recordMetrics(definition, System.nanoTime() - startTime);
-            } else {
-                instance = createBean(definition);
                 // Apply init callback for prototype if lifecycle callbacks exist
-                if (definition.lifecycle().onInit() != null) {
-                    definition.lifecycle().onInit().onInit(instance);
+                if (resolvedDef.lifecycle().onInit() != null) {
+                    resolvedDef.lifecycle().onInit().onInit(instance);
+                }
+                recordMetrics(resolvedDef.getDefinition(), System.nanoTime() - startTime);
+            } else {
+                // Fast path without metrics: get cached factory from resolved definition directly
+                CompiledFactory<T> factory = resolvedDef.getOrComputeFactory(factoryCache);
+                if (factory != null) {
+                    instance = createBeanWithFactory(resolvedDef, factory);
+                } else {
+                    // Fallback to reflection
+                    instance = createViaReflection(resolvedDef);
+                }
+                // Apply init callback for prototype if lifecycle callbacks exist
+                if (resolvedDef.lifecycle().onInit() != null) {
+                    resolvedDef.lifecycle().onInit().onInit(instance);
                 }
             }
         } else {
-            // SINGLETON and CUSTOM scopes use registry.getInstance with Supplier
+            // SINGLETON and CUSTOM scopes use indexed resolution if index is cached
+            // Get cached index from resolved definition
+            int index = resolvedDef.getOrComputeIndex(registry);
+            if (index >= 0) {
+                // Try fast indexed resolution
+                T indexedInstance = (T) registry.getIfPresent(index);
+                if (indexedInstance != null) {
+                    // Instance already cached, return it
+                    if (metricsEnabled) {
+                        long startTime = System.nanoTime();
+                        recordMetrics(resolvedDef.getDefinition(), System.nanoTime() - startTime);
+                    }
+                    return indexedInstance;
+                }
+            }
+            
+            // Fall back to registry.getInstance with Supplier for creation
             if (metricsEnabled) {
                 long startTime = System.nanoTime();
-                instance = registry.getInstance(definition, () -> createBean(definition));
-                recordMetrics(definition, System.nanoTime() - startTime);
+                instance = registry.getInstance(resolvedDef.getDefinition(), () -> createBean(resolvedDef));
+                recordMetrics(resolvedDef.getDefinition(), System.nanoTime() - startTime);
             } else {
-                instance = registry.getInstance(definition, () -> createBean(definition));
+                instance = registry.getInstance(resolvedDef.getDefinition(), () -> createBean(resolvedDef));
             }
         }
         
@@ -595,8 +632,13 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
 
     // Internal methods
 
+    /**
+     * Creates a bean instance using its factory, avoiding redundant lookups.
+     * This optimized version receives a ResolvedBeanDefinition with cached data.
+     */
     @SuppressWarnings("unchecked")
-    private <T> T createBean(BeanDefinition<T> definition) {
+    private <T> T createBean(ResolvedBeanDefinition<T> resolvedDef) {
+        BeanDefinition<T> definition = resolvedDef.getDefinition();
         String name = definition.name();
         long compileTimeNs = 0;
         ResolutionDiagnostic.ResolutionPath path = null;
@@ -604,8 +646,8 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
         // Check if running in GraalVM native image mode - disable JIT
         boolean nativeImage = IS_NATIVE_IMAGE;
         
-        // Single lookup in unified factory cache for hot path
-        CompiledFactory<T> factory = (CompiledFactory<T>) factoryCache.get(name);
+        // Get cached factory from resolved definition to avoid redundant lookup
+        CompiledFactory<T> factory = resolvedDef.getOrComputeFactory(factoryCache);
         if (factory != null) {
             // Hot path: factory already cached, determine origin for metrics/diagnostic only if enabled
             if (metricsEnabled || diagnosticMode) {
@@ -627,28 +669,29 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
                 factory = jitCompiler.compile(definition.type(), getDependencyClasses(definition));
                 if (factory != null) {
                     factoryCache.put(name, factory);
+                    resolvedDef.setResolvedFactory(factory);
                     path = ResolutionDiagnostic.ResolutionPath.JIT;
                     jitHits.add(1);
                 } else {
                     // Factory is null (shouldn't happen, but be defensive)
                     path = ResolutionDiagnostic.ResolutionPath.REFLECTION_FALLBACK;
                     fallbackCount.add(1);
-                    return createViaReflection(definition);
+                    return createViaReflection(resolvedDef);
                 }
             } catch (CompilationException e) {
                 // Fallback to reflection
                 path = ResolutionDiagnostic.ResolutionPath.REFLECTION_FALLBACK;
                 fallbackCount.add(1);
-                return createViaReflection(definition);
+                return createViaReflection(resolvedDef);
             }
         } else {
             // Native image mode: skip JIT, go directly to fallback
             path = ResolutionDiagnostic.ResolutionPath.REFLECTION_FALLBACK;
             fallbackCount.add(1);
-            return createViaReflection(definition);
+            return createViaReflection(resolvedDef);
         }
         
-        // Create instance using factory
+        // Create instance using factory - pass factory directly to avoid re-lookup
         Object[] deps = resolveDependencies(definition);
         T instance = factory.create(deps);
         
@@ -658,6 +701,114 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
         }
         
         return instance;
+    }
+    
+    /**
+     * Overload for backward compatibility with existing call sites using BeanDefinition.
+     */
+    @SuppressWarnings("unchecked")
+    private <T> T createBean(BeanDefinition<T> definition) {
+        return createBean(getOrComputeResolvedDefinition(definition));
+    }
+
+    /**
+     * Gets or creates a CompiledFactory for the given bean definition.
+     * Returns the factory directly to avoid redundant lookups in the calling code.
+     * Returns null if factory creation fails and fallback is needed.
+     */
+    @SuppressWarnings("unchecked")
+    private <T> CompiledFactory<T> getOrCreateFactory(BeanDefinition<T> definition) {
+        String name = definition.name();
+        
+        // Check if running in GraalVM native image mode - disable JIT
+        boolean nativeImage = IS_NATIVE_IMAGE;
+        
+        // Single lookup in unified factory cache
+        CompiledFactory<T> factory = (CompiledFactory<T>) factoryCache.get(name);
+        if (factory != null) {
+            // Hot path: factory already cached
+            if (metricsEnabled) {
+                if (compileTimeFactoryNames.contains(name)) {
+                    compileTimeHits.add(1);
+                } else {
+                    jitHits.add(1);
+                }
+            }
+            return factory;
+        }
+        
+        if (!nativeImage) {
+            // Try JIT compilation and cache the result
+            try {
+                factory = jitCompiler.compile(definition.type(), getDependencyClasses(definition));
+                if (factory != null) {
+                    factoryCache.put(name, factory);
+                    if (metricsEnabled) {
+                        jitHits.add(1);
+                    }
+                    return factory;
+                }
+            } catch (CompilationException e) {
+                // Fall through to return null for fallback
+            }
+        }
+        
+        // Return null to signal fallback to reflection is needed
+        return null;
+    }
+
+    /**
+     * Gets or creates a ResolvedBeanDefinition wrapper with cached index and factory.
+     * This method provides thread-safe lazy initialization of the resolved definition cache.
+     */
+    @SuppressWarnings("unchecked")
+    private <T> ResolvedBeanDefinition<T> getOrComputeResolvedDefinition(BeanDefinition<T> baseDefinition) {
+        String name = baseDefinition.name();
+        ResolvedBeanDefinition<?> resolved = resolvedDefinitions.get(name);
+        if (resolved == null) {
+            // Create new resolved definition and attempt to cache it
+            ResolvedBeanDefinition<T> newResolved = new ResolvedBeanDefinition<>(baseDefinition);
+            ResolvedBeanDefinition<?> existing = resolvedDefinitions.putIfAbsent(name, newResolved);
+            resolved = (existing != null) ? existing : newResolved;
+        }
+        return (ResolvedBeanDefinition<T>) resolved;
+    }
+
+    /**
+     * Optimized bean creation that receives the factory directly, avoiding map lookup by name.
+     * Used in prototype resolution paths where the factory was already obtained.
+     */
+    @SuppressWarnings("unchecked")
+    private <T> T createBeanWithFactory(ResolvedBeanDefinition<T> resolvedDef, CompiledFactory<T> factory) {
+        Object[] deps = resolveDependencies(resolvedDef.getDefinition());
+        T instance = factory.create(deps);
+        
+        // Record diagnostic if enabled
+        if (diagnosticMode) {
+            ResolutionDiagnostic.ResolutionPath path = compileTimeFactoryNames.contains(resolvedDef.name()) 
+                ? ResolutionDiagnostic.ResolutionPath.COMPILE_TIME 
+                : ResolutionDiagnostic.ResolutionPath.JIT;
+            diagnostics.add(new ResolutionDiagnostic(resolvedDef.name(), resolvedDef.type(), path, 0L));
+        }
+        
+        return instance;
+    }
+    
+    /**
+     * Overload for backward compatibility with existing call sites using BeanDefinition.
+     */
+    @SuppressWarnings("unchecked")
+    private <T> T createBeanWithFactory(BeanDefinition<T> definition, CompiledFactory<T> factory) {
+        return createBeanWithFactory(getOrComputeResolvedDefinition(definition), factory);
+    }
+
+    /**
+     * Fallback bean creation via reflection for when factory is unavailable.
+     * Uses ResolvedBeanDefinition for consistency.
+     */
+    @SuppressWarnings("unchecked")
+    private <T> T createViaReflection(ResolvedBeanDefinition<T> resolvedDef) {
+        return createViaReflection(resolvedDef.getDefinition());
     }
 
     private Class<?>[] getDependencyClasses(BeanDefinition<?> definition) {
