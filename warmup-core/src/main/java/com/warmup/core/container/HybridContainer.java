@@ -292,20 +292,7 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
      */
     @SuppressWarnings("unchecked")
     public <T> T resolve(String name) {
-        // Fast-path: check if singleton is already cached
-        T cachedInstance = registry.getIfPresent(name);
-        if (cachedInstance != null) {
-            // When metrics enabled: record timing and resolution count
-            // When metrics disabled: bare return with no overhead
-            if (metricsEnabled) {
-                long startTime = System.nanoTime();
-                BeanDefinition<T> definition = (BeanDefinition<T>) registry.getDefinition(name).orElseThrow(() -> new IllegalStateException("Bean not found: " + name));
-                recordMetrics(definition, System.nanoTime() - startTime);
-            }
-            return cachedInstance;
-        }
-        
-        // Slow path: bean not yet cached, need to create it
+        // Get bean definition first to determine scope (avoids Optional allocation)
         BeanDefinition<T> baseDefinition = registry.getDefinitionOrNull(name);
         if (baseDefinition == null) {
             throw new IllegalStateException("Bean not found: " + name);
@@ -314,68 +301,71 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
         // Get or create resolved definition with cached index and factory
         ResolvedBeanDefinition<T> resolvedDef = getOrComputeResolvedDefinition(baseDefinition);
         
-        // Optimize prototype path: avoid lambda allocation and redundant factory lookups
-        // Only use Supplier for SINGLETON scope which needs thread-safe lazy init
-        T instance;
+        // OPTIMIZATION 1: For PROTOTYPE beans, skip singleton cache lookup entirely
+        // since prototypes are never cached. This avoids unnecessary ConcurrentHashMap.get()
         if (resolvedDef.scope() == Scope.PROTOTYPE) {
-            // Direct path for PROTOTYPE: get cached factory from resolved definition to avoid re-lookup
-            // Apply init callback inline if lifecycle exists
             if (metricsEnabled) {
                 long startTime = System.nanoTime();
                 CompiledFactory<T> factory = resolvedDef.getOrComputeFactory(factoryCache);
+                T instance;
                 if (factory != null) {
                     instance = createBeanWithFactory(resolvedDef, factory);
                 } else {
-                    // Fallback to reflection
                     instance = createViaReflection(resolvedDef);
                 }
-                // Apply init callback for prototype if lifecycle callbacks exist
                 if (resolvedDef.lifecycle().onInit() != null) {
                     resolvedDef.lifecycle().onInit().onInit(instance);
                 }
                 recordMetrics(resolvedDef.getDefinition(), System.nanoTime() - startTime);
+                return instance;
             } else {
-                // Fast path without metrics: get cached factory from resolved definition directly
                 CompiledFactory<T> factory = resolvedDef.getOrComputeFactory(factoryCache);
+                T instance;
                 if (factory != null) {
                     instance = createBeanWithFactory(resolvedDef, factory);
                 } else {
-                    // Fallback to reflection
                     instance = createViaReflection(resolvedDef);
                 }
-                // Apply init callback for prototype if lifecycle callbacks exist
                 if (resolvedDef.lifecycle().onInit() != null) {
                     resolvedDef.lifecycle().onInit().onInit(instance);
                 }
-            }
-        } else {
-            // SINGLETON and CUSTOM scopes use indexed resolution if index is cached
-            // Get cached index from resolved definition
-            int index = resolvedDef.getOrComputeIndex(registry);
-            if (index >= 0) {
-                // Try fast indexed resolution
-                T indexedInstance = (T) registry.getIfPresent(index);
-                if (indexedInstance != null) {
-                    // Instance already cached, return it
-                    if (metricsEnabled) {
-                        long startTime = System.nanoTime();
-                        recordMetrics(resolvedDef.getDefinition(), System.nanoTime() - startTime);
-                    }
-                    return indexedInstance;
-                }
-            }
-            
-            // Fall back to registry.getInstance with Supplier for creation
-            if (metricsEnabled) {
-                long startTime = System.nanoTime();
-                instance = registry.getInstance(resolvedDef.getDefinition(), () -> createBean(resolvedDef));
-                recordMetrics(resolvedDef.getDefinition(), System.nanoTime() - startTime);
-            } else {
-                instance = registry.getInstance(resolvedDef.getDefinition(), () -> createBean(resolvedDef));
+                return instance;
             }
         }
         
-        return instance;
+        // SINGLETON/CUSTOM path: use indexed resolution if index is cached
+        int index = resolvedDef.getOrComputeIndex(registry);
+        if (index >= 0) {
+            // Try fast indexed resolution first (avoids String hashing)
+            T indexedInstance = (T) registry.getIfPresent(index);
+            if (indexedInstance != null) {
+                if (metricsEnabled) {
+                    long startTime = System.nanoTime();
+                    recordMetrics(resolvedDef.getDefinition(), System.nanoTime() - startTime);
+                }
+                return indexedInstance;
+            }
+        }
+        
+        // Fall back to name-based lookup for singletons not yet cached
+        T cachedInstance = registry.getIfPresent(name);
+        if (cachedInstance != null) {
+            if (metricsEnabled) {
+                long startTime = System.nanoTime();
+                recordMetrics(resolvedDef.getDefinition(), System.nanoTime() - startTime);
+            }
+            return cachedInstance;
+        }
+        
+        // Singleton not yet created, use registry.getInstance for thread-safe lazy init
+        if (metricsEnabled) {
+            long startTime = System.nanoTime();
+            T instance = registry.getInstance(resolvedDef.getDefinition(), () -> createBean(resolvedDef));
+            recordMetrics(resolvedDef.getDefinition(), System.nanoTime() - startTime);
+            return instance;
+        } else {
+            return registry.getInstance(resolvedDef.getDefinition(), () -> createBean(resolvedDef));
+        }
     }
 
     /**
