@@ -863,11 +863,35 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
         }
         
         Object[] deps = new Object[definition.dependencies().length];
-        for (int i = 0; i < definition.dependencies().length; i++) {
-            Object dep = definition.dependencies()[i];
+        Object[] rawDeps = definition.dependencies();
+        int[] depIndices = definition.dependencyIndices();
+        
+        for (int i = 0; i < rawDeps.length; i++) {
+            Object dep = rawDeps[i];
             if (dep instanceof String depName) {
+                // Check if we have a cached index for this dependency
+                int cachedIdx = depIndices[i];
+                
+                // Lazy resolution: if index is -1, try to resolve it now
+                if (cachedIdx == -1) {
+                    cachedIdx = registry.indexOf(depName);
+                    depIndices[i] = cachedIdx;
+                }
+                
+                // If we have a valid cached index and the singleton is already instantiated,
+                // use fast indexed access (avoids String hashing and map lookup)
+                if (cachedIdx >= 0) {
+                    Object indexedInstance = registry.getIfPresent(cachedIdx);
+                    if (indexedInstance != null) {
+                        deps[i] = indexedInstance;
+                        continue;
+                    }
+                }
+                
+                // Fallback: resolve by name (handles prototypes, not-yet-cached, or forward references)
                 deps[i] = resolve(depName);
             } else {
+                // Direct object reference (not a bean name)
                 deps[i] = dep;
             }
         }

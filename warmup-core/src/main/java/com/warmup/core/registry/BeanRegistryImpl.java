@@ -73,6 +73,29 @@ public class BeanRegistryImpl implements BeanRegistry {
         // Grow the index array if needed
         ensureCapacity(index + 1);
         
+        // Pre-resolve dependency indices for fast path resolution
+        // This caches the bean index for each String-named dependency
+        Object[] dependencies = definition.dependencies();
+        int[] depIndices = definition.dependencyIndices();
+        for (int i = 0; i < dependencies.length; i++) {
+            Object dep = dependencies[i];
+            if (dep instanceof String depName) {
+                // Try to resolve the index immediately
+                Integer depIndex = nameToIndex.get(depName);
+                if (depIndex != null) {
+                    // Dependency already registered, cache its index
+                    depIndices[i] = depIndex;
+                } else {
+                    // Dependency not yet registered, leave as -1 for lazy resolution
+                    // Will be resolved on first creation if still -1
+                    depIndices[i] = -1;
+                }
+            } else {
+                // Direct object reference, mark with -2 (no index lookup needed)
+                depIndices[i] = -2;
+            }
+        }
+        
         // Register by name (with cached index)
         definitionsByName.put(name, definition);
         
