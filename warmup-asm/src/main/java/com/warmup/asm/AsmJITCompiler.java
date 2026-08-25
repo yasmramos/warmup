@@ -6,6 +6,7 @@ import com.warmup.core.jit.CompilationStats;
 import com.warmup.core.jit.JITCompiler;
 import org.objectweb.asm.*;
 
+import java.lang.invoke.MethodHandles;
 import java.lang.reflect.Method;
 import java.util.Arrays;
 import java.util.Optional;
@@ -17,12 +18,12 @@ import java.util.concurrent.atomic.AtomicLong;
  * 
  * Generates bytecode for CompiledFactory implementations at runtime.
  * Features:
- * - Custom ClassLoader with unload support (prevents metaspace leaks)
+ * - Uses MethodHandles.Lookup.defineHiddenClass for efficient class definition without per-bean ClassLoader
  * - Thread-safe compilation cache
  * - Background compilation support via CompletableFuture
  * 
  * Trade-offs:
- * - Uses per-bean ClassLoaders for unload capability (memory overhead)
+ * - Hidden classes allow individual unloading without ClassLoader overhead
  * - Cache stratification: L1 (compile-time), L2 (JIT), L3 (pending)
  */
 public class AsmJITCompiler implements JITCompiler {
@@ -33,8 +34,9 @@ public class AsmJITCompiler implements JITCompiler {
     // Pending compilations for async tracking
     private final ConcurrentHashMap<Class<?>, CompletableFuture<CompiledFactory<?>>> pendingCompilations = new ConcurrentHashMap<>();
     
-    // ClassLoader references for unloading (weak references allow GC)
-    private final ConcurrentHashMap<Class<?>, CustomClassLoader> classLoaders = new ConcurrentHashMap<>();
+    // Track hidden class holders for unloading (weak references allow GC)
+    // Key: bean class, Value: the hidden class instance (held to prevent premature GC)
+    private final ConcurrentHashMap<Class<?>, Class<?>> hiddenClasses = new ConcurrentHashMap<>();
     
     // Generation counter for hot-reload: avoids LinkageError by using unique class names per reload
     private final ConcurrentHashMap<Class<?>, AtomicLong> generationCounters = new ConcurrentHashMap<>();
@@ -65,21 +67,22 @@ public class AsmJITCompiler implements JITCompiler {
             // Generate bytecode with unique class name per generation to avoid LinkageError on reload
             byte[] bytecode = generateFactoryBytecode(beanClass, dependencyClasses, generation);
             
-            // Create custom ClassLoader for this bean (allows unloading)
-            CustomClassLoader classLoader = new CustomClassLoader(beanClass);
+            // Use MethodHandles.Lookup.defineHiddenClass to define the factory without a custom ClassLoader
+            // This allows individual unloading when the Lookup/hidden class becomes unreachable
+            MethodHandles.Lookup lookup = MethodHandles.privateLookupIn(beanClass, MethodHandles.lookup());
             
-            // Define the class with generation suffix to avoid name collision on reload
-            String className = beanClass.getName() + "$$WarmupFactory$" + generation;
-            @SuppressWarnings("unchecked")
-            Class<? extends CompiledFactory<T>> factoryClass = (Class<? extends CompiledFactory<T>>) 
-                classLoader.defineClass(className, bytecode);
+            // Define as hidden class - no need for custom ClassLoader
+            // Hidden classes are unloaded when their Lookup and all instances become unreachable
+            // Note: defineHiddenClass doesn't use the class name directly; it's inferred from bytecode
+            Class<?> factoryClass = lookup.defineHiddenClass(bytecode, true, MethodHandles.Lookup.ClassOption.NESTMATE).lookupClass();
             
             // Instantiate the factory
-            CompiledFactory<T> factory = factoryClass.getDeclaredConstructor().newInstance();
+            @SuppressWarnings("unchecked")
+            CompiledFactory<T> factory = (CompiledFactory<T>) factoryClass.getDeclaredConstructor().newInstance();
             
-            // Cache factory and ClassLoader
+            // Cache factory and track hidden class reference for potential unload tracking
             factoryCache.put(beanClass, factory);
-            classLoaders.put(beanClass, classLoader);
+            hiddenClasses.put(beanClass, factoryClass);
             
             successfulCompilations.incrementAndGet();
             totalCompilationTimeNs.addAndGet(System.nanoTime() - startTime);
@@ -140,14 +143,11 @@ public class AsmJITCompiler implements JITCompiler {
     @Override
     public boolean unloadFactory(Class<?> beanClass) {
         CompiledFactory<?> removed = factoryCache.remove(beanClass);
-        CustomClassLoader classLoader = classLoaders.remove(beanClass);
+        Class<?> hiddenClass = hiddenClasses.remove(beanClass);
         
-        if (classLoader != null) {
-            classLoader.unload();
-            return true;
-        }
-        
-        return removed != null;
+        // Hidden classes are unloaded when the Lookup and all instances become unreachable
+        // Removing from the map allows GC to collect them
+        return removed != null || hiddenClass != null;
     }
 
     @Override
@@ -163,9 +163,8 @@ public class AsmJITCompiler implements JITCompiler {
 
     @Override
     public void clear() {
-        // Unload all factories
-        classLoaders.forEach((beanClass, loader) -> loader.unload());
-        classLoaders.clear();
+        // Clear all caches - hidden classes will be GC'd when no longer referenced
+        hiddenClasses.clear();
         factoryCache.clear();
         pendingCompilations.clear();
     }
@@ -301,34 +300,5 @@ public class AsmJITCompiler implements JITCompiler {
         cw.visitEnd();
         
         return cw.toByteArray();
-    }
-
-    /**
-     * Custom ClassLoader that supports unloading of generated classes.
-     * By clearing the reference and allowing GC, the classes can be unloaded.
-     */
-    private static class CustomClassLoader extends ClassLoader {
-        
-        private volatile boolean unloaded = false;
-
-        CustomClassLoader(Class<?> beanClass) {
-            // Use bean's ClassLoader as parent for visibility
-            super(beanClass.getClassLoader());
-        }
-
-        /**
-         * Defines a class from bytecode.
-         */
-        Class<?> defineClass(String name, byte[] bytecode) {
-            return defineClass(name, bytecode, 0, bytecode.length);
-        }
-
-        /**
-         * Marks this ClassLoader as unloaded, allowing GC.
-         */
-        void unload() {
-            unloaded = true;
-            // Clear any internal caches if needed
-        }
     }
 }

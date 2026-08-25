@@ -66,15 +66,15 @@ public class BeanRegistryImpl implements BeanRegistry {
             throw new IllegalStateException("Bean already registered with name: " + name);
         }
         
-        // Register by name
-        definitionsByName.put(name, definition);
-        
         // Assign index for indexed resolution
         int index = nextIndex.getAndIncrement();
         nameToIndex.put(name, index);
         
         // Grow the index array if needed
         ensureCapacity(index + 1);
+        
+        // Register by name (with cached index)
+        definitionsByName.put(name, definition);
         
         // Register by type (primary beans override non-primary)
         definitionsByType.compute(definition.type(), (type, existing) -> {
