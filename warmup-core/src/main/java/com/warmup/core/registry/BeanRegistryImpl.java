@@ -46,7 +46,7 @@ public class BeanRegistryImpl implements BeanRegistry {
     // Array-backed storage for singleton instances indexed by integer
     // Using Object[] with VarHandle for cheaper reads than AtomicReferenceArray volatile access
     // VarHandle.getOpaque provides acquire semantics for safe publication without full volatile cost
-    private Object[] singletonInstancesByIndex = new Object[64];
+    private volatile Object[] singletonInstancesByIndex = new Object[64];
     // VarHandle for array element access with acquire/release semantics
     private static final VarHandle ARRAY_ELEMENT_HANDLE;
     static {
@@ -72,6 +72,29 @@ public class BeanRegistryImpl implements BeanRegistry {
         
         // Grow the index array if needed
         ensureCapacity(index + 1);
+        
+        // Pre-resolve dependency indices for fast path resolution
+        // This caches the bean index for each String-named dependency
+        Object[] dependencies = definition.dependencies();
+        int[] depIndices = definition.dependencyIndices();
+        for (int i = 0; i < dependencies.length; i++) {
+            Object dep = dependencies[i];
+            if (dep instanceof String depName) {
+                // Try to resolve the index immediately
+                Integer depIndex = nameToIndex.get(depName);
+                if (depIndex != null) {
+                    // Dependency already registered, cache its index
+                    depIndices[i] = depIndex;
+                } else {
+                    // Dependency not yet registered, leave as -1 for lazy resolution
+                    // Will be resolved on first creation if still -1
+                    depIndices[i] = -1;
+                }
+            } else {
+                // Direct object reference, mark with -2 (no index lookup needed)
+                depIndices[i] = -2;
+            }
+        }
         
         // Register by name (with cached index)
         definitionsByName.put(name, definition);
@@ -313,11 +336,13 @@ public class BeanRegistryImpl implements BeanRegistry {
     @Override
     @SuppressWarnings("unchecked")
     public <T> T getIfPresent(int index) {
-        if (index < 0 || index >= singletonInstancesByIndex.length) {
+        // Read volatile reference once for consistent view
+        Object[] arr = singletonInstancesByIndex;
+        if (index < 0 || index >= arr.length) {
             return null;
         }
         // Use getOpaque for cheaper read than volatile get, with acquire semantics for safe publication
-        return (T) ARRAY_ELEMENT_HANDLE.getOpaque(singletonInstancesByIndex, index);
+        return (T) ARRAY_ELEMENT_HANDLE.getOpaque(arr, index);
     }
     
     @Override

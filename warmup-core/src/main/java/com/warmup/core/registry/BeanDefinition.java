@@ -17,6 +17,13 @@ public class BeanDefinition<T> {
     private final Object[] dependencies;
     /** Cached index for fast indexed singleton resolution (-1 if not yet assigned) */
     private int cachedIndex = -1;
+    /** 
+     * Cached indices for dependencies that are String bean names.
+     * For each dependency: if it's a String name, stores the resolved bean index;
+     * if it's a direct object reference, stores -2 (special marker).
+     * Array length matches dependencies.length. -1 means not yet resolved.
+     */
+    private final int[] dependencyIndices;
     
     /**
      * Creates a bean definition with default values.
@@ -43,6 +50,9 @@ public class BeanDefinition<T> {
         this.lifecycle = lifecycle;
         this.isPrimary = isPrimary;
         this.dependencies = dependencies;
+        this.dependencyIndices = new int[dependencies.length];
+        // Initialize all indices to -1 (not yet resolved)
+        java.util.Arrays.fill(this.dependencyIndices, -1);
     }
     
     public Class<T> type() {
@@ -90,5 +100,22 @@ public class BeanDefinition<T> {
      */
     public void setCachedIndex(int index) {
         this.cachedIndex = index;
+    }
+    
+    /**
+     * Gets the array of cached dependency indices.
+     * @return the dependency indices array (mutable for lazy resolution)
+     */
+    public int[] dependencyIndices() {
+        return dependencyIndices;
+    }
+    
+    /**
+     * Checks if a dependency at the given index is a String name that needs resolution.
+     * @param depIndex the index in the dependencies array
+     * @return true if the dependency is a String name, false if it's a direct object reference
+     */
+    public boolean isDependencyName(int depIndex) {
+        return depIndex >= 0 && depIndex < dependencies.length && dependencies[depIndex] instanceof String;
     }
 }
