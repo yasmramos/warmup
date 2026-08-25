@@ -86,7 +86,8 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
     private final boolean metricsEnabled;
     
     // Background warmup executor with semaphore for backpressure
-    private final ExecutorService warmupExecutor;
+    // Lazily initialized to avoid allocation when not using dynamic registration
+    private volatile ExecutorService warmupExecutor;
     private final Semaphore warmupSemaphore;
     
     /**
@@ -192,14 +193,8 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
         this.autoDiscoverFactories = config.autoDiscoverFactories();
         this.metricsEnabled = config.metricsEnabled();
         this.warmupSemaphore = new Semaphore(config.maxPendingCompilations());
-        this.warmupExecutor = Executors.newFixedThreadPool(
-            Math.max(2, Runtime.getRuntime().availableProcessors() / 2),
-            r -> {
-                Thread t = new Thread(r, "warmup-compiler");
-                t.setDaemon(true);
-                return t;
-            }
-        );
+        // Lazy initialization of warmupExecutor - created on first use
+        this.warmupExecutor = null;
         
         // Auto-discover and register compile-time factories once at startup
         if (autoDiscoverFactories) {
@@ -239,18 +234,8 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
             compileTimeFactoryNames.add(definition.name());
         }
         
-        // Register in dependency graph - optimized to avoid Stream allocation
-        String[] deps;
-        Object[] dependencies = definition.dependencies();
-        if (dependencies.length == 0) {
-            deps = EMPTY_STRING_ARRAY;
-        } else {
-            deps = new String[dependencies.length];
-            for (int i = 0; i < dependencies.length; i++) {
-                deps[i] = dependencies[i].toString();
-            }
-        }
-        dependencyGraph.registerBean(definition.name(), deps);
+        // Register in dependency graph - use Object[] overload to avoid String[] allocation
+        dependencyGraph.registerBean(definition.name(), definition.dependencies());
     }
 
     /**
@@ -263,18 +248,8 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
     public <T> void registerDynamic(BeanDefinition<T> definition) {
         registry.register(definition);
         
-        // Register in dependency graph - optimized to avoid Stream allocation
-        String[] deps;
-        Object[] dependencies = definition.dependencies();
-        if (dependencies.length == 0) {
-            deps = EMPTY_STRING_ARRAY;
-        } else {
-            deps = new String[dependencies.length];
-            for (int i = 0; i < dependencies.length; i++) {
-                deps[i] = dependencies[i].toString();
-            }
-        }
-        dependencyGraph.registerBean(definition.name(), deps);
+        // Register in dependency graph - use Object[] overload to avoid String[] allocation
+        dependencyGraph.registerBean(definition.name(), definition.dependencies());
         
         // Trigger background warmup
         triggerBackgroundWarmup(definition);
@@ -497,7 +472,10 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
      * Implements AutoCloseable for try-with-resources support.
      */
     public void shutdown() {
-        warmupExecutor.shutdownNow();
+        ExecutorService executor = warmupExecutor;
+        if (executor != null) {
+            executor.shutdownNow();
+        }
         registry.clear();
         jitCompiler.clear();
     }
@@ -810,8 +788,8 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
         for (int i = 0; i < deps.length; i++) {
             Object dep = deps[i];
             if (dep instanceof String depName) {
-                // Resolve dependency name to get its type
-                BeanDefinition<?> d = registry.getDefinition(depName).orElse(null);
+                // Resolve dependency name to get its type - use getDefinitionOrNull to avoid Optional allocation
+                BeanDefinition<?> d = registry.getDefinitionOrNull(depName);
                 if (d == null) {
                     throw new IllegalStateException(
                         "Unknown dependency '" + depName + "' in bean '" + definition.name() + 
@@ -989,6 +967,24 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
     }
 
     private <T> void triggerBackgroundWarmup(BeanDefinition<T> definition) {
+        // Lazy initialization of warmup executor on first use
+        ExecutorService executor = warmupExecutor;
+        if (executor == null) {
+            synchronized (this) {
+                executor = warmupExecutor;
+                if (executor == null) {
+                    warmupExecutor = executor = Executors.newFixedThreadPool(
+                        Math.max(2, Runtime.getRuntime().availableProcessors() / 2),
+                        r -> {
+                            Thread t = new Thread(r, "warmup-compiler");
+                            t.setDaemon(true);
+                            return t;
+                        }
+                    );
+                }
+            }
+        }
+        
         // Check if all dependencies are registered before attempting warmup
         for (Object dep : definition.dependencies()) {
             if (dep instanceof String depName && !registry.contains(depName)) {
