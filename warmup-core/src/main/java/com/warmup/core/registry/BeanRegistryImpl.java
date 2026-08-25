@@ -20,11 +20,15 @@ import java.util.Set;
  * - Separate storage for definitions and instances (memory efficient)
  * - Supports singleton caching and prototype factories
  * - Experimental: indexed access for integer-based fast path (avoids String hashing)
+ * - Pre-computed ResolvedBeanDefinition wrappers for single-lookup resolution
  */
 public class BeanRegistryImpl implements BeanRegistry {
 
     // Bean definitions indexed by name
     private final ConcurrentMap<String, BeanDefinition<?>> definitionsByName = new ConcurrentHashMap<>();
+    
+    // Pre-computed resolved bean definitions indexed by name (for single-lookup resolution)
+    private final ConcurrentMap<String, ResolvedBeanDefinition<?>> resolvedByName = new ConcurrentHashMap<>();
     
     // Bean definitions indexed by type for quick type-based lookup
     private final ConcurrentMap<Class<?>, BeanDefinition<?>> definitionsByType = new ConcurrentHashMap<>();
@@ -98,6 +102,10 @@ public class BeanRegistryImpl implements BeanRegistry {
         
         // Register by name (with cached index)
         definitionsByName.put(name, definition);
+        
+        // Create and cache the ResolvedBeanDefinition with pre-computed index
+        ResolvedBeanDefinition<T> resolvedDef = new ResolvedBeanDefinition<>(definition, index);
+        resolvedByName.put(name, resolvedDef);
         
         // Register by type (primary beans override non-primary)
         definitionsByType.compute(definition.type(), (type, existing) -> {
@@ -307,6 +315,7 @@ public class BeanRegistryImpl implements BeanRegistry {
             ARRAY_ELEMENT_HANDLE.setRelease(singletonInstancesByIndex, i, null);
         }
         definitionsByName.clear();
+        resolvedByName.clear();
         definitionsByType.clear();
         typeToNameMap.clear();
         nameToIndex.clear();
@@ -355,6 +364,12 @@ public class BeanRegistryImpl implements BeanRegistry {
     public int indexOf(String name) {
         Integer index = nameToIndex.get(name);
         return index != null ? index : -1;
+    }
+
+    @Override
+    @SuppressWarnings("unchecked")
+    public <T> ResolvedBeanDefinition<T> getResolvedOrNull(String name) {
+        return (ResolvedBeanDefinition<T>) resolvedByName.get(name);
     }
 
     /**

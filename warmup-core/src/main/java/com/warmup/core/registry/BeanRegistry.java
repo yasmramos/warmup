@@ -199,4 +199,18 @@ public interface BeanRegistry {
     default int indexOf(String name) {
         throw new UnsupportedOperationException("Index-based resolution not supported");
     }
+    
+    /**
+     * Retrieves a pre-computed ResolvedBeanDefinition by name without Optional allocation.
+     * This provides single-lookup access to resolved bean definitions with cached index and factory.
+     * 
+     * @param <T> the bean type
+     * @param name the bean name
+     * @return the ResolvedBeanDefinition if found, null otherwise
+     */
+    @SuppressWarnings("unchecked")
+    default <T> ResolvedBeanDefinition<T> getResolvedOrNull(String name) {
+        // Default implementation returns null - to be overridden by implementations
+        return null;
+    }
 }

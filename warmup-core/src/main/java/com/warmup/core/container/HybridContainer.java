@@ -52,12 +52,9 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
     // Track which factories are from compile-time vs JIT for metrics
     private final Set<String> compileTimeFactoryNames = ConcurrentHashMap.newKeySet();
     
-    // Cache of ResolvedBeanDefinition for performance optimization
-    // Maps bean name to wrapped definition with cached index and factory
-    private final Map<String, ResolvedBeanDefinition<?>> resolvedDefinitions = new ConcurrentHashMap<>();
-    
     // Cache for type-based resolution to avoid Optional allocation and double lookup
     // Maps bean type directly to ResolvedBeanDefinition for fast path in resolve(Class)
+    // Note: resolvedDefinitions by name has been moved to BeanRegistryImpl for single-lookup optimization
     private final Map<Class<?>, ResolvedBeanDefinition<?>> resolvedDefinitionsByType = new ConcurrentHashMap<>();
     
     // Empty array constant to avoid allocation for beans without dependencies
@@ -271,14 +268,11 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
      */
     @SuppressWarnings("unchecked")
     public <T> T resolve(String name) {
-        // Get bean definition first to determine scope (avoids Optional allocation)
-        BeanDefinition<T> baseDefinition = registry.getDefinitionOrNull(name);
-        if (baseDefinition == null) {
+        // Single lookup: get pre-computed ResolvedBeanDefinition directly from registry
+        ResolvedBeanDefinition<T> resolvedDef = registry.getResolvedOrNull(name);
+        if (resolvedDef == null) {
             throw new IllegalStateException("Bean not found: " + name);
         }
-        
-        // Get or create resolved definition with cached index and factory
-        ResolvedBeanDefinition<T> resolvedDef = getOrComputeResolvedDefinition(baseDefinition);
         
         // OPTIMIZATION 1: For PROTOTYPE beans, skip singleton cache lookup entirely
         // since prototypes are never cached. This avoids unnecessary ConcurrentHashMap.get()
@@ -773,7 +767,13 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
      */
     @SuppressWarnings("unchecked")
     private <T> T createBean(BeanDefinition<T> definition) {
-        return createBean(getOrComputeResolvedDefinition(definition));
+        // Use registry's pre-computed ResolvedBeanDefinition for single lookup
+        ResolvedBeanDefinition<T> resolvedDef = registry.getResolvedOrNull(definition.name());
+        if (resolvedDef == null) {
+            // Fallback to legacy path if not found (should not happen in normal operation)
+            return createBean(getOrComputeResolvedDefinition(definition));
+        }
+        return createBean(resolvedDef);
     }
 
     /**
@@ -825,26 +825,32 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
     /**
      * Gets or creates a ResolvedBeanDefinition wrapper with cached index and factory.
      * This method provides thread-safe lazy initialization of the resolved definition cache.
+     * Note: Now delegates to registry.getResolvedOrNull() for single-lookup optimization.
      */
     @SuppressWarnings("unchecked")
     private <T> ResolvedBeanDefinition<T> getOrComputeResolvedDefinition(BeanDefinition<T> baseDefinition) {
-        String name = baseDefinition.name();
-        ResolvedBeanDefinition<?> resolved = resolvedDefinitions.get(name);
-        if (resolved == null) {
-            // Create new resolved definition and attempt to cache it
-            ResolvedBeanDefinition<T> newResolved = new ResolvedBeanDefinition<>(baseDefinition);
-            ResolvedBeanDefinition<?> existing = resolvedDefinitions.putIfAbsent(name, newResolved);
-            resolved = (existing != null) ? existing : newResolved;
+        // Try to get pre-computed ResolvedBeanDefinition from registry first
+        ResolvedBeanDefinition<T> resolved = registry.getResolvedOrNull(baseDefinition.name());
+        if (resolved != null) {
+            return resolved;
         }
-        return (ResolvedBeanDefinition<T>) resolved;
+        // Fallback: create new wrapper (should not happen in normal operation)
+        return new ResolvedBeanDefinition<>(baseDefinition);
     }
 
     /**
      * Wraps a BeanDefinition into a ResolvedBeanDefinition with cached index and factory.
      * This is a helper method for populating the type-based cache in resolve(Class).
+     * Uses registry's pre-computed ResolvedBeanDefinition when available.
      */
     @SuppressWarnings("unchecked")
     private <T> ResolvedBeanDefinition<T> wrapResolvedDefinition(BeanDefinition<T> baseDefinition) {
+        // Try to get pre-computed ResolvedBeanDefinition from registry first
+        ResolvedBeanDefinition<T> resolved = registry.getResolvedOrNull(baseDefinition.name());
+        if (resolved != null) {
+            return resolved;
+        }
+        // Fallback: create new wrapper (should not happen in normal operation)
         return new ResolvedBeanDefinition<>(baseDefinition);
     }
 
@@ -873,7 +879,13 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
      */
     @SuppressWarnings("unchecked")
     private <T> T createBeanWithFactory(BeanDefinition<T> definition, CompiledFactory<T> factory) {
-        return createBeanWithFactory(getOrComputeResolvedDefinition(definition), factory);
+        // Use registry's pre-computed ResolvedBeanDefinition for single lookup
+        ResolvedBeanDefinition<T> resolvedDef = registry.getResolvedOrNull(definition.name());
+        if (resolvedDef == null) {
+            // Fallback to legacy path if not found (should not happen in normal operation)
+            return createBeanWithFactory(getOrComputeResolvedDefinition(definition), factory);
+        }
+        return createBeanWithFactory(resolvedDef, factory);
     }
 
     /**

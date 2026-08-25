@@ -33,6 +33,18 @@ public class ResolvedBeanDefinition<T> {
     }
     
     /**
+     * Creates a ResolvedBeanDefinition with pre-cached index.
+     * This constructor avoids the lazy index computation overhead.
+     * 
+     * @param definition the original bean definition
+     * @param index the pre-computed bean index
+     */
+    public ResolvedBeanDefinition(BeanDefinition<T> definition, int index) {
+        this.definition = definition;
+        this.resolvedIndex = index;
+    }
+    
+    /**
      * Gets the original bean definition.
      */
     public BeanDefinition<T> getDefinition() {
