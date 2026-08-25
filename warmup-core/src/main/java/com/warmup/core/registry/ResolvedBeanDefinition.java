@@ -28,6 +28,9 @@ public class ResolvedBeanDefinition<T> {
     /** Cached CompiledFactory to avoid repeated factoryCache lookups */
     private volatile CompiledFactory<T> resolvedFactory;
     
+    /** Cached singleton instance for fast-path resolution (null for PROTOTYPE scope) */
+    private volatile T cachedInstance;
+    
     public ResolvedBeanDefinition(BeanDefinition<T> definition) {
         this.definition = definition;
     }
@@ -98,6 +101,26 @@ public class ResolvedBeanDefinition<T> {
      */
     public void setResolvedFactory(CompiledFactory<T> factory) {
         this.resolvedFactory = factory;
+    }
+    
+    /**
+     * Gets the cached singleton instance for fast-path resolution.
+     * Returns null if not yet cached or if this is a PROTOTYPE bean.
+     * 
+     * @return the cached instance, or null if not available
+     */
+    public T getCachedInstance() {
+        return cachedInstance;
+    }
+    
+    /**
+     * Sets the cached singleton instance after first creation.
+     * Only called for SINGLETON/CUSTOM scope beans.
+     * 
+     * @param instance the created singleton instance
+     */
+    public void setCachedInstance(T instance) {
+        this.cachedInstance = instance;
     }
     
     // Delegate all BeanDefinition methods for transparency

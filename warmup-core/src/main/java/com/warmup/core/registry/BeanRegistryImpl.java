@@ -274,6 +274,11 @@ public class BeanRegistryImpl implements BeanRegistry {
             if (definition.isPrimary()) {
                 typeToNameMap.remove(definition.type());
             }
+            // Invalidate cached instance in ResolvedBeanDefinition to prevent stale references
+            ResolvedBeanDefinition<?> resolvedDef = resolvedByName.get(name);
+            if (resolvedDef != null) {
+                resolvedDef.setCachedInstance(null);
+            }
             return true;
         }
         return false;
@@ -308,6 +313,9 @@ public class BeanRegistryImpl implements BeanRegistry {
                 }
             }
         });
+        
+        // Invalidate cached instances in all ResolvedBeanDefinitions before clearing
+        resolvedByName.values().forEach(resolvedDef -> resolvedDef.setCachedInstance(null));
         
         singletonInstances.clear();
         // Clear indexed array using release semantics

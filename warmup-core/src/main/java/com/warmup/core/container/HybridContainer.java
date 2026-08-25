@@ -326,6 +326,17 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
             }
         }
         
+        // OPTIMIZATION 2: Fast-path for SINGLETON/CUSTOM with cached instance
+        // Skip index lookup and Map.get() if instance is already cached in ResolvedBeanDefinition
+        T cachedInstance = resolvedDef.getCachedInstance();
+        if (cachedInstance != null) {
+            if (metricsEnabled) {
+                long startTime = System.nanoTime();
+                recordMetrics(resolvedDef.getDefinition(), System.nanoTime() - startTime);
+            }
+            return cachedInstance;
+        }
+        
         // SINGLETON/CUSTOM path: use indexed resolution if index is cached
         int index = resolvedDef.getOrComputeIndex(registry);
         if (index >= 0) {
@@ -341,23 +352,28 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
         }
         
         // Fall back to name-based lookup for singletons not yet cached
-        T cachedInstance = registry.getIfPresent(name);
-        if (cachedInstance != null) {
+        T nameBasedInstance = registry.getIfPresent(name);
+        if (nameBasedInstance != null) {
             if (metricsEnabled) {
                 long startTime = System.nanoTime();
                 recordMetrics(resolvedDef.getDefinition(), System.nanoTime() - startTime);
             }
-            return cachedInstance;
+            return nameBasedInstance;
         }
         
         // Singleton not yet created, use registry.getInstance for thread-safe lazy init
         if (metricsEnabled) {
             long startTime = System.nanoTime();
             T instance = registry.getInstance(resolvedDef.getDefinition(), () -> createBean(resolvedDef));
+            // Publish the created instance for fast-path on subsequent resolutions
+            resolvedDef.setCachedInstance(instance);
             recordMetrics(resolvedDef.getDefinition(), System.nanoTime() - startTime);
             return instance;
         } else {
-            return registry.getInstance(resolvedDef.getDefinition(), () -> createBean(resolvedDef));
+            T instance = registry.getInstance(resolvedDef.getDefinition(), () -> createBean(resolvedDef));
+            // Publish the created instance for fast-path on subsequent resolutions
+            resolvedDef.setCachedInstance(instance);
+            return instance;
         }
     }
 
@@ -445,6 +461,17 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
             }
         }
         
+        // OPTIMIZATION 2: Fast-path for SINGLETON/CUSTOM with cached instance
+        // Skip index lookup and Map.get() if instance is already cached in ResolvedBeanDefinition
+        T cachedInstance = resolvedDef.getCachedInstance();
+        if (cachedInstance != null) {
+            if (metricsEnabled) {
+                long startTime = System.nanoTime();
+                recordMetrics(resolvedDef.getDefinition(), System.nanoTime() - startTime);
+            }
+            return cachedInstance;
+        }
+        
         // SINGLETON/CUSTOM path: use indexed resolution if index is cached
         int index = resolvedDef.getOrComputeIndex(registry);
         if (index >= 0) {
@@ -461,23 +488,28 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
         
         // Fall back to name-based lookup for singletons not yet cached
         String name = resolvedDef.name();
-        T cachedInstance = registry.getIfPresent(name);
-        if (cachedInstance != null) {
+        T nameBasedInstance = registry.getIfPresent(name);
+        if (nameBasedInstance != null) {
             if (metricsEnabled) {
                 long startTime = System.nanoTime();
                 recordMetrics(resolvedDef.getDefinition(), System.nanoTime() - startTime);
             }
-            return cachedInstance;
+            return nameBasedInstance;
         }
         
         // Singleton not yet created, use registry.getInstance for thread-safe lazy init
         if (metricsEnabled) {
             long startTime = System.nanoTime();
             T instance = registry.getInstance(resolvedDef.getDefinition(), () -> createBean(resolvedDef));
+            // Publish the created instance for fast-path on subsequent resolutions
+            resolvedDef.setCachedInstance(instance);
             recordMetrics(resolvedDef.getDefinition(), System.nanoTime() - startTime);
             return instance;
         } else {
-            return registry.getInstance(resolvedDef.getDefinition(), () -> createBean(resolvedDef));
+            T instance = registry.getInstance(resolvedDef.getDefinition(), () -> createBean(resolvedDef));
+            // Publish the created instance for fast-path on subsequent resolutions
+            resolvedDef.setCachedInstance(instance);
+            return instance;
         }
     }
 
@@ -639,6 +671,12 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
         
         // Step 1: Evict cached singleton instance and apply destroy callback
         registry.evictInstance(name);
+        
+        // Also invalidate the cached instance in ResolvedBeanDefinition to prevent stale references
+        ResolvedBeanDefinition<T> resolvedDef = registry.getResolvedOrNull(name);
+        if (resolvedDef != null) {
+            resolvedDef.setCachedInstance(null);
+        }
         
         // Step 2: Remove from unified factory cache and tracking set
         factoryCache.remove(name);
