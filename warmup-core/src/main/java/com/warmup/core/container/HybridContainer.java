@@ -91,6 +91,11 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
     private volatile ExecutorService warmupExecutor;
     private final Semaphore warmupSemaphore;
     
+    // Track beans pending warmup for lazy compilation strategy
+    // Beans are marked pending during registerDynamic and warmed up on first resolve
+    // Using ConcurrentHashMap.newKeySet() for thread-safe set operations
+    private final Set<String> pendingWarmupBeans = ConcurrentHashMap.newKeySet();
+    
     /**
      * Flag to enable/disable auto-discovery of FactoryRegistrar via ServiceLoader.
      * Enabled by default for convenience, but can be disabled for minimal startup
@@ -241,7 +246,7 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
 
     /**
      * Registers a dynamic bean for JIT compilation.
-     * Triggers background warmup compilation.
+     * Marks the bean as pending for lazy warmup on first resolve.
      * 
      * @param <T> the bean type
      * @param definition the bean definition
@@ -252,8 +257,9 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
         // Register in dependency graph - use Object[] overload to avoid String[] allocation
         dependencyGraph.registerBean(definition.name(), definition.dependencies());
         
-        // Trigger background warmup
-        triggerBackgroundWarmup(definition);
+        // Mark bean as pending warmup - actual compilation happens lazily on first resolve
+        // This avoids allocating CompletableFuture and lambda per bean during mass registration
+        pendingWarmupBeans.add(definition.name());
     }
 
     /**
@@ -268,6 +274,18 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
      */
     @SuppressWarnings("unchecked")
     public <T> T resolve(String name) {
+        // Check if this bean has pending warmup and trigger compilation on first resolve
+        if (pendingWarmupBeans.contains(name)) {
+            BeanDefinition<T> definition = (BeanDefinition<T>) registry.getDefinition(name).orElse(null);
+            if (definition != null) {
+                // Remove from pending set atomically to avoid duplicate warmup
+                if (pendingWarmupBeans.remove(name)) {
+                    // Trigger background warmup only when the bean is actually needed
+                    triggerBackgroundWarmup(definition);
+                }
+            }
+        }
+        
         // Single lookup: get pre-computed ResolvedBeanDefinition directly from registry
         ResolvedBeanDefinition<T> resolvedDef = registry.getResolvedOrNull(name);
         if (resolvedDef == null) {
@@ -282,7 +300,8 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
                 CompiledFactory<T> factory = resolvedDef.getOrComputeFactory(factoryCache);
                 T instance;
                 if (factory != null) {
-                    instance = createBeanWithFactory(resolvedDef, factory);
+                    // Use optimized path for prototypes: skip diagnostic overhead in hot path
+                    instance = createPrototypeBeanWithFactory(resolvedDef, factory);
                 } else {
                     instance = createViaReflection(resolvedDef);
                 }
@@ -295,7 +314,8 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
                 CompiledFactory<T> factory = resolvedDef.getOrComputeFactory(factoryCache);
                 T instance;
                 if (factory != null) {
-                    instance = createBeanWithFactory(resolvedDef, factory);
+                    // Use optimized path for prototypes: skip all overhead
+                    instance = createPrototypeBeanWithFactory(resolvedDef, factory);
                 } else {
                     instance = createViaReflection(resolvedDef);
                 }
@@ -368,6 +388,17 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
                 // Another thread beat us to it, use the existing one
                 resolvedDef = existing;
             }
+        } else {
+            // Check if this bean has pending warmup and trigger compilation on first resolve via type
+            String beanName = resolvedDef.name();
+            if (pendingWarmupBeans.contains(beanName)) {
+                BeanDefinition<T> definition = resolvedDef.getDefinition();
+                // Remove from pending set atomically to avoid duplicate warmup
+                if (pendingWarmupBeans.remove(beanName)) {
+                    // Trigger background warmup only when the bean is actually needed
+                    triggerBackgroundWarmup(definition);
+                }
+            }
         }
         
         // Use the cached resolved definition to resolve the bean
@@ -388,7 +419,8 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
                 CompiledFactory<T> factory = resolvedDef.getOrComputeFactory(factoryCache);
                 T instance;
                 if (factory != null) {
-                    instance = createBeanWithFactory(resolvedDef, factory);
+                    // Use optimized path for prototypes: skip diagnostic overhead in hot path
+                    instance = createPrototypeBeanWithFactory(resolvedDef, factory);
                 } else {
                     instance = createViaReflection(resolvedDef);
                 }
@@ -401,7 +433,8 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
                 CompiledFactory<T> factory = resolvedDef.getOrComputeFactory(factoryCache);
                 T instance;
                 if (factory != null) {
-                    instance = createBeanWithFactory(resolvedDef, factory);
+                    // Use optimized path for prototypes: skip all overhead
+                    instance = createPrototypeBeanWithFactory(resolvedDef, factory);
                 } else {
                     instance = createViaReflection(resolvedDef);
                 }
@@ -611,10 +644,13 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
         factoryCache.remove(name);
         compileTimeFactoryNames.remove(name);
         
+        // Also remove from pending warmup set if present - reload takes precedence
+        pendingWarmupBeans.remove(name);
+        
         // Step 3: Unload the previous ASM factory to free ClassLoader and metaspace
         jitCompiler.unloadFactory(definition.type());
         
-        // Step 4: Trigger background recompilation
+        // Step 4: Trigger background recompilation immediately (not lazy)
         triggerBackgroundWarmup(definition);
         
         return true;
@@ -863,7 +899,7 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
         Object[] deps = resolveDependencies(resolvedDef.getDefinition());
         T instance = factory.create(deps);
         
-        // Record diagnostic if enabled
+        // Record diagnostic if enabled (avoid work in hot path when disabled)
         if (diagnosticMode) {
             ResolutionDiagnostic.ResolutionPath path = compileTimeFactoryNames.contains(resolvedDef.name()) 
                 ? ResolutionDiagnostic.ResolutionPath.COMPILE_TIME 
@@ -895,6 +931,27 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
     @SuppressWarnings("unchecked")
     private <T> T createViaReflection(ResolvedBeanDefinition<T> resolvedDef) {
         return createViaReflection(resolvedDef.getDefinition());
+    }
+
+    /**
+     * Optimized bean creation via compiled factory for prototype beans.
+     * Skips diagnostic and metrics overhead when disabled.
+     */
+    @SuppressWarnings("unchecked")
+    private <T> T createPrototypeBeanWithFactory(ResolvedBeanDefinition<T> resolvedDef, CompiledFactory<T> factory) {
+        // Fast path: resolve dependencies and create instance
+        Object[] deps = resolveDependencies(resolvedDef.getDefinition());
+        T instance = factory.create(deps);
+        
+        // Record diagnostic if enabled (minimal overhead path)
+        if (diagnosticMode) {
+            ResolutionDiagnostic.ResolutionPath path = compileTimeFactoryNames.contains(resolvedDef.name()) 
+                ? ResolutionDiagnostic.ResolutionPath.COMPILE_TIME 
+                : ResolutionDiagnostic.ResolutionPath.JIT;
+            diagnostics.add(new ResolutionDiagnostic(resolvedDef.name(), resolvedDef.type(), path, 0L));
+        }
+        
+        return instance;
     }
 
     private Class<?>[] getDependencyClasses(BeanDefinition<?> definition) {
@@ -953,17 +1010,19 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
     }
 
     private Object[] resolveDependencies(BeanDefinition<?> definition) {
+        // Cache dependencies() accessor to avoid multiple invocations (record/class accessor call is not free)
+        Object[] dependencies = definition.dependencies();
+        
         // Return empty array constant if no dependencies to avoid allocation
-        if (definition.dependencies().length == 0) {
+        if (dependencies.length == 0) {
             return EMPTY_ARGS;
         }
         
-        Object[] deps = new Object[definition.dependencies().length];
-        Object[] rawDeps = definition.dependencies();
+        Object[] deps = new Object[dependencies.length];
         int[] depIndices = definition.dependencyIndices();
         
-        for (int i = 0; i < rawDeps.length; i++) {
-            Object dep = rawDeps[i];
+        for (int i = 0; i < dependencies.length; i++) {
+            Object dep = dependencies[i];
             if (dep instanceof String depName) {
                 // Check if we have a cached index for this dependency
                 int cachedIdx = depIndices[i];
