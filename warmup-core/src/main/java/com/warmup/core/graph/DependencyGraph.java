@@ -55,6 +55,43 @@ public class DependencyGraph {
             reverseAdjacency.get(beanName).add(dep);
         }
     }
+    
+    /**
+     * Registers a bean and its dependencies in the graph, accepting an Object[] array.
+     * This overload avoids creating an intermediate String[] array when dependencies
+     * are already available as Object[] (e.g., from BeanDefinition.dependencies()).
+     * Only String elements are considered as dependencies; non-String objects are filtered out.
+     * 
+     * @param beanName the name of the bean being registered
+     * @param dependencies Object array containing dependency names (String) and/or direct references
+     * @throws CircularDependencyException if adding these dependencies creates a cycle
+     */
+    public void registerBean(String beanName, Object[] dependencies) {
+        nodes.add(beanName);
+        
+        // Initialize adjacency lists if not present
+        adjacencyList.computeIfAbsent(beanName, k -> ConcurrentHashMap.newKeySet());
+        reverseAdjacency.computeIfAbsent(beanName, k -> ConcurrentHashMap.newKeySet());
+        
+        for (Object dep : dependencies) {
+            if (!(dep instanceof String depName)) {
+                // Skip non-String dependencies (direct object references)
+                continue;
+            }
+            
+            nodes.add(depName);
+            
+            // Check for cycle before adding edge
+            if (wouldCreateCycle(beanName, depName)) {
+                List<String> cycle = findCycle(beanName, depName);
+                throw new CircularDependencyException(cycle);
+            }
+            
+            // Add edge: dep -> beanName (beanName depends on dep)
+            adjacencyList.computeIfAbsent(depName, k -> ConcurrentHashMap.newKeySet()).add(beanName);
+            reverseAdjacency.get(beanName).add(depName);
+        }
+    }
 
     /**
      * Returns beans in topologically sorted order (dependencies before dependents).
