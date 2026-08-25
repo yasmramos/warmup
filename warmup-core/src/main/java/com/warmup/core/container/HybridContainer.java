@@ -56,6 +56,10 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
     // Maps bean name to wrapped definition with cached index and factory
     private final Map<String, ResolvedBeanDefinition<?>> resolvedDefinitions = new ConcurrentHashMap<>();
     
+    // Cache for type-based resolution to avoid Optional allocation and double lookup
+    // Maps bean type directly to ResolvedBeanDefinition for fast path in resolve(Class)
+    private final Map<Class<?>, ResolvedBeanDefinition<?>> resolvedDefinitionsByType = new ConcurrentHashMap<>();
+    
     // Empty array constant to avoid allocation for beans without dependencies
     private static final Object[] EMPTY_ARGS = new Object[0];
     private static final String[] EMPTY_STRING_ARRAY = new String[0];
@@ -345,16 +349,109 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
 
     /**
      * Resolves a bean by type.
+     * This is the primary entry-point for type-based resolution, optimized to avoid Optional allocation.
      * 
      * @param <T> the bean type
      * @param type the bean class
      * @return the resolved bean instance
      */
     public <T> T resolve(Class<T> type) {
-        BeanDefinition<T> definition = registry.getDefinitionByType(type)
-            .orElseThrow(() -> new IllegalStateException("Bean not found for type: " + type.getName()));
+        // Fast path: check cache for pre-resolved definition by type
+        @SuppressWarnings("unchecked")
+        ResolvedBeanDefinition<T> resolvedDef = (ResolvedBeanDefinition<T>) resolvedDefinitionsByType.get(type);
         
-        return resolve(definition.name());
+        if (resolvedDef == null) {
+            // Cache miss: resolve definition without Optional allocation
+            BeanDefinition<T> definition = registry.getDefinitionByTypeOrNull(type);
+            if (definition == null) {
+                throw new IllegalStateException("Bean not found for type: " + type.getName());
+            }
+            
+            // Wrap and cache the resolved definition for future lookups
+            resolvedDef = wrapResolvedDefinition(definition);
+            ResolvedBeanDefinition<T> existing = (ResolvedBeanDefinition<T>) resolvedDefinitionsByType.putIfAbsent(type, resolvedDef);
+            if (existing != null) {
+                // Another thread beat us to it, use the existing one
+                resolvedDef = existing;
+            }
+        }
+        
+        // Use the cached resolved definition to resolve the bean
+        return resolve(resolvedDef);
+    }
+
+    /**
+     * Internal method to resolve a bean using a pre-resolved definition.
+     * This avoids double lookup and is used by resolve(Class) after caching.
+     */
+    @SuppressWarnings("unchecked")
+    private <T> T resolve(ResolvedBeanDefinition<T> resolvedDef) {
+        // OPTIMIZATION 1: For PROTOTYPE beans, skip singleton cache lookup entirely
+        // since prototypes are never cached. This avoids unnecessary ConcurrentHashMap.get()
+        if (resolvedDef.scope() == Scope.PROTOTYPE) {
+            if (metricsEnabled) {
+                long startTime = System.nanoTime();
+                CompiledFactory<T> factory = resolvedDef.getOrComputeFactory(factoryCache);
+                T instance;
+                if (factory != null) {
+                    instance = createBeanWithFactory(resolvedDef, factory);
+                } else {
+                    instance = createViaReflection(resolvedDef);
+                }
+                if (resolvedDef.lifecycle().onInit() != null) {
+                    resolvedDef.lifecycle().onInit().onInit(instance);
+                }
+                recordMetrics(resolvedDef.getDefinition(), System.nanoTime() - startTime);
+                return instance;
+            } else {
+                CompiledFactory<T> factory = resolvedDef.getOrComputeFactory(factoryCache);
+                T instance;
+                if (factory != null) {
+                    instance = createBeanWithFactory(resolvedDef, factory);
+                } else {
+                    instance = createViaReflection(resolvedDef);
+                }
+                if (resolvedDef.lifecycle().onInit() != null) {
+                    resolvedDef.lifecycle().onInit().onInit(instance);
+                }
+                return instance;
+            }
+        }
+        
+        // SINGLETON/CUSTOM path: use indexed resolution if index is cached
+        int index = resolvedDef.getOrComputeIndex(registry);
+        if (index >= 0) {
+            // Try fast indexed resolution first (avoids String hashing)
+            T indexedInstance = (T) registry.getIfPresent(index);
+            if (indexedInstance != null) {
+                if (metricsEnabled) {
+                    long startTime = System.nanoTime();
+                    recordMetrics(resolvedDef.getDefinition(), System.nanoTime() - startTime);
+                }
+                return indexedInstance;
+            }
+        }
+        
+        // Fall back to name-based lookup for singletons not yet cached
+        String name = resolvedDef.name();
+        T cachedInstance = registry.getIfPresent(name);
+        if (cachedInstance != null) {
+            if (metricsEnabled) {
+                long startTime = System.nanoTime();
+                recordMetrics(resolvedDef.getDefinition(), System.nanoTime() - startTime);
+            }
+            return cachedInstance;
+        }
+        
+        // Singleton not yet created, use registry.getInstance for thread-safe lazy init
+        if (metricsEnabled) {
+            long startTime = System.nanoTime();
+            T instance = registry.getInstance(resolvedDef.getDefinition(), () -> createBean(resolvedDef));
+            recordMetrics(resolvedDef.getDefinition(), System.nanoTime() - startTime);
+            return instance;
+        } else {
+            return registry.getInstance(resolvedDef.getDefinition(), () -> createBean(resolvedDef));
+        }
     }
 
     /**
@@ -740,6 +837,15 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
             resolved = (existing != null) ? existing : newResolved;
         }
         return (ResolvedBeanDefinition<T>) resolved;
+    }
+
+    /**
+     * Wraps a BeanDefinition into a ResolvedBeanDefinition with cached index and factory.
+     * This is a helper method for populating the type-based cache in resolve(Class).
+     */
+    @SuppressWarnings("unchecked")
+    private <T> ResolvedBeanDefinition<T> wrapResolvedDefinition(BeanDefinition<T> baseDefinition) {
+        return new ResolvedBeanDefinition<>(baseDefinition);
     }
 
     /**

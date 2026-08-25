@@ -37,6 +37,22 @@ public interface BeanRegistry {
     <T> Optional<BeanDefinition<T>> getDefinitionByType(Class<T> type);
 
     /**
+     * Retrieves a bean definition by type without Optional allocation.
+     * This is a performance-optimized method for hot paths that need to check existence.
+     * 
+     * @param <T> the bean type
+     * @param type the bean class
+     * @return the bean definition if found, null otherwise
+     * @see #getDefinitionByType(Class)
+     */
+    @SuppressWarnings("unchecked")
+    default <T> BeanDefinition<T> getDefinitionByTypeOrNull(Class<T> type) {
+        // Default implementation delegates to getDefinitionByType and unwraps Optional
+        // Implementations should override for better performance
+        return (BeanDefinition<T>) getDefinitionByType(type).orElse(null);
+    }
+
+    /**
      * Gets or creates a bean instance based on its scope.
      * - Singleton: returns cached instance (creates if not exists)
      * - Prototype: creates new instance every time

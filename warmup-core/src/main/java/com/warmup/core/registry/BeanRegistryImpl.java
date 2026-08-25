@@ -166,6 +166,12 @@ public class BeanRegistryImpl implements BeanRegistry {
 
     @Override
     @SuppressWarnings("unchecked")
+    public <T> BeanDefinition<T> getDefinitionByTypeOrNull(Class<T> type) {
+        return (BeanDefinition<T>) definitionsByType.get(type);
+    }
+
+    @Override
+    @SuppressWarnings("unchecked")
     public <T> T getInstance(String name, java.util.function.Supplier<T> factory) {
         BeanDefinition<?> definition = definitionsByName.get(name);
         if (definition == null) {
