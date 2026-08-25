@@ -46,7 +46,7 @@ public class BeanRegistryImpl implements BeanRegistry {
     // Array-backed storage for singleton instances indexed by integer
     // Using Object[] with VarHandle for cheaper reads than AtomicReferenceArray volatile access
     // VarHandle.getOpaque provides acquire semantics for safe publication without full volatile cost
-    private Object[] singletonInstancesByIndex = new Object[64];
+    private volatile Object[] singletonInstancesByIndex = new Object[64];
     // VarHandle for array element access with acquire/release semantics
     private static final VarHandle ARRAY_ELEMENT_HANDLE;
     static {
@@ -336,11 +336,13 @@ public class BeanRegistryImpl implements BeanRegistry {
     @Override
     @SuppressWarnings("unchecked")
     public <T> T getIfPresent(int index) {
-        if (index < 0 || index >= singletonInstancesByIndex.length) {
+        // Read volatile reference once for consistent view
+        Object[] arr = singletonInstancesByIndex;
+        if (index < 0 || index >= arr.length) {
             return null;
         }
         // Use getOpaque for cheaper read than volatile get, with acquire semantics for safe publication
-        return (T) ARRAY_ELEMENT_HANDLE.getOpaque(singletonInstancesByIndex, index);
+        return (T) ARRAY_ELEMENT_HANDLE.getOpaque(arr, index);
     }
     
     @Override
