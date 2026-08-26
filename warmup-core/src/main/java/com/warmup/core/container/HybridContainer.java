@@ -320,17 +320,16 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
     }
 
     /**
-     * Resolves a bean by name.
-     * Uses compile-time factory if available, otherwise JIT-compiles or falls back.
-     * When metrics are disabled, the fast path (cached singleton) avoids all timing,
-     * Optional allocations, and LongAdder updates for minimal overhead.
+     * Internal method to resolve a bean by name.
+     * Used internally for dependency wiring and cableado de dependencias.
+     * The public API should use resolve(Class) for type-safe resolution.
      * 
      * @param <T> the bean type
      * @param name the bean name
      * @return the resolved bean instance
      */
     @SuppressWarnings("unchecked")
-    public <T> T resolve(String name) {
+    private <T> T resolveByName(String name) {
         // Check if this bean has pending warmup and trigger compilation on first resolve
         if (pendingWarmupBeans.contains(name)) {
             BeanDefinition<T> definition = (BeanDefinition<T>) registry.getDefinition(name).orElse(null);
@@ -1181,7 +1180,7 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
                 }
                 
                 // Fallback: resolve by name (handles prototypes, not-yet-cached, or forward references)
-                deps[i] = resolve(depName);
+                deps[i] = resolveByName(depName);
             } else {
                 // Direct object reference (not a bean name)
                 deps[i] = dep;

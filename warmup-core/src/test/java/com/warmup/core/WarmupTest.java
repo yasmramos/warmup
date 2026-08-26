@@ -112,7 +112,7 @@ public class WarmupTest {
         try (Warmup warmup = Warmup.create()) {
             var definition = new com.warmup.core.registry.BeanDefinition<>(String.class, "typeBean");
             warmup.register(definition, deps -> "byType");
-            Object result = warmup.resolve(String.class);
+            String result = warmup.resolve(String.class);
             assertEquals("byType", result);
         }
     }
@@ -155,7 +155,7 @@ public class WarmupTest {
         Warmup warmup = Warmup.builder().diagnostic(true).build();
         var def = new com.warmup.core.registry.BeanDefinition<>(String.class, "diagBean");
         warmup.register(def, deps -> "test");
-        warmup.resolve("diagBean");
+        warmup.resolve(String.class);
         var diagnostics = warmup.getDiagnostics();
         assertNotNull(diagnostics);
         assertFalse(diagnostics.isEmpty());
@@ -175,8 +175,8 @@ public class WarmupTest {
         try (Warmup warmup = Warmup.create()) {
             var definition = new com.warmup.core.registry.BeanDefinition<>(String.class, "factoryBean");
             warmup.register(definition, null);
-            warmup.registerFactory("factoryBean", deps -> "fromFactory");
-            Object result = warmup.resolve("factoryBean");
+            warmup.registerFactory("factoryBean", String.class, deps -> "fromFactory");
+            String result = warmup.resolve(String.class);
             assertEquals("fromFactory", result);
         }
     }
