@@ -240,17 +240,30 @@ public class WarmupProcessor extends AbstractProcessor {
         String className = typeElement.getSimpleName().toString();
         String beanName = explicitName.isEmpty() ? className : explicitName;
         
-        // Extract dependency names from constructor
-        ExecutableElement constructor = findInjectableConstructor(typeElement);
+        // Extract dependency names from constructor and @Inject fields
         List<String> depNames = new ArrayList<>();
+        
+        // Constructor dependencies
+        ExecutableElement constructor = findInjectableConstructor(typeElement);
         if (constructor != null) {
             for (VariableElement param : constructor.getParameters()) {
-                // Use simple name of parameter type as dependency name
                 String paramType = param.asType().toString();
-                // Extract simple name from FQN if needed
                 int lastDot = paramType.lastIndexOf('.');
                 String simpleName = lastDot > 0 ? paramType.substring(lastDot + 1) : paramType;
                 depNames.add(simpleName);
+            }
+        }
+        
+        // @Inject field dependencies
+        for (Element enclosed : typeElement.getEnclosedElements()) {
+            if (enclosed.getKind() == ElementKind.FIELD) {
+                VariableElement field = (VariableElement) enclosed;
+                if (field.getAnnotation(Inject.class) != null) {
+                    String fieldType = field.asType().toString();
+                    int lastDot = fieldType.lastIndexOf('.');
+                    String simpleName = lastDot > 0 ? fieldType.substring(lastDot + 1) : fieldType;
+                    depNames.add(simpleName);
+                }
             }
         }
         
@@ -338,6 +351,30 @@ public class WarmupProcessor extends AbstractProcessor {
             ? constructor.getParameters() 
             : Collections.emptyList();
         
+        // Collect @Inject fields
+        List<VariableElement> injectFields = new ArrayList<>();
+        for (Element enclosed : beanClass.getEnclosedElements()) {
+            if (enclosed.getKind() == ElementKind.FIELD) {
+                VariableElement field = (VariableElement) enclosed;
+                if (field.getAnnotation(Inject.class) != null) {
+                    // Validate field is not private or final
+                    if (field.getModifiers().contains(Modifier.PRIVATE)) {
+                        processingEnv.getMessager().printMessage(Diagnostic.Kind.ERROR,
+                            "@Inject fields for compile-time wiring must not be private: " + 
+                            field.getSimpleName() + " in " + beanClass.getQualifiedName(), field);
+                        continue;
+                    }
+                    if (field.getModifiers().contains(Modifier.FINAL)) {
+                        processingEnv.getMessager().printMessage(Diagnostic.Kind.ERROR,
+                            "@Inject fields for compile-time wiring must not be final: " + 
+                            field.getSimpleName() + " in " + beanClass.getQualifiedName(), field);
+                        continue;
+                    }
+                    injectFields.add(field);
+                }
+            }
+        }
+        
         StringBuilder code = new StringBuilder();
         
         // Only add package declaration if not in default package
@@ -358,7 +395,7 @@ public class WarmupProcessor extends AbstractProcessor {
         code.append("public final class ").append(factoryClassName)
             .append(" implements CompiledFactory<").append(className).append("> {\n\n");
         
-        // Generate fields for dependency factories (if any)
+        // Generate fields for constructor dependency factories
         for (int i = 0; i < parameters.size(); i++) {
             VariableElement param = parameters.get(i);
             String paramType = param.asType().toString();
@@ -366,7 +403,15 @@ public class WarmupProcessor extends AbstractProcessor {
                 .append("> factory").append(i).append(";\n");
         }
         
-        if (!parameters.isEmpty()) {
+        // Generate fields for @Inject field factories
+        for (int i = 0; i < injectFields.size(); i++) {
+            VariableElement field = injectFields.get(i);
+            String fieldType = field.asType().toString();
+            code.append("    private CompiledFactory<").append(fieldType)
+                .append("> fieldFactory").append(i).append(";\n");
+        }
+        
+        if (!parameters.isEmpty() || !injectFields.isEmpty()) {
             code.append("\n");
         }
         
@@ -376,31 +421,53 @@ public class WarmupProcessor extends AbstractProcessor {
         for (int i = 0; i < parameters.size(); i++) {
             code.append("        this.factory").append(i).append(" = null;\n");
         }
+        for (int i = 0; i < injectFields.size(); i++) {
+            code.append("        this.fieldFactory").append(i).append(" = null;\n");
+        }
         code.append("    }\n\n");
         
         // Generate wire method
-        if (!parameters.isEmpty()) {
+        int totalDeps = parameters.size() + injectFields.size();
+        if (totalDeps > 0) {
             code.append("    @Override\n");
             code.append("    public void wire(CompiledFactory<?>[] dependencyFactories) {\n");
+            // Wire constructor dependencies first
             for (int i = 0; i < parameters.size(); i++) {
                 VariableElement param = parameters.get(i);
                 String paramType = param.asType().toString();
                 code.append("        this.factory").append(i)
                     .append(" = (CompiledFactory<").append(paramType).append(">) dependencyFactories[").append(i).append("];\n");
             }
+            // Then wire field dependencies
+            for (int i = 0; i < injectFields.size(); i++) {
+                VariableElement field = injectFields.get(i);
+                String fieldType = field.asType().toString();
+                int fieldIndex = parameters.size() + i;
+                code.append("        this.fieldFactory").append(i)
+                    .append(" = (CompiledFactory<").append(fieldType).append(">) dependencyFactories[").append(fieldIndex).append("];\n");
+            }
             code.append("    }\n\n");
         }
         
         // Generate get method (wired path - no Object[] allocation)
-        if (!parameters.isEmpty()) {
+        if (totalDeps > 0) {
             code.append("    @Override\n");
             code.append("    public ").append(className).append(" get() {\n");
-            code.append("        return new ").append(className).append("(");
+            code.append("        ").append(className).append(" instance = new ").append(className).append("(");
             for (int i = 0; i < parameters.size(); i++) {
                 if (i > 0) code.append(", ");
                 code.append("factory").append(i).append(".get()");
             }
             code.append(");\n");
+            
+            // Inject fields
+            for (int i = 0; i < injectFields.size(); i++) {
+                VariableElement field = injectFields.get(i);
+                String fieldName = field.getSimpleName().toString();
+                code.append("        instance.").append(fieldName).append(" = fieldFactory").append(i).append(".get();\n");
+            }
+            
+            code.append("        return instance;\n");
             code.append("    }\n\n");
         }
         
@@ -408,7 +475,7 @@ public class WarmupProcessor extends AbstractProcessor {
         code.append("    @Override\n");
         code.append("    public ").append(className).append(" create(Object... dependencies) {\n");
         
-        // Cast dependencies
+        // Cast dependencies for constructor
         for (int i = 0; i < parameters.size(); i++) {
             VariableElement param = parameters.get(i);
             String paramType = param.asType().toString();
@@ -417,12 +484,24 @@ public class WarmupProcessor extends AbstractProcessor {
         }
         
         // Invoke constructor
-        code.append("        return new ").append(className).append("(");
+        code.append("        ").append(className).append(" instance = new ").append(className).append("(");
         for (int i = 0; i < parameters.size(); i++) {
             if (i > 0) code.append(", ");
             code.append("arg").append(i);
         }
         code.append(");\n");
+        
+        // Inject fields from dependencies array (after constructor params)
+        for (int i = 0; i < injectFields.size(); i++) {
+            VariableElement field = injectFields.get(i);
+            String fieldName = field.getSimpleName().toString();
+            String fieldType = field.asType().toString();
+            int fieldIndex = parameters.size() + i;
+            code.append("        instance.").append(fieldName)
+                .append(" = (").append(fieldType).append(") dependencies[").append(fieldIndex).append("];\n");
+        }
+        
+        code.append("        return instance;\n");
         code.append("    }\n\n");
         
         // Generate getBeanType method
@@ -431,10 +510,10 @@ public class WarmupProcessor extends AbstractProcessor {
         code.append("        return ").append(className).append(".class;\n");
         code.append("    }\n\n");
         
-        // Generate getDependencyCount method
+        // Generate getDependencyCount method - return total deps (constructor + fields)
         code.append("    @Override\n");
         code.append("    public int getDependencyCount() {\n");
-        code.append("        return ").append(parameters.size()).append(";\n");
+        code.append("        return ").append(totalDeps).append(";\n");
         code.append("    }\n");
         
         code.append("}\n");

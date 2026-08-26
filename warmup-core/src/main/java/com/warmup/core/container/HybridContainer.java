@@ -477,13 +477,16 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
             }
         } else {
             // Check if this bean has pending warmup and trigger compilation on first resolve via type
-            String beanName = resolvedDef.name();
-            if (pendingWarmupBeans.contains(beanName)) {
-                BeanDefinition<T> definition = resolvedDef.getDefinition();
-                // Remove from pending set atomically to avoid duplicate warmup
-                if (pendingWarmupBeans.remove(beanName)) {
-                    // Trigger background warmup only when the bean is actually needed
-                    triggerBackgroundWarmup(definition);
+            // Gate the expensive Set.contains() with a quick isEmpty() check first
+            if (!pendingWarmupBeans.isEmpty()) {
+                String beanName = resolvedDef.name();
+                if (pendingWarmupBeans.contains(beanName)) {
+                    BeanDefinition<T> definition = resolvedDef.getDefinition();
+                    // Remove from pending set atomically to avoid duplicate warmup
+                    if (pendingWarmupBeans.remove(beanName)) {
+                        // Trigger background warmup only when the bean is actually needed
+                        triggerBackgroundWarmup(definition);
+                    }
                 }
             }
         }
@@ -500,7 +503,7 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
     private <T> T resolve(ResolvedBeanDefinition<T> resolvedDef) {
         // OPTIMIZATION 1: For PROTOTYPE beans, skip singleton cache lookup entirely
         // since prototypes are never cached. This avoids unnecessary ConcurrentHashMap.get()
-        if (resolvedDef.scope() == Scope.PROTOTYPE) {
+        if (resolvedDef.isPrototype()) {
             if (metricsEnabled) {
                 long startTime = System.nanoTime();
                 CompiledFactory<T> factory = resolvedDef.getOrComputeFactory(factoryCache);
