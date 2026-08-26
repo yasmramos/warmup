@@ -221,7 +221,11 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
             registrar.registerAll((definition, factory) -> {
                 registry.register(definition);
                 factoryCache.put(definition.name(), factory);
-                compileTimeFactoryNames.add(definition.name());
+                // Mark as compile-time and get ResolvedBeanDefinition to set flags
+                ResolvedBeanDefinition<?> resolvedDef = registry.getResolvedOrNull(definition.name());
+                if (resolvedDef != null) {
+                    resolvedDef.setCompileTime(true);
+                }
             });
         }
         
@@ -244,9 +248,15 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
                 continue;
             }
             
+            ResolvedBeanDefinition<?> resolvedDef = registry.getResolvedOrNull(beanName);
+            
             Object[] dependencies = definition.dependencies();
             if (dependencies.length == 0) {
-                continue; // No dependencies to wire
+                // No dependencies: mark as wired since get() is safe to call directly
+                if (resolvedDef != null) {
+                    resolvedDef.setWired(true);
+                }
+                continue;
             }
             
             // Collect dependency factories
@@ -275,8 +285,13 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
             if (allResolved) {
                 try {
                     factory.wire(depFactories);
+                    // Mark as successfully wired
+                    if (resolvedDef != null) {
+                        resolvedDef.setWired(true);
+                    }
                 } catch (Exception e) {
                     // Ignore wiring errors - fallback to create(Object...) will still work
+                    // Keep wired=false so hot-path uses create() instead of get()
                 }
             }
         }
@@ -840,7 +855,7 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
         if (factory != null) {
             // Hot path: factory already cached, determine origin for metrics/diagnostic only if enabled
             if (metricsEnabled || diagnosticMode) {
-                if (compileTimeFactoryNames.contains(name)) {
+                if (resolvedDef.isCompileTime()) {
                     path = ResolutionDiagnostic.ResolutionPath.COMPILE_TIME;
                     if (metricsEnabled) {
                         compileTimeHits.add(1);
@@ -880,17 +895,16 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
             return createViaReflection(resolvedDef);
         }
         
-        // Create instance using factory - try wired path first (no Object[] allocation)
+        // Create instance using factory - use wired path when available (no Object[] allocation)
         T instance;
-        if (compileTimeFactoryNames.contains(name)) {
-            // Compile-time factory: try get() method for wired path
-            try {
-                instance = factory.get();
-            } catch (Exception e) {
-                // Fallback to create() with resolved dependencies
-                Object[] deps = resolveDependencies(definition);
-                instance = factory.create(deps);
-            }
+        if (resolvedDef.isCompileTime() && resolvedDef.isWired()) {
+            // Wired compile-time factory: call get() directly without try/catch
+            // Wiring was verified at startup, so get() is guaranteed safe
+            instance = factory.get();
+        } else if (resolvedDef.isCompileTime()) {
+            // Compile-time but not wired (e.g., forward reference): fallback to create()
+            Object[] deps = resolveDependencies(definition);
+            instance = factory.create(deps);
         } else {
             // JIT or other factory: use traditional path
             Object[] deps = resolveDependencies(definition);
@@ -936,7 +950,9 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
         if (factory != null) {
             // Hot path: factory already cached
             if (metricsEnabled) {
-                if (compileTimeFactoryNames.contains(name)) {
+                // Check if compile-time by looking up ResolvedBeanDefinition
+                ResolvedBeanDefinition<?> resolvedDef = registry.getResolvedOrNull(name);
+                if (resolvedDef != null && resolvedDef.isCompileTime()) {
                     compileTimeHits.add(1);
                 } else {
                     jitHits.add(1);
@@ -1005,16 +1021,15 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
     private <T> T createBeanWithFactory(ResolvedBeanDefinition<T> resolvedDef, CompiledFactory<T> factory) {
         String name = resolvedDef.name();
         
-        // Try wired path first for compile-time factories (no Object[] allocation)
+        // Use wired path when available (no Object[] allocation)
         T instance;
-        if (compileTimeFactoryNames.contains(name)) {
-            try {
-                instance = factory.get();
-            } catch (Exception e) {
-                // Fallback to traditional path
-                Object[] deps = resolveDependencies(resolvedDef.getDefinition());
-                instance = factory.create(deps);
-            }
+        if (resolvedDef.isCompileTime() && resolvedDef.isWired()) {
+            // Wired compile-time factory: call get() directly without try/catch
+            instance = factory.get();
+        } else if (resolvedDef.isCompileTime()) {
+            // Compile-time but not wired: fallback to create()
+            Object[] deps = resolveDependencies(resolvedDef.getDefinition());
+            instance = factory.create(deps);
         } else {
             // JIT or other factory: use traditional path
             Object[] deps = resolveDependencies(resolvedDef.getDefinition());
@@ -1023,7 +1038,7 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
         
         // Record diagnostic if enabled (avoid work in hot path when disabled)
         if (diagnosticMode) {
-            ResolutionDiagnostic.ResolutionPath path = compileTimeFactoryNames.contains(name) 
+            ResolutionDiagnostic.ResolutionPath path = resolvedDef.isCompileTime() 
                 ? ResolutionDiagnostic.ResolutionPath.COMPILE_TIME 
                 : ResolutionDiagnostic.ResolutionPath.JIT;
             diagnostics.add(new ResolutionDiagnostic(name, resolvedDef.type(), path, 0L));
@@ -1063,16 +1078,15 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
     private <T> T createPrototypeBeanWithFactory(ResolvedBeanDefinition<T> resolvedDef, CompiledFactory<T> factory) {
         String name = resolvedDef.name();
         
-        // Fast path: try wired path first (no Object[] allocation)
+        // Fast path: use wired path when available (no Object[] allocation)
         T instance;
-        if (compileTimeFactoryNames.contains(name)) {
-            try {
-                instance = factory.get();
-            } catch (Exception e) {
-                // Fallback to traditional path
-                Object[] deps = resolveDependencies(resolvedDef.getDefinition());
-                instance = factory.create(deps);
-            }
+        if (resolvedDef.isCompileTime() && resolvedDef.isWired()) {
+            // Wired compile-time factory: call get() directly without try/catch
+            instance = factory.get();
+        } else if (resolvedDef.isCompileTime()) {
+            // Compile-time but not wired: fallback to create()
+            Object[] deps = resolveDependencies(resolvedDef.getDefinition());
+            instance = factory.create(deps);
         } else {
             // JIT or other factory: use traditional path
             Object[] deps = resolveDependencies(resolvedDef.getDefinition());
@@ -1081,7 +1095,7 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
         
         // Record diagnostic if enabled (minimal overhead path)
         if (diagnosticMode) {
-            ResolutionDiagnostic.ResolutionPath path = compileTimeFactoryNames.contains(name) 
+            ResolutionDiagnostic.ResolutionPath path = resolvedDef.isCompileTime() 
                 ? ResolutionDiagnostic.ResolutionPath.COMPILE_TIME 
                 : ResolutionDiagnostic.ResolutionPath.JIT;
             diagnostics.add(new ResolutionDiagnostic(name, resolvedDef.type(), path, 0L));
