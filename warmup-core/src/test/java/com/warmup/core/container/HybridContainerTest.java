@@ -297,7 +297,7 @@ class HybridContainerTest {
 
     @Test
     void testResolveNonExistentBean() {
-        assertThrows(IllegalStateException.class, () -> container.resolveByName("nonExistent"));
+        assertThrows(IllegalStateException.class, () -> container.resolve(Object.class));
     }
 
     @Test

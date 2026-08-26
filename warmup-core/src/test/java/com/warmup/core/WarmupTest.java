@@ -102,7 +102,7 @@ public class WarmupTest {
         try (Warmup warmup = Warmup.create()) {
             var definition = new com.warmup.core.registry.BeanDefinition<>(String.class, "resolveBean");
             warmup.register(definition, deps -> "resolved");
-            Object result = warmup.resolve("resolveBean");
+            String result = warmup.resolve(String.class);
             assertEquals("resolved", result);
         }
     }
