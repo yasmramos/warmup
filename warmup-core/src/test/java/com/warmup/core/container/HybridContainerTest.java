@@ -28,7 +28,7 @@ class HybridContainerTest {
         var definition = new com.warmup.core.registry.BeanDefinition<>(TestService.class, "testBean");
         container.register(definition, null);
 
-        TestService result = container.resolve("testBean");
+        TestService result = container.resolve(TestService.class);
         assertNotNull(result);
     }
 
@@ -112,7 +112,7 @@ class HybridContainerTest {
         container.registerFactory("factoryBean", TestService.class, factory);
         
         // Should use the registered factory
-        TestService result = container.resolve("factoryBean");
+        TestService result = container.resolve(TestService.class);
         assertNotNull(result);
     }
 
@@ -125,7 +125,7 @@ class HybridContainerTest {
         // Use type-safe overload
         container.registerFactory("typeSafeBean", TestService.class, factory);
         
-        TestService result = container.resolve("typeSafeBean");
+        TestService result = container.resolve(TestService.class);
         assertNotNull(result);
     }
 
@@ -166,7 +166,7 @@ class HybridContainerTest {
         var definition = new com.warmup.core.registry.BeanDefinition<>(TestService.class, "diagBean");
         diagnosticContainer.register(definition, null);
         
-        diagnosticContainer.resolve("diagBean");
+        diagnosticContainer.resolve(TestService.class);
         
         var diagnostics = diagnosticContainer.getDiagnostics();
         assertNotNull(diagnostics);
@@ -198,7 +198,7 @@ class HybridContainerTest {
                 try {
                     startLatch.await(); // Wait for signal to start
                     for (int j = 0; j < resolutionsPerThread; j++) {
-                        diagnosticContainer.resolve("concurrentBean");
+                        diagnosticContainer.resolve(TestService.class);
                     }
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
@@ -248,7 +248,7 @@ class HybridContainerTest {
         
         // Resolve multiple times
         for (int i = 0; i < 100; i++) {
-            productionContainer.resolve("prodBean");
+            productionContainer.resolve(TestService.class);
         }
         
         var diagnostics = productionContainer.getDiagnostics();
@@ -265,8 +265,8 @@ class HybridContainerTest {
         container.register(definition, null);
         
         // Resolve twice - should return different instances for prototype
-        TestService instance1 = container.resolve("prototypeBean");
-        TestService instance2 = container.resolve("prototypeBean");
+        TestService instance1 = container.resolve(TestService.class);
+        TestService instance2 = container.resolve(TestService.class);
         
         assertNotNull(instance1);
         assertNotNull(instance2);
@@ -290,14 +290,14 @@ class HybridContainerTest {
         CompiledFactory<DependentService> factory = deps -> new DependentService((DependencyService) deps[0]);
         container.register(def, factory);
         
-        DependentService result = container.resolve("dependent");
+        DependentService result = container.resolve(DependentService.class);
         assertNotNull(result);
         assertNotNull(result.getDependency());
     }
 
     @Test
     void testResolveNonExistentBean() {
-        assertThrows(IllegalStateException.class, () -> container.resolve("nonExistent"));
+        assertThrows(IllegalStateException.class, () -> container.resolve(Object.class));
     }
 
     @Test
@@ -309,10 +309,10 @@ class HybridContainerTest {
     void testResolveCachedInstance() {
         // First resolve to cache the singleton
         container.register(new com.warmup.core.registry.BeanDefinition<>(TestService.class, "cached"), null);
-        TestService instance1 = container.resolve("cached");
+        TestService instance1 = container.resolve(TestService.class);
         
         // Second resolve should return cached instance (fast path)
-        TestService instance2 = container.resolve("cached");
+        TestService instance2 = container.resolve(TestService.class);
         
         assertNotNull(instance1);
         assertSame(instance1, instance2);
@@ -329,8 +329,8 @@ class HybridContainerTest {
         var definition = new com.warmup.core.registry.BeanDefinition<>(TestService.class, "metricsBean");
         metricsContainer.register(definition, null);
         
-        metricsContainer.resolve("metricsBean");
-        metricsContainer.resolve("metricsBean");
+        metricsContainer.resolve(TestService.class);
+        metricsContainer.resolve(TestService.class);
         
         var metrics = metricsContainer.getMetrics();
         assertEquals(2, metrics.totalResolutions());
@@ -345,7 +345,7 @@ class HybridContainerTest {
         
         container.register(definition, factory);
         
-        TestService result = container.resolve("factoryBean");
+        TestService result = container.resolve(TestService.class);
         assertNotNull(result);
     }
 
@@ -374,7 +374,7 @@ class HybridContainerTest {
         CompiledFactory<DependentService> factory = deps -> new DependentService((DependencyService) deps[0]);
         container.register(def, factory);
         
-        DependentService result = container.resolve("dependent");
+        DependentService result = container.resolve(DependentService.class);
         assertNotNull(result);
         assertNotNull(result.getDependency());
     }
@@ -399,7 +399,7 @@ class HybridContainerTest {
         var definition = new com.warmup.core.registry.BeanDefinition<>(TestService.class, "reflectionBean");
         container.register(definition, null);
         
-        TestService result = container.resolve("reflectionBean");
+        TestService result = container.resolve(TestService.class);
         assertNotNull(result);
     }
 
@@ -409,7 +409,7 @@ class HybridContainerTest {
         var definition = new com.warmup.core.registry.BeanDefinition<>(TestService.class, "noDeps");
         container.register(definition, null);
         
-        TestService result = container.resolve("noDeps");
+        TestService result = container.resolve(TestService.class);
         assertNotNull(result);
     }
 
@@ -431,7 +431,7 @@ class HybridContainerTest {
         container.register(def, factory);
         
         // Get dependency classes - this exercises getDependencyClasses
-        DependentService result = container.resolve("dependent");
+        DependentService result = container.resolve(DependentService.class);
         assertNotNull(result);
         assertNotNull(result.getDependency());
     }
@@ -442,7 +442,7 @@ class HybridContainerTest {
         var definition = new com.warmup.core.registry.BeanDefinition<>(TestService.class, "noDepsBean");
         container.register(definition, null);
         
-        TestService result = container.resolve("noDepsBean");
+        TestService result = container.resolve(TestService.class);
         assertNotNull(result);
     }
 
@@ -453,7 +453,7 @@ class HybridContainerTest {
         var definition = new com.warmup.core.registry.BeanDefinition<>(TestService.class, "nativeBean");
         container.register(definition, null);
         
-        TestService result = container.resolve("nativeBean");
+        TestService result = container.resolve(TestService.class);
         assertNotNull(result);
     }
 
@@ -496,7 +496,7 @@ class HybridContainerTest {
         var definition = new com.warmup.core.registry.BeanDefinition<>(SimpleBean.class, "simpleBean");
         container.register(definition, null);
         
-        SimpleBean result = container.resolve("simpleBean");
+        SimpleBean result = container.resolve(SimpleBean.class);
         assertNotNull(result);
     }
 
@@ -514,7 +514,7 @@ class HybridContainerTest {
                 com.warmup.core.scope.Scope.PROTOTYPE, com.warmup.core.lifecycle.LifecycleCallbacks.empty(), false, new Object[]{"testService"});
             noopContainer.register(beanDef, null);
             
-            BeanWithDependency result = noopContainer.resolve("beanWithDep");
+            BeanWithDependency result = noopContainer.resolve(BeanWithDependency.class);
             assertNotNull(result);
             assertNotNull(result.getService());
             assertEquals("test", result.getService().getName());
@@ -539,7 +539,7 @@ class HybridContainerTest {
                 com.warmup.core.scope.Scope.PROTOTYPE, com.warmup.core.lifecycle.LifecycleCallbacks.empty(), false, new Object[]{"service1", "service2"});
             noopContainer.register(beanDef, null);
             
-            BeanWithMultipleDependencies result = noopContainer.resolve("beanWithMultiDep");
+            BeanWithMultipleDependencies result = noopContainer.resolve(BeanWithMultipleDependencies.class);
             assertNotNull(result);
             assertNotNull(result.getService1());
             assertNotNull(result.getService2());
@@ -568,9 +568,9 @@ class HybridContainerTest {
         container.register(definition, null);
         
         // Resolve multiple times - each should create new instance
-        TestService s1 = container.resolve("protoBean");
-        TestService s2 = container.resolve("protoBean");
-        TestService s3 = container.resolve("protoBean");
+        TestService s1 = container.resolve(TestService.class);
+        TestService s2 = container.resolve(TestService.class);
+        TestService s3 = container.resolve(TestService.class);
         
         assertNotNull(s1);
         assertNotNull(s2);
@@ -587,7 +587,7 @@ class HybridContainerTest {
         container.register(definition, factory1);
         
         // First resolution uses factory1
-        TestService instance1 = container.resolve("reloadBean");
+        TestService instance1 = container.resolve(TestService.class);
         assertNotNull(instance1);
         
         // Hot-reload the bean
@@ -595,7 +595,7 @@ class HybridContainerTest {
         assertTrue(reloaded);
         
         // After reload, resolve again - should use newly compiled factory
-        TestService instance2 = container.resolve("reloadBean");
+        TestService instance2 = container.resolve(TestService.class);
         assertNotNull(instance2);
         
         // Instances should be different (old one was destroyed, new one created)

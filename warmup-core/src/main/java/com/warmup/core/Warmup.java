@@ -168,18 +168,8 @@ public class Warmup implements AutoCloseable {
     }
 
     /**
-     * Resolves a bean by name.
-     * 
-     * @param name the bean name
-     * @return the bean instance
-     * @throws IllegalStateException if bean not found
-     */
-    public Object resolve(String name) {
-        return container.resolve(name);
-    }
-
-    /**
      * Resolves a bean by type.
+     * This is the primary resolution method in the public API.
      * 
      * @param clazz the bean class
      * @return the bean instance
