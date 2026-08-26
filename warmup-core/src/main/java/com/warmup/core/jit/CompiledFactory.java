@@ -36,4 +36,29 @@ public interface CompiledFactory<T> {
     default int getDependencyCount() {
         return 0; // Optional implementation
     }
+    
+    /**
+     * Wires this factory with its dependency factories.
+     * Called by the container after all factories are registered.
+     * Default implementation does nothing (for factories without dependencies or legacy support).
+     * 
+     * @param dependencyFactories array of compiled factories for dependencies
+     */
+    default void wire(CompiledFactory<?>[] dependencyFactories) {
+        // Default: no wiring support (legacy or no dependencies)
+    }
+    
+    /**
+     * Creates a bean instance using wired dependency factories.
+     * This method avoids Object[] allocation by calling dependency factories directly.
+     * Default implementation delegates to create() for backward compatibility.
+     * Factories with wiring support should override this method.
+     * 
+     * @return a new bean instance
+     */
+    default T get() {
+        // Default: delegate to create() with no dependencies
+        // Factories with dependencies should override this method
+        return create();
+    }
 }
