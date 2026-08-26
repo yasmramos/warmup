@@ -362,7 +362,7 @@ public class WarmupProcessor extends AbstractProcessor {
         for (int i = 0; i < parameters.size(); i++) {
             VariableElement param = parameters.get(i);
             String paramType = param.asType().toString();
-            code.append("    private final CompiledFactory<").append(paramType)
+            code.append("    private CompiledFactory<").append(paramType)
                 .append("> factory").append(i).append(";\n");
         }
         
@@ -372,13 +372,39 @@ public class WarmupProcessor extends AbstractProcessor {
         
         // Generate constructor
         code.append("    public ").append(factoryClassName).append("() {\n");
-        code.append("        // Dependencies resolved at runtime\n");
+        code.append("        // Dependencies will be wired by container\n");
         for (int i = 0; i < parameters.size(); i++) {
             code.append("        this.factory").append(i).append(" = null;\n");
         }
         code.append("    }\n\n");
         
-        // Generate create method
+        // Generate wire method
+        if (!parameters.isEmpty()) {
+            code.append("    @Override\n");
+            code.append("    public void wire(CompiledFactory<?>[] dependencyFactories) {\n");
+            for (int i = 0; i < parameters.size(); i++) {
+                VariableElement param = parameters.get(i);
+                String paramType = param.asType().toString();
+                code.append("        this.factory").append(i)
+                    .append(" = (CompiledFactory<").append(paramType).append(">) dependencyFactories[").append(i).append("];\n");
+            }
+            code.append("    }\n\n");
+        }
+        
+        // Generate get method (wired path - no Object[] allocation)
+        if (!parameters.isEmpty()) {
+            code.append("    @Override\n");
+            code.append("    public ").append(className).append(" get() {\n");
+            code.append("        return new ").append(className).append("(");
+            for (int i = 0; i < parameters.size(); i++) {
+                if (i > 0) code.append(", ");
+                code.append("factory").append(i).append(".get()");
+            }
+            code.append(");\n");
+            code.append("    }\n\n");
+        }
+        
+        // Generate create method (fallback path for backward compatibility)
         code.append("    @Override\n");
         code.append("    public ").append(className).append(" create(Object... dependencies) {\n");
         
@@ -470,12 +496,57 @@ public class WarmupProcessor extends AbstractProcessor {
         // Field for caching the factory instance (singleton pattern for the factory itself)
         code.append("    private ").append(factoryFullClassName).append(" factoryInstance;\n\n");
         
+        // Generate fields for dependency factories (if any)
+        for (int i = 0; i < parameters.size(); i++) {
+            VariableElement param = parameters.get(i);
+            String paramType = param.asType().toString();
+            code.append("    private CompiledFactory<").append(paramType)
+                .append("> factory").append(i).append(";\n");
+        }
+        
+        if (!parameters.isEmpty()) {
+            code.append("\n");
+        }
+        
         // Generate constructor
         code.append("    public ").append(generatedFactoryName).append("() {\n");
         code.append("        // Factory instance will be created on first call\n");
+        code.append("        // Dependencies will be wired by container\n");
+        for (int i = 0; i < parameters.size(); i++) {
+            code.append("        this.factory").append(i).append(" = null;\n");
+        }
         code.append("    }\n\n");
         
-        // Generate create method
+        // Generate wire method
+        if (!parameters.isEmpty()) {
+            code.append("    @Override\n");
+            code.append("    public void wire(CompiledFactory<?>[] dependencyFactories) {\n");
+            for (int i = 0; i < parameters.size(); i++) {
+                VariableElement param = parameters.get(i);
+                String paramType = param.asType().toString();
+                code.append("        this.factory").append(i)
+                    .append(" = (CompiledFactory<").append(paramType).append(">) dependencyFactories[").append(i).append("];\n");
+            }
+            code.append("    }\n\n");
+        }
+        
+        // Generate get method (wired path - no Object[] allocation)
+        if (!parameters.isEmpty()) {
+            code.append("    @Override\n");
+            code.append("    public ").append(returnType).append(" get() {\n");
+            code.append("        if (factoryInstance == null) {\n");
+            code.append("            factoryInstance = new ").append(factoryFullClassName).append("();\n");
+            code.append("        }\n");
+            code.append("        return factoryInstance.").append(methodName).append("(");
+            for (int i = 0; i < parameters.size(); i++) {
+                if (i > 0) code.append(", ");
+                code.append("factory").append(i).append(".get()");
+            }
+            code.append(");\n");
+            code.append("    }\n\n");
+        }
+        
+        // Generate create method (fallback path for backward compatibility)
         code.append("    @Override\n");
         code.append("    public ").append(returnType).append(" create(Object... dependencies) {\n");
         code.append("        if (factoryInstance == null) {\n");

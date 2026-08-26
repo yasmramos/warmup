@@ -216,12 +216,69 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
      */
     private void discoverAndRegisterFactories() {
         ServiceLoader<FactoryRegistrar> loader = ServiceLoader.load(FactoryRegistrar.class);
+        // First pass: register all factories
         for (FactoryRegistrar registrar : loader) {
             registrar.registerAll((definition, factory) -> {
                 registry.register(definition);
                 factoryCache.put(definition.name(), factory);
                 compileTimeFactoryNames.add(definition.name());
             });
+        }
+        
+        // Second pass: wire factories with their dependencies
+        wireFactories();
+    }
+    
+    /**
+     * Wires all registered factories with their dependency factories.
+     * Called after all factories are registered to enable direct factory-to-factory calls.
+     */
+    @SuppressWarnings("unchecked")
+    private void wireFactories() {
+        for (Map.Entry<String, CompiledFactory<?>> entry : factoryCache.entrySet()) {
+            String beanName = entry.getKey();
+            CompiledFactory<?> factory = entry.getValue();
+            
+            BeanDefinition<?> definition = registry.getDefinitionOrNull(beanName);
+            if (definition == null) {
+                continue;
+            }
+            
+            Object[] dependencies = definition.dependencies();
+            if (dependencies.length == 0) {
+                continue; // No dependencies to wire
+            }
+            
+            // Collect dependency factories
+            CompiledFactory<?>[] depFactories = new CompiledFactory<?>[dependencies.length];
+            boolean allResolved = true;
+            
+            for (int i = 0; i < dependencies.length; i++) {
+                Object dep = dependencies[i];
+                if (dep instanceof String depName) {
+                    CompiledFactory<?> depFactory = factoryCache.get(depName);
+                    if (depFactory != null) {
+                        depFactories[i] = depFactory;
+                    } else {
+                        // Dependency factory not yet available (forward reference or dynamic bean)
+                        allResolved = false;
+                        break;
+                    }
+                } else {
+                    // Direct object reference (not a bean name) - skip wiring for this dependency
+                    allResolved = false;
+                    break;
+                }
+            }
+            
+            // Wire the factory if all dependencies are available
+            if (allResolved) {
+                try {
+                    factory.wire(depFactories);
+                } catch (Exception e) {
+                    // Ignore wiring errors - fallback to create(Object...) will still work
+                }
+            }
         }
     }
 
@@ -824,9 +881,22 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
             return createViaReflection(resolvedDef);
         }
         
-        // Create instance using factory - pass factory directly to avoid re-lookup
-        Object[] deps = resolveDependencies(definition);
-        T instance = factory.create(deps);
+        // Create instance using factory - try wired path first (no Object[] allocation)
+        T instance;
+        if (compileTimeFactoryNames.contains(name)) {
+            // Compile-time factory: try get() method for wired path
+            try {
+                instance = factory.get();
+            } catch (Exception e) {
+                // Fallback to create() with resolved dependencies
+                Object[] deps = resolveDependencies(definition);
+                instance = factory.create(deps);
+            }
+        } else {
+            // JIT or other factory: use traditional path
+            Object[] deps = resolveDependencies(definition);
+            instance = factory.create(deps);
+        }
         
         // Record diagnostic if enabled
         if (diagnosticMode) {
@@ -934,15 +1004,30 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
      */
     @SuppressWarnings("unchecked")
     private <T> T createBeanWithFactory(ResolvedBeanDefinition<T> resolvedDef, CompiledFactory<T> factory) {
-        Object[] deps = resolveDependencies(resolvedDef.getDefinition());
-        T instance = factory.create(deps);
+        String name = resolvedDef.name();
+        
+        // Try wired path first for compile-time factories (no Object[] allocation)
+        T instance;
+        if (compileTimeFactoryNames.contains(name)) {
+            try {
+                instance = factory.get();
+            } catch (Exception e) {
+                // Fallback to traditional path
+                Object[] deps = resolveDependencies(resolvedDef.getDefinition());
+                instance = factory.create(deps);
+            }
+        } else {
+            // JIT or other factory: use traditional path
+            Object[] deps = resolveDependencies(resolvedDef.getDefinition());
+            instance = factory.create(deps);
+        }
         
         // Record diagnostic if enabled (avoid work in hot path when disabled)
         if (diagnosticMode) {
-            ResolutionDiagnostic.ResolutionPath path = compileTimeFactoryNames.contains(resolvedDef.name()) 
+            ResolutionDiagnostic.ResolutionPath path = compileTimeFactoryNames.contains(name) 
                 ? ResolutionDiagnostic.ResolutionPath.COMPILE_TIME 
                 : ResolutionDiagnostic.ResolutionPath.JIT;
-            diagnostics.add(new ResolutionDiagnostic(resolvedDef.name(), resolvedDef.type(), path, 0L));
+            diagnostics.add(new ResolutionDiagnostic(name, resolvedDef.type(), path, 0L));
         }
         
         return instance;
@@ -977,16 +1062,30 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
      */
     @SuppressWarnings("unchecked")
     private <T> T createPrototypeBeanWithFactory(ResolvedBeanDefinition<T> resolvedDef, CompiledFactory<T> factory) {
-        // Fast path: resolve dependencies and create instance
-        Object[] deps = resolveDependencies(resolvedDef.getDefinition());
-        T instance = factory.create(deps);
+        String name = resolvedDef.name();
+        
+        // Fast path: try wired path first (no Object[] allocation)
+        T instance;
+        if (compileTimeFactoryNames.contains(name)) {
+            try {
+                instance = factory.get();
+            } catch (Exception e) {
+                // Fallback to traditional path
+                Object[] deps = resolveDependencies(resolvedDef.getDefinition());
+                instance = factory.create(deps);
+            }
+        } else {
+            // JIT or other factory: use traditional path
+            Object[] deps = resolveDependencies(resolvedDef.getDefinition());
+            instance = factory.create(deps);
+        }
         
         // Record diagnostic if enabled (minimal overhead path)
         if (diagnosticMode) {
-            ResolutionDiagnostic.ResolutionPath path = compileTimeFactoryNames.contains(resolvedDef.name()) 
+            ResolutionDiagnostic.ResolutionPath path = compileTimeFactoryNames.contains(name) 
                 ? ResolutionDiagnostic.ResolutionPath.COMPILE_TIME 
                 : ResolutionDiagnostic.ResolutionPath.JIT;
-            diagnostics.add(new ResolutionDiagnostic(resolvedDef.name(), resolvedDef.type(), path, 0L));
+            diagnostics.add(new ResolutionDiagnostic(name, resolvedDef.type(), path, 0L));
         }
         
         return instance;
