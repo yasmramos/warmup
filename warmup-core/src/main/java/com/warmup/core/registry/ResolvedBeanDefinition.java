@@ -28,6 +28,12 @@ public class ResolvedBeanDefinition<T> {
     /** Cached CompiledFactory to avoid repeated factoryCache lookups */
     private volatile CompiledFactory<T> resolvedFactory;
     
+    /** Indicates if this bean comes from a compile-time generated factory */
+    private volatile boolean compileTime = false;
+    
+    /** Indicates that factory.wire() was successfully applied and factory.get() is safe to call */
+    private volatile boolean wired = false;
+    
     /** Cached singleton instance for fast-path resolution (null for PROTOTYPE scope) */
     private volatile T cachedInstance;
     
@@ -101,6 +107,38 @@ public class ResolvedBeanDefinition<T> {
      */
     public void setResolvedFactory(CompiledFactory<T> factory) {
         this.resolvedFactory = factory;
+    }
+    
+    /**
+     * Checks if this bean comes from a compile-time generated factory.
+     * @return true if compile-time, false otherwise
+     */
+    public boolean isCompileTime() {
+        return compileTime;
+    }
+    
+    /**
+     * Sets whether this bean comes from a compile-time generated factory.
+     * @param compileTime true if compile-time, false otherwise
+     */
+    public void setCompileTime(boolean compileTime) {
+        this.compileTime = compileTime;
+    }
+    
+    /**
+     * Checks if the factory has been successfully wired and factory.get() is safe to call.
+     * @return true if wired, false otherwise
+     */
+    public boolean isWired() {
+        return wired;
+    }
+    
+    /**
+     * Sets whether the factory has been successfully wired.
+     * @param wired true if wired, false otherwise
+     */
+    public void setWired(boolean wired) {
+        this.wired = wired;
     }
     
     /**
