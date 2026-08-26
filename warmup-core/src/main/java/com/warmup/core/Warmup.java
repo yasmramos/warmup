@@ -24,7 +24,10 @@ import java.util.function.Function;
  * <pre>{@code
  * // Simple usage with defaults
  * Warmup warmup = Warmup.create();
- * MyService service = warmup.resolve(MyService.class);
+ * UserService service = warmup.get(UserService.class);
+ * 
+ * // Alternative using resolve (same behavior)
+ * UserService service2 = warmup.resolve(UserService.class);
  * 
  * // Advanced usage with builder
  * Warmup warmup = Warmup.builder()
@@ -176,6 +179,18 @@ public class Warmup implements AutoCloseable {
      * @throws IllegalStateException if bean not found
      */
     public <T> T resolve(Class<T> clazz) {
+        return container.resolve(clazz);
+    }
+
+    /**
+     * Resolves a bean by type. Alias for {@link #resolve(Class)} with Avaje-style nomenclature.
+     * 
+     * @param clazz the bean class
+     * @return the bean instance
+     * @throws IllegalStateException if bean not found
+     * @see #resolve(Class)
+     */
+    public <T> T get(Class<T> clazz) {
         return container.resolve(clazz);
     }
 
