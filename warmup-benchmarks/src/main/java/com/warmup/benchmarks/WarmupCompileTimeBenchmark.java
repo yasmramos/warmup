@@ -73,9 +73,9 @@ public class WarmupCompileTimeBenchmark {
         // META-INF/services/com.warmup.core.jit.FactoryRegistrar.
         
         // Pre-resolve singletons to ensure they're cached in the registry
-        container.resolve("WarmupSimpleBean");
-        container.resolve("WarmupBeanWithOneDependency");
-        container.resolve("WarmupBeanWithFiveDependencies");
+        container.resolve(WarmupSimpleBean.class);
+        container.resolve(WarmupBeanWithOneDependency.class);
+        container.resolve(WarmupBeanWithFiveDependencies.class);
         
         // Separate verification container: verify COMPILE_TIME path is used without
         // contaminating the measured container's metrics. This container has
@@ -99,9 +99,9 @@ public class WarmupCompileTimeBenchmark {
         verificationContainer = new HybridContainer(verifyConfig, jitCompiler);
         
         // Resolve each bean type once to populate metrics
-        verificationContainer.resolve("WarmupSimpleBean");
-        verificationContainer.resolve("WarmupBeanWithOneDependency");
-        verificationContainer.resolve("WarmupBeanWithFiveDependencies");
+        verificationContainer.resolve(WarmupSimpleBean.class);
+        verificationContainer.resolve(WarmupBeanWithOneDependency.class);
+        verificationContainer.resolve(WarmupBeanWithFiveDependencies.class);
         
         ContainerMetrics metrics = verificationContainer.getMetrics();
         
@@ -136,7 +136,7 @@ public class WarmupCompileTimeBenchmark {
      */
     @Benchmark
     public WarmupSimpleBean warmupCompileTimeSingletonResolve() {
-        return container.resolve("WarmupSimpleBean");
+        return container.resolve(WarmupSimpleBean.class);
     }
 
     /**
@@ -146,7 +146,7 @@ public class WarmupCompileTimeBenchmark {
      */
     @Benchmark
     public WarmupBeanWithOneDependency warmupCompileTimeBeanWithOneDependency() {
-        return container.resolve("WarmupBeanWithOneDependency");
+        return container.resolve(WarmupBeanWithOneDependency.class);
     }
 
     /**
@@ -156,7 +156,7 @@ public class WarmupCompileTimeBenchmark {
      */
     @Benchmark
     public WarmupBeanWithFiveDependencies warmupCompileTimeBeanWithFiveDependencies() {
-        return container.resolve("WarmupBeanWithFiveDependencies");
+        return container.resolve(WarmupBeanWithFiveDependencies.class);
     }
 
     /**

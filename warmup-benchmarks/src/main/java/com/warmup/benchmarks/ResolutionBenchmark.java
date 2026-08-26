@@ -122,7 +122,7 @@ public class ResolutionBenchmark {
         prototypeFactory = jitCompiler.compile(PrototypeBean.class);
 
         // Pre-resolve singleton to ensure it's cached (fast-path test)
-        container.resolve("simpleBean");
+        container.resolve(SimpleBean.class);
     }
 
     @Benchmark
@@ -136,7 +136,7 @@ public class ResolutionBenchmark {
      */
     @Benchmark
     public Object warmupSingletonResolve() {
-        return container.resolve("simpleBean");
+        return container.resolve(SimpleBean.class);
     }
 
     /**
@@ -147,7 +147,7 @@ public class ResolutionBenchmark {
     public Object warmupSingletonResolveIndexed() {
         Object result = container.resolveByIndex(simpleBeanIndex);
         // Fallback to name-based resolve if not yet cached (shouldn't happen after warmup)
-        return result != null ? result : container.resolve("simpleBean");
+        return result != null ? result : container.resolve(SimpleBean.class);
     }
 
     /**
@@ -156,7 +156,7 @@ public class ResolutionBenchmark {
      */
     @Benchmark
     public Object warmupPrototypeResolve() {
-        return container.resolve("prototypeBean");
+        return container.resolve(PrototypeBean.class);
     }
 
     /**
