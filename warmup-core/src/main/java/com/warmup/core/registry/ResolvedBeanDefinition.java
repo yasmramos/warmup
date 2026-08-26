@@ -34,11 +34,15 @@ public class ResolvedBeanDefinition<T> {
     /** Indicates that factory.wire() was successfully applied and factory.get() is safe to call */
     private volatile boolean wired = false;
     
+    /** Pre-computed flag: true if this bean is PROTOTYPE scope, false otherwise */
+    private final boolean isPrototype;
+    
     /** Cached singleton instance for fast-path resolution (null for PROTOTYPE scope) */
     private volatile T cachedInstance;
     
     public ResolvedBeanDefinition(BeanDefinition<T> definition) {
         this.definition = definition;
+        this.isPrototype = definition.scope() == Scope.PROTOTYPE;
     }
     
     /**
@@ -51,6 +55,7 @@ public class ResolvedBeanDefinition<T> {
     public ResolvedBeanDefinition(BeanDefinition<T> definition, int index) {
         this.definition = definition;
         this.resolvedIndex = index;
+        this.isPrototype = definition.scope() == Scope.PROTOTYPE;
     }
     
     /**
@@ -189,5 +194,15 @@ public class ResolvedBeanDefinition<T> {
     
     public boolean hasLifecycle() {
         return definition.hasLifecycle();
+    }
+    
+    /**
+     * Checks if this bean is PROTOTYPE scope.
+     * This is a pre-computed flag to avoid enum comparison in hot paths.
+     * 
+     * @return true if PROTOTYPE, false otherwise
+     */
+    public boolean isPrototype() {
+        return isPrototype;
     }
 }
