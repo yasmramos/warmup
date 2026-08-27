@@ -17,6 +17,7 @@ import javax.tools.Diagnostic;
 import javax.tools.FileObject;
 import javax.tools.StandardLocation;
 import java.io.IOException;
+import java.io.OutputStream;
 import java.io.Writer;
 import java.util.*;
 
@@ -31,40 +32,22 @@ import java.util.*;
  * - @Bean: Method-level annotation within @Factory classes to mark producer methods
  * - @Inject: Marks constructor parameters or method parameters for injection
  * 
- * Generated code example for class-level bean:
+ * Generated factory structure (as bytecode):
  * ```java
  * public class UserService$$WarmupFactory implements CompiledFactory<UserService> {
- *     private final CompiledFactory<Repository> repoFactory;
+ *     private Object dep0;  // wired dependency
  *     
- *     public UserService$$WarmupFactory() {
- *         // Constructor
+ *     public void wire(CompiledFactory<?>[] deps) {
+ *         this.dep0 = deps[0];
  *     }
  *     
- *     @Override
- *     public UserService create(Object... dependencies) {
- *         Repository repo = (Repository) dependencies[0];
- *         return new UserService(repo);
+ *     public UserService get() {
+ *         return new UserService((DependencyType) dep0);
  *     }
  *     
- *     @Override
- *     public Class<UserService> getBeanType() {
- *         return UserService.class;
- *     }
- * }
- * ```
- * 
- * Generated code example for @Factory method:
- * ```java
- * public class AppConfig$$WarmupFactory implements CompiledFactory<AppConfig> {
- *     private AppConfig factoryInstance;
- *     
- *     @Override
- *     public DataSource create(Object... dependencies) {
- *         if (factoryInstance == null) {
- *             factoryInstance = new AppConfig();
- *         }
- *         return factoryInstance.dataSource();
- *     }
+ *     public Object create(Object... dependencies) { ... }
+ *     public Class<UserService> getBeanType() { ... }
+ *     public int getDependencyCount() { ... }
  * }
  * ```
  */
@@ -81,6 +64,7 @@ public class WarmupProcessor extends AbstractProcessor {
 
     private final List<BeanInfo> processedBeans = new ArrayList<>();
     private boolean processingOver = false;
+    private FactoryBytecodeGenerator bytecodeGenerator;
 
     /**
      * Holds information about a processed bean for later registrar generation.
@@ -111,6 +95,14 @@ public class WarmupProcessor extends AbstractProcessor {
     public boolean process(Set<? extends TypeElement> annotations, RoundEnvironment roundEnv) {
         Filer filer = processingEnv.getFiler();
         Messager messager = processingEnv.getMessager();
+        
+        // Initialize bytecode generator
+        bytecodeGenerator = new FactoryBytecodeGenerator(new FactoryBytecodeGenerator.MessagerAdapter() {
+            @Override
+            public void printError(String message, Element element) {
+                messager.printMessage(Diagnostic.Kind.ERROR, message, element);
+            }
+        });
         
         // Process class-level stereotype annotations: @Singleton, @Prototype, @Component
         // These imply @Bean with a specific scope
