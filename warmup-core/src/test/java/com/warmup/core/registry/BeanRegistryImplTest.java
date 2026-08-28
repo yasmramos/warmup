@@ -386,10 +386,68 @@ class BeanRegistryImplTest {
         registry.register(def1);
         registry.register(def2);
         
-        // Resolving by type returns the first registered when neither is primary
+        // Resolving by type should throw AmbiguousBeanException
+        assertThrows(com.warmup.core.exception.AmbiguousBeanException.class, () -> 
+            registry.getDefinitionByType(TestService.class)
+        );
+    }
+    
+    @Test
+    void testNamedQualifierResolvesCorrectBean() {
+        BeanDefinition<TestService> def1 = new BeanDefinition<>(
+            TestService.class, "serviceImpl1",
+            Scope.SINGLETON, com.warmup.core.lifecycle.LifecycleCallbacks.empty(),
+            false, new String[0]
+        );
+        
+        BeanDefinition<TestService> def2 = new BeanDefinition<>(
+            TestService.class, "serviceImpl2",
+            Scope.SINGLETON, com.warmup.core.lifecycle.LifecycleCallbacks.empty(),
+            false, new String[0]
+        );
+        
+        // Register both non-primary beans
+        registry.register(def1);
+        registry.register(def2);
+        
+        // Resolve by name explicitly - should work without ambiguity
+        Optional<BeanDefinition<TestService>> byName1 = registry.getDefinition("serviceImpl1");
+        assertTrue(byName1.isPresent());
+        assertEquals("serviceImpl1", byName1.get().name());
+        
+        Optional<BeanDefinition<TestService>> byName2 = registry.getDefinition("serviceImpl2");
+        assertTrue(byName2.isPresent());
+        assertEquals("serviceImpl2", byName2.get().name());
+    }
+    
+    @Test
+    void testPrimaryWinsOverMultipleNonPrimary() {
+        BeanDefinition<TestService> nonPrimary1 = new BeanDefinition<>(
+            TestService.class, "nonPrimary1",
+            Scope.SINGLETON, com.warmup.core.lifecycle.LifecycleCallbacks.empty(),
+            false, new String[0]
+        );
+        
+        BeanDefinition<TestService> nonPrimary2 = new BeanDefinition<>(
+            TestService.class, "nonPrimary2",
+            Scope.SINGLETON, com.warmup.core.lifecycle.LifecycleCallbacks.empty(),
+            false, new String[0]
+        );
+        
+        BeanDefinition<TestService> primary = new BeanDefinition<>(
+            TestService.class, "primaryBean",
+            Scope.SINGLETON, com.warmup.core.lifecycle.LifecycleCallbacks.empty(),
+            true, new String[0]
+        );
+        
+        // Register all three beans
+        registry.register(nonPrimary1);
+        registry.register(nonPrimary2);
+        registry.register(primary);
+        
+        // Resolve by type - should get the primary bean despite multiple non-primary candidates
         Optional<BeanDefinition<TestService>> byType = registry.getDefinitionByType(TestService.class);
-        // Current behavior: first registered wins when no primary exists
         assertTrue(byType.isPresent());
-        assertEquals("bean1", byType.get().name());
+        assertEquals("primaryBean", byType.get().name());
     }
 }
