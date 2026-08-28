@@ -1,5 +1,6 @@
 package com.warmup.core.registry;
 
+import com.warmup.core.exception.AmbiguousBeanException;
 import com.warmup.core.jit.CompiledFactory;
 import com.warmup.core.lifecycle.LifecycleCallbacks;
 import com.warmup.core.scope.Scope;
@@ -12,6 +13,9 @@ import java.lang.invoke.MethodHandles;
 import java.util.Optional;
 import java.util.Map;
 import java.util.Set;
+import java.util.List;
+import java.util.ArrayList;
+import java.util.Collection;
 
 /**
  * Thread-safe implementation of BeanRegistry using lock-free data structures.
@@ -33,6 +37,9 @@ public class BeanRegistryImpl implements BeanRegistry {
     
     // Bean definitions indexed by type for quick type-based lookup
     private final ConcurrentMap<Class<?>, BeanDefinition<?>> definitionsByType = new ConcurrentHashMap<>();
+    
+    // Track all bean names per type for ambiguity detection
+    private final ConcurrentMap<Class<?>, List<String>> allBeansByType = new ConcurrentHashMap<>();
     
     // Cached singleton instances
     private final ConcurrentMap<String, Object> singletonInstances = new ConcurrentHashMap<>();
@@ -108,6 +115,9 @@ public class BeanRegistryImpl implements BeanRegistry {
         ResolvedBeanDefinition<T> resolvedDef = new ResolvedBeanDefinition<>(definition, index);
         resolvedByName.put(name, resolvedDef);
         
+        // Track all beans of this type for ambiguity detection
+        allBeansByType.computeIfAbsent(definition.type(), k -> new ArrayList<>()).add(name);
+        
         // Register by type (primary beans override non-primary)
         definitionsByType.compute(definition.type(), (type, existing) -> {
             if (existing == null || definition.isPrimary()) {
@@ -166,6 +176,27 @@ public class BeanRegistryImpl implements BeanRegistry {
     @Override
     @SuppressWarnings("unchecked")
     public <T> Optional<BeanDefinition<T>> getDefinitionByType(Class<T> type) {
+        List<String> beanNames = allBeansByType.get(type);
+        if (beanNames == null || beanNames.isEmpty()) {
+            return Optional.empty();
+        }
+        
+        // Check for ambiguity: multiple beans of same type without @Primary
+        if (beanNames.size() > 1) {
+            // Check if there's exactly one primary
+            long primaryCount = beanNames.stream()
+                .map(name -> definitionsByName.get(name))
+                .filter(def -> def != null && def.isPrimary())
+                .count();
+            
+            if (primaryCount == 0) {
+                // No primary bean found - throw ambiguity exception
+                throw new AmbiguousBeanException(type, beanNames);
+            }
+            // If there's exactly one primary, it will be in definitionsByType
+            // If there are multiple primaries, that's an error in registration
+        }
+        
         BeanDefinition<?> definition = definitionsByType.get(type);
         if (definition == null) {
             return Optional.empty();
@@ -176,7 +207,11 @@ public class BeanRegistryImpl implements BeanRegistry {
     @Override
     @SuppressWarnings("unchecked")
     public <T> BeanDefinition<T> getDefinitionByTypeOrNull(Class<T> type) {
-        return (BeanDefinition<T>) definitionsByType.get(type);
+        try {
+            return getDefinitionByType(type).orElse(null);
+        } catch (AmbiguousBeanException e) {
+            throw e; // Re-throw ambiguity exception
+        }
     }
 
     @Override
