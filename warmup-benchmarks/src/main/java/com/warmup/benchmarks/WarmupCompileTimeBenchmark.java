@@ -4,6 +4,7 @@ import com.warmup.asm.AsmJITCompiler;
 import com.warmup.benchmarks.warmup.WarmupBeanWithFiveDependencies;
 import com.warmup.benchmarks.warmup.WarmupBeanWithOneDependency;
 import com.warmup.benchmarks.warmup.WarmupSimpleBean;
+import com.warmup.core.Warmup;
 import com.warmup.core.container.ContainerMetrics;
 import com.warmup.core.container.HybridContainer;
 import com.warmup.core.container.HybridContainerConfig;
@@ -41,6 +42,10 @@ import java.util.concurrent.TimeUnit;
  *       instrumenting the measured hot path</li>
  * </ul>
  * 
+ * <p><strong>Important:</strong> This benchmark uses the public {@link Warmup} facade API
+ * to measure performance exactly as end-users would experience it, matching how
+ * {@link AvajeInjectBenchmark} measures {@code io.avaje.inject.BeanScope}.</p>
+ * 
  * @see AvajeInjectBenchmark for Avaje's compile-time benchmark
  * @see ResolutionBenchmark for Warmup's JIT path benchmark
  */
@@ -49,33 +54,34 @@ import java.util.concurrent.TimeUnit;
 @OutputTimeUnit(TimeUnit.NANOSECONDS)
 public class WarmupCompileTimeBenchmark {
 
-    private HybridContainer container;
+    private Warmup warmup;
     private HybridContainer verificationContainer;
 
     @Setup(Level.Trial)
     public void setup() {
-        // Create container with autoDiscoverFactories=true to enable ServiceLoader discovery
-        // of GeneratedFactoryRegistrar, which registers all compile-time factories.
+        // Create Warmup instance using the public facade API with autoDiscoverFactories=true
+        // to enable ServiceLoader discovery of GeneratedFactoryRegistrar, which registers
+        // all compile-time factories.
         // CRITICAL: metricsEnabled=false to measure bare fast-path overhead without
         // System.nanoTime() instrumentation (~50ns per call) that would dominate and mask
         // the actual resolution cost, making comparison with Avaje unfair.
         AsmJITCompiler jitCompiler = new AsmJITCompiler();
-        HybridContainerConfig config = new HybridContainerConfig(
-            false,  // diagnosticMode
-            10,     // maxPendingCompilations
-            true,   // autoDiscoverFactories - enables compile-time factory discovery
-            false   // metricsEnabled=false for fair performance measurement (no nanoTime overhead)
-        );
-        container = new HybridContainer(config, jitCompiler);
+        warmup = Warmup.builder()
+            .jitCompiler(jitCompiler)
+            .diagnostic(false)
+            .maxPendingCompilations(10)
+            .autoDiscoverFactories(true)
+            .metrics(false)  // Disabled for fair performance measurement
+            .build();
 
         // Note: We do NOT call registerDynamic() here, as that would trigger JIT compilation.
         // The compile-time factories are already registered via auto-discovery from
         // META-INF/services/com.warmup.core.jit.FactoryRegistrar.
         
         // Pre-resolve singletons to ensure they're cached in the registry
-        container.resolve(WarmupSimpleBean.class);
-        container.resolve(WarmupBeanWithOneDependency.class);
-        container.resolve(WarmupBeanWithFiveDependencies.class);
+        warmup.resolve(WarmupSimpleBean.class);
+        warmup.resolve(WarmupBeanWithOneDependency.class);
+        warmup.resolve(WarmupBeanWithFiveDependencies.class);
         
         // Separate verification container: verify COMPILE_TIME path is used without
         // contaminating the measured container's metrics. This container has
@@ -136,7 +142,7 @@ public class WarmupCompileTimeBenchmark {
      */
     @Benchmark
     public WarmupSimpleBean warmupCompileTimeSingletonResolve() {
-        return container.resolve(WarmupSimpleBean.class);
+        return warmup.get(WarmupSimpleBean.class);
     }
 
     /**
@@ -146,7 +152,7 @@ public class WarmupCompileTimeBenchmark {
      */
     @Benchmark
     public WarmupBeanWithOneDependency warmupCompileTimeBeanWithOneDependency() {
-        return container.resolve(WarmupBeanWithOneDependency.class);
+        return warmup.get(WarmupBeanWithOneDependency.class);
     }
 
     /**
@@ -156,7 +162,7 @@ public class WarmupCompileTimeBenchmark {
      */
     @Benchmark
     public WarmupBeanWithFiveDependencies warmupCompileTimeBeanWithFiveDependencies() {
-        return container.resolve(WarmupBeanWithFiveDependencies.class);
+        return warmup.get(WarmupBeanWithFiveDependencies.class);
     }
 
     /**
