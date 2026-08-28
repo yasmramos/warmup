@@ -37,6 +37,9 @@ public class ResolvedBeanDefinition<T> {
     /** Pre-computed flag: true if this bean is PROTOTYPE scope, false otherwise */
     private final boolean isPrototype;
     
+    /** Pre-computed flag: true if this bean has pending warmup, false otherwise */
+    private volatile boolean hasPendingWarmup = false;
+    
     /** Cached singleton instance for fast-path resolution (null for PROTOTYPE scope) */
     private volatile T cachedInstance;
     
@@ -204,5 +207,25 @@ public class ResolvedBeanDefinition<T> {
      */
     public boolean isPrototype() {
         return isPrototype;
+    }
+    
+    /**
+     * Checks if this bean has pending warmup compilation.
+     * This is a pre-computed flag to avoid Set lookups in hot paths.
+     * 
+     * @return true if has pending warmup, false otherwise
+     */
+    public boolean hasPendingWarmup() {
+        return hasPendingWarmup;
+    }
+    
+    /**
+     * Sets whether this bean has pending warmup compilation.
+     * Called when registering a dynamic bean to mark it for lazy compilation.
+     * 
+     * @param hasPendingWarmup true if the bean has pending warmup, false otherwise
+     */
+    public void setHasPendingWarmup(boolean hasPendingWarmup) {
+        this.hasPendingWarmup = hasPendingWarmup;
     }
 }

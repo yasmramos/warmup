@@ -332,6 +332,12 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
         // Mark bean as pending warmup - actual compilation happens lazily on first resolve
         // This avoids allocating CompletableFuture and lambda per bean during mass registration
         pendingWarmupBeans.add(definition.name());
+        
+        // Also set the flag on ResolvedBeanDefinition for fast-path checking
+        ResolvedBeanDefinition<?> resolvedDef = registry.getResolvedOrNull(definition.name());
+        if (resolvedDef != null) {
+            resolvedDef.setHasPendingWarmup(true);
+        }
     }
 
     /**
@@ -345,22 +351,21 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
      */
     @SuppressWarnings("unchecked")
     private <T> T resolveByName(String name) {
-        // Check if this bean has pending warmup and trigger compilation on first resolve
-        if (pendingWarmupBeans.contains(name)) {
-            BeanDefinition<T> definition = (BeanDefinition<T>) registry.getDefinition(name).orElse(null);
-            if (definition != null) {
-                // Remove from pending set atomically to avoid duplicate warmup
-                if (pendingWarmupBeans.remove(name)) {
-                    // Trigger background warmup only when the bean is actually needed
-                    triggerBackgroundWarmup(definition);
-                }
-            }
-        }
-        
         // Single lookup: get pre-computed ResolvedBeanDefinition directly from registry
         ResolvedBeanDefinition<T> resolvedDef = registry.getResolvedOrNull(name);
         if (resolvedDef == null) {
             throw new IllegalStateException("Bean not found: " + name);
+        }
+        
+        // Check if this bean has pending warmup and trigger compilation on first resolve
+        // Use pre-computed flag to avoid expensive Set.contains() lookup
+        if (resolvedDef.hasPendingWarmup()) {
+            // Double-check with Set to ensure atomicity and avoid duplicate warmup
+            if (pendingWarmupBeans.remove(name)) {
+                BeanDefinition<T> definition = resolvedDef.getDefinition();
+                // Trigger background warmup only when the bean is actually needed
+                triggerBackgroundWarmup(definition);
+            }
         }
         
         // OPTIMIZATION 1: For PROTOTYPE beans, skip singleton cache lookup entirely
@@ -477,21 +482,31 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
             }
         } else {
             // Check if this bean has pending warmup and trigger compilation on first resolve via type
-            // Gate the expensive Set.contains() with a quick isEmpty() check first
-            if (!pendingWarmupBeans.isEmpty()) {
+            // Use pre-computed flag to avoid expensive Set.contains() lookup
+            if (resolvedDef.hasPendingWarmup()) {
                 String beanName = resolvedDef.name();
-                if (pendingWarmupBeans.contains(beanName)) {
+                // Double-check with Set to ensure atomicity and avoid duplicate warmup
+                if (pendingWarmupBeans.remove(beanName)) {
                     BeanDefinition<T> definition = resolvedDef.getDefinition();
-                    // Remove from pending set atomically to avoid duplicate warmup
-                    if (pendingWarmupBeans.remove(beanName)) {
-                        // Trigger background warmup only when the bean is actually needed
-                        triggerBackgroundWarmup(definition);
-                    }
+                    // Trigger background warmup only when the bean is actually needed
+                    triggerBackgroundWarmup(definition);
                 }
             }
         }
         
+        // OPTIMIZATION 3: For cached singletons, return instance directly without delegation
+        // This avoids re-evaluating scope and an extra method call that can inhibit inlining
+        T cachedInstance = resolvedDef.getCachedInstance();
+        if (cachedInstance != null && !resolvedDef.isPrototype()) {
+            if (metricsEnabled) {
+                long startTime = System.nanoTime();
+                recordMetrics(resolvedDef.getDefinition(), System.nanoTime() - startTime);
+            }
+            return cachedInstance;
+        }
+        
         // Use the cached resolved definition to resolve the bean
+        // (delegation still needed for prototypes and first creation)
         return resolve(resolvedDef);
     }
 
@@ -1085,6 +1100,10 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
         T instance;
         if (resolvedDef.isCompileTime() && resolvedDef.isWired()) {
             // Wired compile-time factory: call get() directly without try/catch
+            instance = factory.get();
+        } else if (resolvedDef.isWired()) {
+            // Wired JIT factory: call get() directly without Object[] allocation
+            // This is the key optimization for prototypes with wired dependencies
             instance = factory.get();
         } else if (resolvedDef.isCompileTime()) {
             // Compile-time but not wired: fallback to create()
