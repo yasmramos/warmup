@@ -229,4 +229,14 @@ public interface BeanRegistry {
         // Default implementation returns null - to be overridden by implementations
         return null;
     }
+    
+    /**
+     * Retrieves all bean definitions registered for a given type.
+     * This is used for collection injection (List<T>, Set<T>, Map<String,T>).
+     * 
+     * @param <T> the bean type
+     * @param type the bean class
+     * @return list of all bean definitions for this type (may be empty)
+     */
+    <T> java.util.List<BeanDefinition<T>> getAllDefinitionsByType(Class<T> type);
 }

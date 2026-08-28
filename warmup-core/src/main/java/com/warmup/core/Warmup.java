@@ -195,6 +195,30 @@ public class Warmup implements AutoCloseable {
     }
 
     /**
+     * Resolves all beans of the given type as a List.
+     * This is used for collection injection (List<T>, Set<T>).
+     * 
+     * @param <T> the bean type
+     * @param clazz the bean class
+     * @return list of all bean instances of this type (may be empty)
+     */
+    public <T> java.util.List<T> resolveAll(Class<T> clazz) {
+        return container.resolveAll(clazz);
+    }
+
+    /**
+     * Resolves all beans of the given type as a Map with bean names as keys.
+     * This is used for Map<String, T> injection.
+     * 
+     * @param <T> the bean type
+     * @param clazz the bean class
+     * @return map of bean name to instance (may be empty)
+     */
+    public <T> java.util.Map<String, T> resolveAllAsMap(Class<T> clazz) {
+        return container.resolveAllAsMap(clazz);
+    }
+
+    /**
      * Checks if a bean exists by name.
      * 
      * @param name the bean name

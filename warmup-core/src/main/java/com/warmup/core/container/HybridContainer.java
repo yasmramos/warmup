@@ -702,6 +702,67 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
     }
 
     /**
+     * Resolves all beans of the given type as a List.
+     * This is used for collection injection (List<T>, Set<T>).
+     * 
+     * @param <T> the bean type
+     * @param type the bean class
+     * @return list of all bean instances of this type (may be empty)
+     */
+    @SuppressWarnings("unchecked")
+    public <T> java.util.List<T> resolveAll(Class<T> type) {
+        java.util.List<BeanDefinition<T>> definitions = registry.getAllDefinitionsByType(type);
+        java.util.List<T> result = new ArrayList<>(definitions.size());
+        for (BeanDefinition<T> def : definitions) {
+            // Resolve by name to get the instance
+            String name = def.name();
+            ResolvedBeanDefinition<T> resolvedDef = registry.getResolvedOrNull(name);
+            if (resolvedDef != null) {
+                // Check pending warmup
+                if (resolvedDef.hasPendingWarmup()) {
+                    if (pendingWarmupBeans.remove(name)) {
+                        triggerBackgroundWarmup(def);
+                    }
+                }
+                // Resolve the bean
+                T instance = resolve(resolvedDef);
+                result.add(instance);
+            }
+        }
+        return result;
+    }
+
+    /**
+     * Resolves all beans of the given type as a Map with bean names as keys.
+     * This is used for Map<String, T> injection.
+     * 
+     * @param <T> the bean type
+     * @param type the bean class
+     * @return map of bean name to instance (may be empty)
+     */
+    @SuppressWarnings("unchecked")
+    public <T> java.util.Map<String, T> resolveAllAsMap(Class<T> type) {
+        java.util.List<BeanDefinition<T>> definitions = registry.getAllDefinitionsByType(type);
+        java.util.Map<String, T> result = new java.util.LinkedHashMap<>(definitions.size());
+        for (BeanDefinition<T> def : definitions) {
+            String name = def.name();
+            ResolvedBeanDefinition<T> resolvedDef = registry.getResolvedOrNull(name);
+            if (resolvedDef != null) {
+                // Check pending warmup
+                if (resolvedDef.hasPendingWarmup()) {
+                    if (pendingWarmupBeans.remove(name)) {
+                        triggerBackgroundWarmup(def);
+                    }
+                }
+                // Resolve the bean
+                T instance = resolve(resolvedDef);
+                result.put(name, instance);
+            }
+        }
+        return result;
+    }
+
+    /**
      * Gets all registered bean names.
      */
     public Set<String> getBeanNames() {

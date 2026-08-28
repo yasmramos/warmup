@@ -418,8 +418,26 @@ public class BeanRegistryImpl implements BeanRegistry {
         resolvedByName.clear();
         definitionsByType.clear();
         typeToNameMap.clear();
+        allBeansByType.clear();
         nameToIndex.clear();
         nextIndex.set(0);
+    }
+
+    @Override
+    @SuppressWarnings("unchecked")
+    public <T> java.util.List<BeanDefinition<T>> getAllDefinitionsByType(Class<T> type) {
+        List<String> beanNames = allBeansByType.get(type);
+        if (beanNames == null || beanNames.isEmpty()) {
+            return new ArrayList<>();
+        }
+        List<BeanDefinition<T>> result = new ArrayList<>(beanNames.size());
+        for (String name : beanNames) {
+            BeanDefinition<?> def = definitionsByName.get(name);
+            if (def != null) {
+                result.add((BeanDefinition<T>) def);
+            }
+        }
+        return result;
     }
 
     @Override
