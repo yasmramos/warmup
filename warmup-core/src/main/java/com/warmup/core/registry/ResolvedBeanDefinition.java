@@ -45,7 +45,7 @@ public class ResolvedBeanDefinition<T> {
     
     public ResolvedBeanDefinition(BeanDefinition<T> definition) {
         this.definition = definition;
-        this.isPrototype = definition.scope() == Scope.PROTOTYPE;
+        this.isPrototype = definition != null && definition.scope() == Scope.PROTOTYPE;
     }
     
     /**
@@ -228,4 +228,29 @@ public class ResolvedBeanDefinition<T> {
     public void setHasPendingWarmup(boolean hasPendingWarmup) {
         this.hasPendingWarmup = hasPendingWarmup;
     }
+    
+    /**
+     * Returns a sentinel instance representing a not-found bean definition.
+     * Used by ClassValue to avoid null semantics which would cause recomputation.
+     * 
+     * @return the NOT_FOUND sentinel instance
+     */
+    @SuppressWarnings("unchecked")
+    public static <T> ResolvedBeanDefinition<T> notFound() {
+        return (ResolvedBeanDefinition<T>) ResolvedBeanDefinitionSentinel.NOT_FOUND_SENTINEL;
+    }
+    
+    /**
+     * Checks if this is the NOT_FOUND sentinel instance.
+     * 
+     * @return true if this is the sentinel, false otherwise
+     */
+    public boolean isNotFound() {
+        return this.definition == null;
+    }
+}
+
+// Package-private sentinel class to hold the NOT_FOUND instance
+final class ResolvedBeanDefinitionSentinel {
+    static final ResolvedBeanDefinition<?> NOT_FOUND_SENTINEL = new ResolvedBeanDefinition<>(null);
 }

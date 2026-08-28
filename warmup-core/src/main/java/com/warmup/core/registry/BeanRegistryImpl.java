@@ -1,5 +1,6 @@
 package com.warmup.core.registry;
 
+import com.warmup.core.jit.CompiledFactory;
 import com.warmup.core.lifecycle.LifecycleCallbacks;
 import com.warmup.core.scope.Scope;
 
@@ -230,6 +231,62 @@ public class BeanRegistryImpl implements BeanRegistry {
                 T instance = factory.get();
                 // Only apply init callback if the bean has lifecycle callbacks defined
                 // Avoid the method call and lifecycle check overhead for beans without lifecycle
+                if (definition.lifecycle().onInit() != null) {
+                    definition.lifecycle().onInit().onInit(instance);
+                }
+                yield instance;
+            }
+            case CUSTOM -> {
+                // Custom scopes handled by extensions
+                T instance = factory.get();
+                // Only apply init callback if the bean has lifecycle callbacks defined
+                if (definition.lifecycle().onInit() != null) {
+                    definition.lifecycle().onInit().onInit(instance);
+                }
+                yield instance;
+            }
+        };
+    }
+
+    @Override
+    @SuppressWarnings("unchecked")
+    public <T> T getInstance(BeanDefinition<T> definition, CompiledFactory<T> factory) {
+        String name = definition.name();
+
+        return switch (definition.scope()) {
+            case SINGLETON -> {
+                // Track if we created a new instance to apply init callback outside the lock
+                T instance = (T) singletonInstances.get(name);
+                
+                // Fast path: instance already exists
+                if (instance != null) {
+                    yield instance;
+                }
+                
+                // ComputeIfAbsent ensures thread-safe lazy initialization
+                // Use factory directly without lambda allocation
+                instance = (T) singletonInstances.computeIfAbsent(name, k -> {
+                    T newInstance = factory.get();
+                    // Also write to indexed array for fast indexed resolution using release semantics
+                    Integer idx = nameToIndex.get(name);
+                    if (idx != null && idx >= 0 && idx < singletonInstancesByIndex.length) {
+                        ARRAY_ELEMENT_HANDLE.setRelease(singletonInstancesByIndex, idx, newInstance);
+                    }
+                    return newInstance;
+                });
+                
+                // Apply init callback only if this thread created the instance
+                if (singletonInitCallbacksApplied.add(name)) {
+                    applyInitCallback(instance, definition);
+                }
+                
+                yield instance;
+            }
+            case PROTOTYPE -> {
+                // Always create new instance for prototype scope
+                // Use factory.get() directly to avoid Object[] allocation when wired
+                T instance = factory.get();
+                // Only apply init callback if the bean has lifecycle callbacks defined
                 if (definition.lifecycle().onInit() != null) {
                     definition.lifecycle().onInit().onInit(instance);
                 }
