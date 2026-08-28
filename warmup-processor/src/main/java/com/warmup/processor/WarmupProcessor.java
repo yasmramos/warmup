@@ -6,6 +6,7 @@ import com.warmup.annotations.Singleton;
 import com.warmup.annotations.Prototype;
 import com.warmup.annotations.Component;
 import com.warmup.annotations.Inject;
+import com.warmup.annotations.Primary;
 
 import javax.annotation.processing.*;
 import javax.lang.model.SourceVersion;
@@ -57,7 +58,8 @@ import java.util.*;
     "com.warmup.annotations.Singleton",
     "com.warmup.annotations.Prototype",
     "com.warmup.annotations.Component",
-    "com.warmup.annotations.Inject"
+    "com.warmup.annotations.Inject",
+    "com.warmup.annotations.Primary"
 })
 @SupportedSourceVersion(SourceVersion.RELEASE_17)
 public class WarmupProcessor extends AbstractProcessor {
@@ -76,18 +78,24 @@ public class WarmupProcessor extends AbstractProcessor {
         final String factoryClassName;
         final String scope;
         final List<String> dependencyNames;
+        final boolean isPrimary;
 
-        BeanInfo(String packageName, String className, String beanName, String factoryClassName, String scope, List<String> dependencyNames) {
+        BeanInfo(String packageName, String className, String beanName, String factoryClassName, String scope, List<String> dependencyNames, boolean isPrimary) {
             this.packageName = packageName;
             this.className = className;
             this.beanName = beanName;
             this.factoryClassName = factoryClassName;
             this.scope = scope;
             this.dependencyNames = dependencyNames != null ? dependencyNames : new ArrayList<>();
+            this.isPrimary = isPrimary;
         }
         
         BeanInfo(String packageName, String className, String beanName, String factoryClassName, String scope) {
-            this(packageName, className, beanName, factoryClassName, scope, new ArrayList<>());
+            this(packageName, className, beanName, factoryClassName, scope, new ArrayList<>(), false);
+        }
+        
+        BeanInfo(String packageName, String className, String beanName, String factoryClassName, String scope, List<String> dependencyNames) {
+            this(packageName, className, beanName, factoryClassName, scope, dependencyNames, false);
         }
     }
 
@@ -232,6 +240,9 @@ public class WarmupProcessor extends AbstractProcessor {
         String className = typeElement.getSimpleName().toString();
         String beanName = explicitName.isEmpty() ? className : explicitName;
         
+        // Check if the bean is marked as @Primary
+        boolean isPrimary = typeElement.getAnnotation(Primary.class) != null;
+        
         // Extract dependency names from constructor and @Inject fields
         List<String> depNames = new ArrayList<>();
         
@@ -259,7 +270,7 @@ public class WarmupProcessor extends AbstractProcessor {
             }
         }
         
-        processedBeans.add(new BeanInfo(packageName, className, beanName, factoryClassName, scope, depNames));
+        processedBeans.add(new BeanInfo(packageName, className, beanName, factoryClassName, scope, depNames, isPrimary));
     }
     
     /**
@@ -270,6 +281,9 @@ public class WarmupProcessor extends AbstractProcessor {
         String factoryClassNameStr = factoryClass.getSimpleName().toString();
         String methodName = method.getSimpleName().toString();
         String beanName = beanAnnotation.value().isEmpty() ? methodName : beanAnnotation.value();
+        
+        // Check if the bean method is marked as @Primary
+        boolean isPrimary = method.getAnnotation(Primary.class) != null;
         
         // Extract dependency names from method parameters
         List<String> depNames = new ArrayList<>();
@@ -323,7 +337,7 @@ public class WarmupProcessor extends AbstractProcessor {
         // The BeanInfo.className will hold the FQN when the return type is from a different package
         String classNameForRegistration = returnTypeFqn;
         
-        processedBeans.add(new BeanInfo(packageName, classNameForRegistration, beanName, factoryClassName, scope, depNames));
+        processedBeans.add(new BeanInfo(packageName, classNameForRegistration, beanName, factoryClassName, scope, depNames, isPrimary));
     }
     
     /**
@@ -948,7 +962,8 @@ public class WarmupProcessor extends AbstractProcessor {
                 code.append("        sink.accept(\n");
                 code.append("            new BeanDefinition<>(").append(beanType).append(".class, \"")
                     .append(beanInfo.beanName).append("\", ").append(scopeEnum)
-                    .append(", com.warmup.core.lifecycle.LifecycleCallbacks.empty(), false, ")
+                    .append(", com.warmup.core.lifecycle.LifecycleCallbacks.empty(), ")
+                    .append(beanInfo.isPrimary ? "true" : "false").append(", ")
                     .append(depsArray).append("),\n");
                 code.append("            new ").append(factoryRef).append("()\n");
                 code.append("        );\n");
