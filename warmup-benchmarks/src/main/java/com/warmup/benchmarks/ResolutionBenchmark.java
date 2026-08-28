@@ -88,10 +88,28 @@ public class ResolutionBenchmark {
     private HybridContainer container;
     private CompiledFactory<SimpleBean> simpleFactory;
     private CompiledFactory<PrototypeBean> prototypeFactory;
+    private CompiledFactory<PrototypeBeanWithOneDependency> prototypeWithOneDepFactory;
+    private CompiledFactory<PrototypeBeanWithFiveDependencies> prototypeWithFiveDepsFactory;
     private int simpleBeanIndex;
 
     public static class PrototypeBean {
         public PrototypeBean() {}
+    }
+    
+    public static class PrototypeBeanWithOneDependency {
+        private final PrototypeBean dependency;
+        public PrototypeBeanWithOneDependency(PrototypeBean dependency) {
+            this.dependency = dependency;
+        }
+    }
+    
+    public static class PrototypeBeanWithFiveDependencies {
+        private final PrototypeBean d1, d2, d3, d4, d5;
+        public PrototypeBeanWithFiveDependencies(
+                PrototypeBean d1, PrototypeBean d2, PrototypeBean d3,
+                PrototypeBean d4, PrototypeBean d5) {
+            this.d1 = d1; this.d2 = d2; this.d3 = d3; this.d4 = d4; this.d5 = d5;
+        }
     }
 
     @Setup(Level.Trial)
@@ -116,10 +134,24 @@ public class ResolutionBenchmark {
             PrototypeBean.class, "prototypeBean", Scope.PROTOTYPE
         );
         container.registerDynamic(prototypeDef);
+        
+        // Register prototype with one dependency
+        BeanDefinition<PrototypeBeanWithOneDependency> prototypeOneDepDef = new BeanDefinition<>(
+            PrototypeBeanWithOneDependency.class, "prototypeBeanWithOneDep", Scope.PROTOTYPE
+        );
+        container.registerDynamic(prototypeOneDepDef);
+        
+        // Register prototype with five dependencies
+        BeanDefinition<PrototypeBeanWithFiveDependencies> prototypeFiveDepsDef = new BeanDefinition<>(
+            PrototypeBeanWithFiveDependencies.class, "prototypeBeanWithFiveDeps", Scope.PROTOTYPE
+        );
+        container.registerDynamic(prototypeFiveDepsDef);
 
         // Pre-compile factories for warmup
         simpleFactory = jitCompiler.compile(SimpleBean.class);
         prototypeFactory = jitCompiler.compile(PrototypeBean.class);
+        prototypeWithOneDepFactory = jitCompiler.compile(PrototypeBeanWithOneDependency.class);
+        prototypeWithFiveDepsFactory = jitCompiler.compile(PrototypeBeanWithFiveDependencies.class);
 
         // Pre-resolve singleton to ensure it's cached (fast-path test)
         container.resolve(SimpleBean.class);
@@ -157,6 +189,26 @@ public class ResolutionBenchmark {
     @Benchmark
     public Object warmupPrototypeResolve() {
         return container.resolve(PrototypeBean.class);
+    }
+    
+    /**
+     * Measures resolve() for a PROTOTYPE bean with one dependency.
+     * This measures the actual bean creation overhead with dependency injection.
+     * The cost should scale with the number of dependencies.
+     */
+    @Benchmark
+    public Object warmupPrototypeResolveWithOneDependency() {
+        return container.resolve(PrototypeBeanWithOneDependency.class);
+    }
+    
+    /**
+     * Measures resolve() for a PROTOTYPE bean with five dependencies.
+     * This measures the actual bean creation overhead with multiple dependencies.
+     * The cost should scale with the number of dependencies.
+     */
+    @Benchmark
+    public Object warmupPrototypeResolveWithFiveDependencies() {
+        return container.resolve(PrototypeBeanWithFiveDependencies.class);
     }
 
     /**

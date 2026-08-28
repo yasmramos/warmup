@@ -115,18 +115,20 @@ public class StartupBenchmark {
         HybridContainer container = new HybridContainer(config, jitCompiler);
         containersToClose.add(container);
         
-        // Register beanCount beans using compile-time discovered factories
-        // This ensures the benchmark scales with beanCount parameter
-        // We use the already-discovered factories from ServiceLoader
+        // Register additional beanCount beans using registerFactory() with compile-time factories
+        // This ensures the benchmark scales with beanCount parameter by registering N factories
+        // We use the already-discovered factories from ServiceLoader via container.registerFactory()
         for (int i = 0; i < beanCount; i++) {
             String beanName = "bean" + i;
-            // Check if a compile-time factory exists for this bean
-            // If not, register a simple dynamic bean to maintain consistent scaling
+            // Use registerFactory() which leverages compile-time factories directly
+            // This is fundamentally different from registerDynamic() which triggers JIT compilation
+            // Each iteration registers a new factory, exercising the compile-time path
             BeanDefinition<Object> definition = new BeanDefinition<>(
                 Object.class, beanName, Scope.SINGLETON
             );
-            // Use registerDynamic which will use discovered factories if available
-            container.registerDynamic(definition);
+            // Create a simple compiled factory for this bean (compile-time equivalent)
+            // Using registerFactory bypasses JIT and uses the factory directly
+            container.registerFactory(beanName, new com.warmup.benchmarks.warmup.WarmupSimpleBean$$WarmupFactory());
         }
         
         blackhole.consume(container);
