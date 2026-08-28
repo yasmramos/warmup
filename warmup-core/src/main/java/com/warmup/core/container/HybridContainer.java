@@ -458,13 +458,31 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
         // Singleton not yet created, use registry.getInstance for thread-safe lazy init
         if (metricsEnabled) {
             long startTime = System.nanoTime();
-            T instance = registry.getInstance(resolvedDef.getDefinition(), () -> createBean(resolvedDef));
+            // Use CompiledFactory directly to avoid Supplier lambda allocation
+            CompiledFactory<T> factory = resolvedDef.getOrComputeFactory(factoryCache);
+            T instance;
+            if (factory != null && resolvedDef.isWired()) {
+                // Wired factory: use factory.get() path without Object[] allocation
+                instance = registry.getInstance(resolvedDef.getDefinition(), factory);
+            } else {
+                // Non-wired or no factory: fall back to createBean lambda
+                instance = registry.getInstance(resolvedDef.getDefinition(), () -> createBean(resolvedDef));
+            }
             // Publish the created instance for fast-path on subsequent resolutions
             resolvedDef.setCachedInstance(instance);
             recordMetrics(resolvedDef.getDefinition(), System.nanoTime() - startTime);
             return instance;
         } else {
-            T instance = registry.getInstance(resolvedDef.getDefinition(), () -> createBean(resolvedDef));
+            // Use CompiledFactory directly to avoid Supplier lambda allocation
+            CompiledFactory<T> factory = resolvedDef.getOrComputeFactory(factoryCache);
+            T instance;
+            if (factory != null && resolvedDef.isWired()) {
+                // Wired factory: use factory.get() path without Object[] allocation
+                instance = registry.getInstance(resolvedDef.getDefinition(), factory);
+            } else {
+                // Non-wired or no factory: fall back to createBean lambda
+                instance = registry.getInstance(resolvedDef.getDefinition(), () -> createBean(resolvedDef));
+            }
             // Publish the created instance for fast-path on subsequent resolutions
             resolvedDef.setCachedInstance(instance);
             return instance;
@@ -598,13 +616,31 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
         // Singleton not yet created, use registry.getInstance for thread-safe lazy init
         if (metricsEnabled) {
             long startTime = System.nanoTime();
-            T instance = registry.getInstance(resolvedDef.getDefinition(), () -> createBean(resolvedDef));
+            // Use CompiledFactory directly to avoid Supplier lambda allocation
+            CompiledFactory<T> factory = resolvedDef.getOrComputeFactory(factoryCache);
+            T instance;
+            if (factory != null && resolvedDef.isWired()) {
+                // Wired factory: use factory.get() path without Object[] allocation
+                instance = registry.getInstance(resolvedDef.getDefinition(), factory);
+            } else {
+                // Non-wired or no factory: fall back to createBean lambda
+                instance = registry.getInstance(resolvedDef.getDefinition(), () -> createBean(resolvedDef));
+            }
             // Publish the created instance for fast-path on subsequent resolutions
             resolvedDef.setCachedInstance(instance);
             recordMetrics(resolvedDef.getDefinition(), System.nanoTime() - startTime);
             return instance;
         } else {
-            T instance = registry.getInstance(resolvedDef.getDefinition(), () -> createBean(resolvedDef));
+            // Use CompiledFactory directly to avoid Supplier lambda allocation
+            CompiledFactory<T> factory = resolvedDef.getOrComputeFactory(factoryCache);
+            T instance;
+            if (factory != null && resolvedDef.isWired()) {
+                // Wired factory: use factory.get() path without Object[] allocation
+                instance = registry.getInstance(resolvedDef.getDefinition(), factory);
+            } else {
+                // Non-wired or no factory: fall back to createBean lambda
+                instance = registry.getInstance(resolvedDef.getDefinition(), () -> createBean(resolvedDef));
+            }
             // Publish the created instance for fast-path on subsequent resolutions
             resolvedDef.setCachedInstance(instance);
             return instance;

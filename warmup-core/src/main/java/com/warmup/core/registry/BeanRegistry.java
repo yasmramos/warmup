@@ -81,6 +81,22 @@ public interface BeanRegistry {
     }
 
     /**
+     * Gets or creates a bean instance based on its scope, using a CompiledFactory directly.
+     * This overload eliminates the Supplier lambda allocation for better performance in hot paths.
+     * - Singleton: returns cached instance (creates if not exists)
+     * - Prototype: creates new instance every time
+     * 
+     * @param <T> the bean type
+     * @param definition the pre-resolved bean definition
+     * @param factory the CompiledFactory to create the instance if needed
+     * @return the bean instance
+     */
+    default <T> T getInstance(BeanDefinition<T> definition, com.warmup.core.jit.CompiledFactory<T> factory) {
+        // Default implementation delegates to the Supplier-based version
+        return getInstance(definition, factory::get);
+    }
+
+    /**
      * Checks if a singleton instance is already cached.
      * 
      * @param name the bean name
