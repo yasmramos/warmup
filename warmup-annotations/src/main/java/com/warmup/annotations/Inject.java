@@ -6,9 +6,9 @@ import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
 
 /**
- * Marks a constructor or field for injection by the Warmup container.
+ * Marks a constructor, field, or parameter for injection by the Warmup container.
  */
-@Target({ElementType.CONSTRUCTOR, ElementType.FIELD})
+@Target({ElementType.CONSTRUCTOR, ElementType.FIELD, ElementType.PARAMETER})
 @Retention(RetentionPolicy.RUNTIME)
 public @interface Inject {
     /**

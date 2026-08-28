@@ -7,6 +7,7 @@ import com.warmup.annotations.Prototype;
 import com.warmup.annotations.Component;
 import com.warmup.annotations.Inject;
 import com.warmup.annotations.Primary;
+import com.warmup.annotations.Named;
 
 import javax.annotation.processing.*;
 import javax.lang.model.SourceVersion;
@@ -59,7 +60,8 @@ import java.util.*;
     "com.warmup.annotations.Prototype",
     "com.warmup.annotations.Component",
     "com.warmup.annotations.Inject",
-    "com.warmup.annotations.Primary"
+    "com.warmup.annotations.Primary",
+    "com.warmup.annotations.Named"
 })
 @SupportedSourceVersion(SourceVersion.RELEASE_17)
 public class WarmupProcessor extends AbstractProcessor {
@@ -253,7 +255,20 @@ public class WarmupProcessor extends AbstractProcessor {
                 String paramType = param.asType().toString();
                 int lastDot = paramType.lastIndexOf('.');
                 String simpleName = lastDot > 0 ? paramType.substring(lastDot + 1) : paramType;
-                depNames.add(simpleName);
+                
+                // Check for @Named annotation on parameter
+                Named named = param.getAnnotation(Named.class);
+                if (named != null) {
+                    depNames.add(named.value());
+                } else {
+                    // Check for @Inject with value
+                    Inject inject = param.getAnnotation(Inject.class);
+                    if (inject != null && !inject.value().isEmpty()) {
+                        depNames.add(inject.value());
+                    } else {
+                        depNames.add(simpleName);
+                    }
+                }
             }
         }
         
@@ -265,7 +280,20 @@ public class WarmupProcessor extends AbstractProcessor {
                     String fieldType = field.asType().toString();
                     int lastDot = fieldType.lastIndexOf('.');
                     String simpleName = lastDot > 0 ? fieldType.substring(lastDot + 1) : fieldType;
-                    depNames.add(simpleName);
+                    
+                    // Check for @Named annotation on field
+                    Named named = field.getAnnotation(Named.class);
+                    if (named != null) {
+                        depNames.add(named.value());
+                    } else {
+                        // Check for @Inject with value
+                        Inject inject = field.getAnnotation(Inject.class);
+                        if (inject != null && !inject.value().isEmpty()) {
+                            depNames.add(inject.value());
+                        } else {
+                            depNames.add(simpleName);
+                        }
+                    }
                 }
             }
         }
@@ -291,7 +319,20 @@ public class WarmupProcessor extends AbstractProcessor {
             String paramType = param.asType().toString();
             int lastDot = paramType.lastIndexOf('.');
             String simpleName = lastDot > 0 ? paramType.substring(lastDot + 1) : paramType;
-            depNames.add(simpleName);
+            
+            // Check for @Named annotation on parameter
+            Named named = param.getAnnotation(Named.class);
+            if (named != null) {
+                depNames.add(named.value());
+            } else {
+                // Check for @Inject with value
+                Inject inject = param.getAnnotation(Inject.class);
+                if (inject != null && !inject.value().isEmpty()) {
+                    depNames.add(inject.value());
+                } else {
+                    depNames.add(simpleName);
+                }
+            }
         }
         
         // For method-based beans, the bean is registered in the same package as the factory class
