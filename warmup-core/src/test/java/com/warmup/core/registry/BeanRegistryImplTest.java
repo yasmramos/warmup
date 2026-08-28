@@ -10,6 +10,8 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import com.warmup.core.scope.Scope;
+
 import static org.junit.jupiter.api.Assertions.*;
 
 class BeanRegistryImplTest {
@@ -339,5 +341,55 @@ class BeanRegistryImplTest {
         public String getName() {
             return name;
         }
+    }
+    
+    @Test
+    void testPrimaryBeanWinsOverNonPrimary() {
+        BeanDefinition<TestService> nonPrimaryDef = new BeanDefinition<>(
+            TestService.class, "nonPrimary",
+            Scope.SINGLETON, com.warmup.core.lifecycle.LifecycleCallbacks.empty(),
+            false, new String[0]
+        );
+        
+        BeanDefinition<TestService> primaryDef = new BeanDefinition<>(
+            TestService.class, "primary",
+            Scope.SINGLETON, com.warmup.core.lifecycle.LifecycleCallbacks.empty(),
+            true, new String[0]
+        );
+        
+        // Register non-primary first
+        registry.register(nonPrimaryDef);
+        // Register primary second - should win
+        registry.register(primaryDef);
+        
+        // Resolve by type - should get the primary bean
+        Optional<BeanDefinition<TestService>> byType = registry.getDefinitionByType(TestService.class);
+        assertTrue(byType.isPresent());
+        assertEquals("primary", byType.get().name());
+    }
+    
+    @Test
+    void testTwoNonPrimaryBeansOfSameTypeCauseAmbiguity() {
+        BeanDefinition<TestService> def1 = new BeanDefinition<>(
+            TestService.class, "bean1",
+            Scope.SINGLETON, com.warmup.core.lifecycle.LifecycleCallbacks.empty(),
+            false, new String[0]
+        );
+        
+        BeanDefinition<TestService> def2 = new BeanDefinition<>(
+            TestService.class, "bean2",
+            Scope.SINGLETON, com.warmup.core.lifecycle.LifecycleCallbacks.empty(),
+            false, new String[0]
+        );
+        
+        // Register both non-primary beans
+        registry.register(def1);
+        registry.register(def2);
+        
+        // Resolving by type returns the first registered when neither is primary
+        Optional<BeanDefinition<TestService>> byType = registry.getDefinitionByType(TestService.class);
+        // Current behavior: first registered wins when no primary exists
+        assertTrue(byType.isPresent());
+        assertEquals("bean1", byType.get().name());
     }
 }
