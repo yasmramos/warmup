@@ -52,10 +52,24 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
     // Track which factories are from compile-time vs JIT for metrics
     private final Set<String> compileTimeFactoryNames = ConcurrentHashMap.newKeySet();
     
-    // Cache for type-based resolution to avoid Optional allocation and double lookup
-    // Maps bean type directly to ResolvedBeanDefinition for fast path in resolve(Class)
-    // Note: resolvedDefinitions by name has been moved to BeanRegistryImpl for single-lookup optimization
-    private final Map<Class<?>, ResolvedBeanDefinition<?>> resolvedDefinitionsByType = new ConcurrentHashMap<>();
+    // Cache for type-based resolution using ClassValue for optimal performance.
+    // ClassValue caches results in JVM class metadata, providing O(1) access without ConcurrentHashMap overhead.
+    // The computeValue method executes only once per type, and the result is cached by the JVM.
+    private final ClassValue<ResolvedBeanDefinition<?>> resolvedDefinitionsByClassValue = new ClassValue<>() {
+        @Override
+        protected ResolvedBeanDefinition<?> computeValue(Class<?> type) {
+            // Resolve definition from registry - this runs only once per type
+            BeanDefinition<?> definition = registry.getDefinitionByTypeOrNull(type);
+            if (definition == null) {
+                // Return sentinel for missing types to avoid recomputation on every lookup
+                return ResolvedBeanDefinition.notFound();
+            }
+            return wrapResolvedDefinition(definition);
+        }
+    };
+    
+    // Sentinel instance for types not found, used by ClassValue to avoid null semantics
+    private static final ResolvedBeanDefinition<?> NOT_FOUND = new ResolvedBeanDefinition<>(null);
     
     // Empty array constant to avoid allocation for beans without dependencies
     private static final Object[] EMPTY_ARGS = new Object[0];
@@ -338,6 +352,10 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
         if (resolvedDef != null) {
             resolvedDef.setHasPendingWarmup(true);
         }
+        
+        // Invalidate ClassValue cache for this type if it was previously computed
+        // This ensures that new resolutions will pick up the updated definition
+        resolvedDefinitionsByClassValue.remove(definition.type());
     }
 
     /**
@@ -454,43 +472,34 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
     }
 
     /**
-     * Resolves a bean by type.
-     * This is the primary entry-point for type-based resolution, optimized to avoid Optional allocation.
+     * Resolves a bean by type using ClassValue for optimal performance.
+     * This is the primary entry-point for type-based resolution, optimized to avoid Optional allocation
+     * and ConcurrentHashMap overhead. ClassValue caches results in JVM class metadata.
      * 
      * @param <T> the bean type
      * @param type the bean class
      * @return the resolved bean instance
      */
     public <T> T resolve(Class<T> type) {
-        // Fast path: check cache for pre-resolved definition by type
+        // Fast path: use ClassValue.get() which retrieves cached result from JVM class metadata
+        // This executes computeValue only once per type, then provides O(1) access
         @SuppressWarnings("unchecked")
-        ResolvedBeanDefinition<T> resolvedDef = (ResolvedBeanDefinition<T>) resolvedDefinitionsByType.get(type);
+        ResolvedBeanDefinition<T> resolvedDef = (ResolvedBeanDefinition<T>) resolvedDefinitionsByClassValue.get(type);
         
-        if (resolvedDef == null) {
-            // Cache miss: resolve definition without Optional allocation
-            BeanDefinition<T> definition = registry.getDefinitionByTypeOrNull(type);
-            if (definition == null) {
-                throw new IllegalStateException("Bean not found for type: " + type.getName());
-            }
-            
-            // Wrap and cache the resolved definition for future lookups
-            resolvedDef = wrapResolvedDefinition(definition);
-            ResolvedBeanDefinition<T> existing = (ResolvedBeanDefinition<T>) resolvedDefinitionsByType.putIfAbsent(type, resolvedDef);
-            if (existing != null) {
-                // Another thread beat us to it, use the existing one
-                resolvedDef = existing;
-            }
-        } else {
-            // Check if this bean has pending warmup and trigger compilation on first resolve via type
-            // Use pre-computed flag to avoid expensive Set.contains() lookup
-            if (resolvedDef.hasPendingWarmup()) {
-                String beanName = resolvedDef.name();
-                // Double-check with Set to ensure atomicity and avoid duplicate warmup
-                if (pendingWarmupBeans.remove(beanName)) {
-                    BeanDefinition<T> definition = resolvedDef.getDefinition();
-                    // Trigger background warmup only when the bean is actually needed
-                    triggerBackgroundWarmup(definition);
-                }
+        // Check if this is the NOT_FOUND sentinel (type doesn't exist)
+        if (resolvedDef.isNotFound()) {
+            throw new IllegalStateException("Bean not found for type: " + type.getName());
+        }
+        
+        // Check if this bean has pending warmup and trigger compilation on first resolve via type
+        // Use pre-computed flag to avoid expensive Set.contains() lookup
+        if (resolvedDef.hasPendingWarmup()) {
+            String beanName = resolvedDef.name();
+            // Double-check with Set to ensure atomicity and avoid duplicate warmup
+            if (pendingWarmupBeans.remove(beanName)) {
+                BeanDefinition<T> definition = resolvedDef.getDefinition();
+                // Trigger background warmup only when the bean is actually needed
+                triggerBackgroundWarmup(definition);
             }
         }
         
@@ -773,6 +782,9 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
         
         // Also remove from pending warmup set if present - reload takes precedence
         pendingWarmupBeans.remove(name);
+        
+        // Invalidate ClassValue cache for this type to ensure new resolutions pick up the reloaded bean
+        resolvedDefinitionsByClassValue.remove(definition.type());
         
         // Step 3: Unload the previous ASM factory to free ClassLoader and metaspace
         jitCompiler.unloadFactory(definition.type());
