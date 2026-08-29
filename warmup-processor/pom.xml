@@ -17,10 +17,10 @@
     <description>Compile-time annotation processor for generating zero-overhead factories</description>
 
     <dependencies>
-        <!-- Internal dependencies -->
+        <!-- Internal dependencies - annotations are now in warmup-core -->
         <dependency>
             <groupId>com.warmup</groupId>
-            <artifactId>warmup-annotations</artifactId>
+            <artifactId>warmup-core</artifactId>
             <version>${project.version}</version>
         </dependency>
         
@@ -42,12 +42,6 @@
             <groupId>com.google.testing.compile</groupId>
             <artifactId>compile-testing</artifactId>
             <version>0.21.0</version>
-            <scope>test</scope>
-        </dependency>
-        <dependency>
-            <groupId>com.warmup</groupId>
-            <artifactId>warmup-core</artifactId>
-            <version>${project.version}</version>
             <scope>test</scope>
         </dependency>
     </dependencies>

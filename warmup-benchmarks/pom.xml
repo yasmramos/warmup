@@ -19,10 +19,6 @@
     <dependencies>
         <dependency>
             <groupId>com.warmup</groupId>
-            <artifactId>warmup-annotations</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>com.warmup</groupId>
             <artifactId>warmup-core</artifactId>
         </dependency>
         <dependency>
