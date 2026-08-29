@@ -217,4 +217,54 @@ class WarmupProcessorTest {
         assertThat(compilation)
             .hadErrorContaining("@Factory only applies to classes");
     }
+
+    /**
+     * Test that multiple registrars (one per package) are written to the service file.
+     * Verifies fix for issue where only the first registrar was being registered.
+     */
+    @Test
+    void testMultiplePackagesGenerateMultipleRegistrarsInServiceFile() {
+        JavaFileObject beanPackageA = JavaFileObjects.forSourceLines(
+            "com.example.alpha.BeanA",
+            "package com.example.alpha;",
+            "import com.warmup.annotations.Singleton;",
+            "",
+            "@Singleton",
+            "public class BeanA {",
+            "    public BeanA() {}",
+            "}"
+        );
+        
+        JavaFileObject beanPackageB = JavaFileObjects.forSourceLines(
+            "com.example.beta.BeanB",
+            "package com.example.beta;",
+            "import com.warmup.annotations.Singleton;",
+            "",
+            "@Singleton",
+            "public class BeanB {",
+            "    public BeanB() {}",
+            "}"
+        );
+
+        Compilation compilation = compiler.compile(beanPackageA, beanPackageB);
+
+        assertTrue(compilation.generatedSourceFile("com/example/alpha/BeanA$$WarmupFactory").isPresent());
+        assertTrue(compilation.generatedSourceFile("com/example/beta/BeanB$$WarmupFactory").isPresent());
+        assertTrue(compilation.generatedSourceFile("com/example/alpha/GeneratedFactoryRegistrar").isPresent());
+        assertTrue(compilation.generatedSourceFile("com/example/beta/GeneratedFactoryRegistrar").isPresent());
+        
+        Optional<JavaFileObject> serviceFileOpt = compilation.generatedFile("/META-INF/services/com.warmup.core.jit.FactoryRegistrar");
+        assertTrue(serviceFileOpt.isPresent(), "Service file should be generated");
+        
+        try {
+            String serviceContent = serviceFileOpt.get().getCharContent(true).toString();
+            assertTrue(serviceContent.contains("com.example.alpha.GeneratedFactoryRegistrar"));
+            assertTrue(serviceContent.contains("com.example.beta.GeneratedFactoryRegistrar"));
+            
+            String[] lines = serviceContent.trim().split("\\r?\\n");
+            assertEquals(2, lines.length, "Service file should have exactly 2 lines");
+        } catch (IOException e) {
+            fail("Failed to read service file: " + e.getMessage());
+        }
+    }
 }

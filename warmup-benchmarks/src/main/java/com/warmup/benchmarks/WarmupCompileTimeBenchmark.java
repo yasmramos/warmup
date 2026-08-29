@@ -116,7 +116,9 @@ public class WarmupCompileTimeBenchmark {
             throw new IllegalStateException(
                 "VERIFICATION FAILED: No compile-time hits detected! " +
                 "Expected compileTimeHits > 0, got " + metrics.compileTimeHits() + ". " +
-                "Check that @Bean classes are processed by the annotation processor."
+                "Check that bean classes are annotated with @Singleton/@Component/@Prototype and " +
+                "processed by the Warmup annotation processor. Ensure the processor is declared as " +
+                "annotationProcessor in the build configuration (Gradle/Maven) for this module."
             );
         }
         
