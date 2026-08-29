@@ -61,7 +61,9 @@ import java.util.*;
     "com.warmup.annotations.Component",
     "com.warmup.annotations.Inject",
     "com.warmup.annotations.Primary",
-    "com.warmup.annotations.Named"
+    "com.warmup.annotations.Named",
+    "com.warmup.annotations.Provider",
+    "com.warmup.annotations.Lazy"
 })
 @SupportedSourceVersion(SourceVersion.RELEASE_17)
 public class WarmupProcessor extends AbstractProcessor {
@@ -80,24 +82,26 @@ public class WarmupProcessor extends AbstractProcessor {
         final String factoryClassName;
         final String scope;
         final List<String> dependencyNames;
+        final List<Boolean> isProviderDependency;
         final boolean isPrimary;
 
-        BeanInfo(String packageName, String className, String beanName, String factoryClassName, String scope, List<String> dependencyNames, boolean isPrimary) {
+        BeanInfo(String packageName, String className, String beanName, String factoryClassName, String scope, List<String> dependencyNames, List<Boolean> isProviderDependency, boolean isPrimary) {
             this.packageName = packageName;
             this.className = className;
             this.beanName = beanName;
             this.factoryClassName = factoryClassName;
             this.scope = scope;
             this.dependencyNames = dependencyNames != null ? dependencyNames : new ArrayList<>();
+            this.isProviderDependency = isProviderDependency != null ? isProviderDependency : new ArrayList<>();
             this.isPrimary = isPrimary;
         }
         
         BeanInfo(String packageName, String className, String beanName, String factoryClassName, String scope) {
-            this(packageName, className, beanName, factoryClassName, scope, new ArrayList<>(), false);
+            this(packageName, className, beanName, factoryClassName, scope, new ArrayList<>(), new ArrayList<>(), false);
         }
         
         BeanInfo(String packageName, String className, String beanName, String factoryClassName, String scope, List<String> dependencyNames) {
-            this(packageName, className, beanName, factoryClassName, scope, dependencyNames, false);
+            this(packageName, className, beanName, factoryClassName, scope, dependencyNames, new ArrayList<>(), false);
         }
     }
 
@@ -247,6 +251,7 @@ public class WarmupProcessor extends AbstractProcessor {
         
         // Extract dependency names from constructor and @Inject fields
         List<String> depNames = new ArrayList<>();
+        List<Boolean> providerFlags = new ArrayList<>();
         
         // Constructor dependencies
         ExecutableElement constructor = findInjectableConstructor(typeElement);
@@ -256,10 +261,17 @@ public class WarmupProcessor extends AbstractProcessor {
                 int lastDot = paramType.lastIndexOf('.');
                 String simpleName = lastDot > 0 ? paramType.substring(lastDot + 1) : paramType;
                 
+                // Check if parameter is a Provider<T>
+                boolean isProvider = isProviderType(param.asType());
+                
                 // Check for @Named annotation on parameter
                 Named named = param.getAnnotation(Named.class);
                 if (named != null) {
                     depNames.add(named.value());
+                } else if (isProvider) {
+                    // For Provider, extract the generic type T
+                    String providerTypeName = extractProviderGenericType(param.asType());
+                    depNames.add(providerTypeName);
                 } else {
                     // Check for @Inject with value
                     Inject inject = param.getAnnotation(Inject.class);
@@ -269,6 +281,7 @@ public class WarmupProcessor extends AbstractProcessor {
                         depNames.add(simpleName);
                     }
                 }
+                providerFlags.add(isProvider);
             }
         }
         
@@ -281,10 +294,17 @@ public class WarmupProcessor extends AbstractProcessor {
                     int lastDot = fieldType.lastIndexOf('.');
                     String simpleName = lastDot > 0 ? fieldType.substring(lastDot + 1) : fieldType;
                     
+                    // Check if field is a Provider<T>
+                    boolean isProvider = isProviderType(field.asType());
+                    
                     // Check for @Named annotation on field
                     Named named = field.getAnnotation(Named.class);
                     if (named != null) {
                         depNames.add(named.value());
+                    } else if (isProvider) {
+                        // For Provider, extract the generic type T
+                        String providerTypeName = extractProviderGenericType(field.asType());
+                        depNames.add(providerTypeName);
                     } else {
                         // Check for @Inject with value
                         Inject inject = field.getAnnotation(Inject.class);
@@ -294,11 +314,12 @@ public class WarmupProcessor extends AbstractProcessor {
                             depNames.add(simpleName);
                         }
                     }
+                    providerFlags.add(isProvider);
                 }
             }
         }
         
-        processedBeans.add(new BeanInfo(packageName, className, beanName, factoryClassName, scope, depNames, isPrimary));
+        processedBeans.add(new BeanInfo(packageName, className, beanName, factoryClassName, scope, depNames, providerFlags, isPrimary));
     }
     
     /**
@@ -315,15 +336,23 @@ public class WarmupProcessor extends AbstractProcessor {
         
         // Extract dependency names from method parameters
         List<String> depNames = new ArrayList<>();
+        List<Boolean> providerFlags = new ArrayList<>();
         for (VariableElement param : method.getParameters()) {
             String paramType = param.asType().toString();
             int lastDot = paramType.lastIndexOf('.');
             String simpleName = lastDot > 0 ? paramType.substring(lastDot + 1) : paramType;
             
+            // Check if parameter is a Provider<T>
+            boolean isProvider = isProviderType(param.asType());
+            
             // Check for @Named annotation on parameter
             Named named = param.getAnnotation(Named.class);
             if (named != null) {
                 depNames.add(named.value());
+            } else if (isProvider) {
+                // For Provider, extract the generic type T
+                String providerTypeName = extractProviderGenericType(param.asType());
+                depNames.add(providerTypeName);
             } else {
                 // Check for @Inject with value
                 Inject inject = param.getAnnotation(Inject.class);
@@ -333,6 +362,7 @@ public class WarmupProcessor extends AbstractProcessor {
                     depNames.add(simpleName);
                 }
             }
+            providerFlags.add(isProvider);
         }
         
         // For method-based beans, the bean is registered in the same package as the factory class
@@ -378,7 +408,7 @@ public class WarmupProcessor extends AbstractProcessor {
         // The BeanInfo.className will hold the FQN when the return type is from a different package
         String classNameForRegistration = returnTypeFqn;
         
-        processedBeans.add(new BeanInfo(packageName, classNameForRegistration, beanName, factoryClassName, scope, depNames, isPrimary));
+        processedBeans.add(new BeanInfo(packageName, classNameForRegistration, beanName, factoryClassName, scope, depNames, providerFlags, isPrimary));
     }
     
     /**
@@ -880,6 +910,48 @@ public class WarmupProcessor extends AbstractProcessor {
         }
         
         return null;
+    }
+
+    /**
+     * Checks if a type is a Provider<T>.
+     */
+    private boolean isProviderType(TypeMirror type) {
+        if (type.getKind() != TypeKind.DECLARED) {
+            return false;
+        }
+        DeclaredType declaredType = (DeclaredType) type;
+        Element element = declaredType.asElement();
+        if (!(element instanceof TypeElement)) {
+            return false;
+        }
+        TypeElement typeElement = (TypeElement) element;
+        return "com.warmup.annotations.Provider".equals(typeElement.getQualifiedName().toString());
+    }
+    
+    /**
+     * Extracts the generic type T from a Provider<T>.
+     */
+    private String extractProviderGenericType(TypeMirror providerType) {
+        if (providerType.getKind() != TypeKind.DECLARED) {
+            return null;
+        }
+        DeclaredType declaredType = (DeclaredType) providerType;
+        List<? extends TypeMirror> typeArguments = declaredType.getTypeArguments();
+        if (typeArguments.isEmpty()) {
+            return null;
+        }
+        TypeMirror genericType = typeArguments.get(0);
+        if (genericType.getKind() == TypeKind.DECLARED) {
+            DeclaredType genericDeclaredType = (DeclaredType) genericType;
+            Element element = genericDeclaredType.asElement();
+            if (element instanceof TypeElement) {
+                TypeElement typeElement = (TypeElement) element;
+                String fqn = typeElement.getQualifiedName().toString();
+                int lastDot = fqn.lastIndexOf('.');
+                return lastDot > 0 ? fqn.substring(lastDot + 1) : fqn;
+            }
+        }
+        return genericType.toString();
     }
 
     private String getPackageName(TypeElement type) {
