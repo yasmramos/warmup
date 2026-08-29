@@ -330,6 +330,18 @@ public class Warmup implements AutoCloseable {
         private boolean autoDiscoverFactories = true;
         private boolean metricsEnabled = false;
         private com.warmup.core.config.PropertyResolver propertyResolver = null;
+        private String[] activeProfiles = new String[0];
+
+        /**
+         * Sets the active profiles for conditional bean registration (@Profile).
+         * 
+         * @param profiles array of profile names to activate
+         * @return this builder
+         */
+        public Builder profiles(String... profiles) {
+            this.activeProfiles = profiles != null ? profiles : new String[0];
+            return this;
+        }
 
         /**
          * Enables or disables diagnostic mode.
@@ -483,12 +495,21 @@ public class Warmup implements AutoCloseable {
             if (compiler == null) {
                 compiler = discoverJITCompiler();
             }
+            // Set active profiles in property resolver if available
+            if (propertyResolver != null && activeProfiles.length > 0) {
+                // Store profiles as a special property for condition evaluation
+                System.setProperty("warmup.profiles.active", String.join(",", activeProfiles));
+            } else if (activeProfiles.length > 0) {
+                propertyResolver = new com.warmup.core.config.PropertyResolver();
+                System.setProperty("warmup.profiles.active", String.join(",", activeProfiles));
+            }
             HybridContainerConfig config = new HybridContainerConfig(
                 diagnostic,
                 maxPendingCompilations,
                 autoDiscoverFactories,
                 metricsEnabled,
-                propertyResolver
+                propertyResolver,
+                activeProfiles
             );
             return new Warmup(new HybridContainer(config, compiler));
         }

@@ -9,6 +9,8 @@ import com.warmup.annotations.Inject;
 import com.warmup.annotations.Primary;
 import com.warmup.annotations.Named;
 import com.warmup.annotations.Value;
+import com.warmup.annotations.Profile;
+import com.warmup.annotations.Conditional;
 
 import javax.annotation.processing.*;
 import javax.lang.model.SourceVersion;
@@ -65,7 +67,9 @@ import java.util.*;
     "com.warmup.annotations.Named",
     "com.warmup.annotations.Provider",
     "com.warmup.annotations.Lazy",
-    "com.warmup.annotations.Value"
+    "com.warmup.annotations.Value",
+    "com.warmup.annotations.Profile",
+    "com.warmup.annotations.Conditional"
 })
 @SupportedSourceVersion(SourceVersion.RELEASE_17)
 public class WarmupProcessor extends AbstractProcessor {
@@ -113,10 +117,13 @@ public class WarmupProcessor extends AbstractProcessor {
         final List<String> valueExpressions;
         final boolean isPrimary;
         final List<InjectMethodInfo> injectMethods;
+        final List<String> profiles;
+        final List<String> conditionClassNames;
 
         BeanInfo(String packageName, String className, String beanName, String factoryClassName, String scope, 
                 List<String> dependencyNames, List<Boolean> isProviderDependency, List<Boolean> isValueDependency, 
-                List<String> valueExpressions, boolean isPrimary, List<InjectMethodInfo> injectMethods) {
+                List<String> valueExpressions, boolean isPrimary, List<InjectMethodInfo> injectMethods,
+                List<String> profiles, List<String> conditionClassNames) {
             this.packageName = packageName;
             this.className = className;
             this.beanName = beanName;
@@ -128,14 +135,16 @@ public class WarmupProcessor extends AbstractProcessor {
             this.valueExpressions = valueExpressions != null ? valueExpressions : new ArrayList<>();
             this.isPrimary = isPrimary;
             this.injectMethods = injectMethods != null ? injectMethods : new ArrayList<>();
+            this.profiles = profiles != null ? profiles : new ArrayList<>();
+            this.conditionClassNames = conditionClassNames != null ? conditionClassNames : new ArrayList<>();
         }
         
         BeanInfo(String packageName, String className, String beanName, String factoryClassName, String scope) {
-            this(packageName, className, beanName, factoryClassName, scope, new ArrayList<>(), new ArrayList<>(), new ArrayList<>(), new ArrayList<>(), false, new ArrayList<>());
+            this(packageName, className, beanName, factoryClassName, scope, new ArrayList<>(), new ArrayList<>(), new ArrayList<>(), new ArrayList<>(), false, new ArrayList<>(), new ArrayList<>(), new ArrayList<>());
         }
         
         BeanInfo(String packageName, String className, String beanName, String factoryClassName, String scope, List<String> dependencyNames) {
-            this(packageName, className, beanName, factoryClassName, scope, dependencyNames, new ArrayList<>(), new ArrayList<>(), new ArrayList<>(), false, new ArrayList<>());
+            this(packageName, className, beanName, factoryClassName, scope, dependencyNames, new ArrayList<>(), new ArrayList<>(), new ArrayList<>(), false, new ArrayList<>(), new ArrayList<>(), new ArrayList<>());
         }
     }
 
@@ -283,6 +292,24 @@ public class WarmupProcessor extends AbstractProcessor {
         // Check if the bean is marked as @Primary
         boolean isPrimary = typeElement.getAnnotation(Primary.class) != null;
         
+        // Extract @Profile annotation values
+        List<String> profiles = new ArrayList<>();
+        Profile profile = typeElement.getAnnotation(Profile.class);
+        if (profile != null) {
+            for (String p : profile.value()) {
+                profiles.add(p);
+            }
+        }
+        
+        // Extract @Conditional annotation class names
+        List<String> conditionClassNames = new ArrayList<>();
+        Conditional conditional = typeElement.getAnnotation(Conditional.class);
+        if (conditional != null) {
+            for (Class<?> c : conditional.value()) {
+                conditionClassNames.add(c.getName());
+            }
+        }
+        
         // Extract dependency names from constructor, @Inject fields, and @Inject methods
         List<String> depNames = new ArrayList<>();
         List<Boolean> providerFlags = new ArrayList<>();
@@ -319,7 +346,7 @@ public class WarmupProcessor extends AbstractProcessor {
             }
         }
         
-        processedBeans.add(new BeanInfo(packageName, className, beanName, factoryClassName, scope, depNames, providerFlags, new ArrayList<>(), new ArrayList<>(), isPrimary, injectMethods));
+        processedBeans.add(new BeanInfo(packageName, className, beanName, factoryClassName, scope, depNames, providerFlags, new ArrayList<>(), new ArrayList<>(), isPrimary, injectMethods, profiles, conditionClassNames));
     }
     
     /**
@@ -482,6 +509,24 @@ public class WarmupProcessor extends AbstractProcessor {
         // Check if the bean method is marked as @Primary
         boolean isPrimary = method.getAnnotation(Primary.class) != null;
         
+        // Extract @Profile annotation values from method
+        List<String> profiles = new ArrayList<>();
+        Profile profile = method.getAnnotation(Profile.class);
+        if (profile != null) {
+            for (String p : profile.value()) {
+                profiles.add(p);
+            }
+        }
+        
+        // Extract @Conditional annotation class names from method
+        List<String> conditionClassNames = new ArrayList<>();
+        Conditional conditional = method.getAnnotation(Conditional.class);
+        if (conditional != null) {
+            for (Class<?> c : conditional.value()) {
+                conditionClassNames.add(c.getName());
+            }
+        }
+        
         // Extract dependency names from method parameters
         List<String> depNames = new ArrayList<>();
         List<Boolean> providerFlags = new ArrayList<>();
@@ -556,7 +601,7 @@ public class WarmupProcessor extends AbstractProcessor {
         // The BeanInfo.className will hold the FQN when the return type is from a different package
         String classNameForRegistration = returnTypeFqn;
         
-        processedBeans.add(new BeanInfo(packageName, classNameForRegistration, beanName, factoryClassName, scope, depNames, providerFlags, new ArrayList<>(), new ArrayList<>(), isPrimary, new ArrayList<>()));
+        processedBeans.add(new BeanInfo(packageName, classNameForRegistration, beanName, factoryClassName, scope, depNames, providerFlags, new ArrayList<>(), new ArrayList<>(), isPrimary, new ArrayList<>(), profiles, conditionClassNames));
     }
     
     /**
@@ -1187,7 +1232,36 @@ public class WarmupProcessor extends AbstractProcessor {
             
             // Invoke BeanDefinition constructor
             String beanDefInternal = "com/warmup/core/registry/BeanDefinition";
-            StringBuilder beanDefCtorDesc = new StringBuilder("(Ljava/lang/Class;Ljava/lang/String;Lcom/warmup/core/scope/Scope;Lcom/warmup/core/lifecycle/LifecycleCallbacks;Z[Ljava/lang/String;)V");
+            
+            // Create profiles array
+            if (beanInfo.profiles.isEmpty()) {
+                mv.visitInsn(org.objectweb.asm.Opcodes.ACONST_NULL);
+            } else {
+                mv.visitLdcInsn(beanInfo.profiles.size());
+                mv.visitTypeInsn(org.objectweb.asm.Opcodes.ANEWARRAY, "java/lang/String");
+                for (int i = 0; i < beanInfo.profiles.size(); i++) {
+                    mv.visitInsn(org.objectweb.asm.Opcodes.DUP);
+                    mv.visitLdcInsn(i);
+                    mv.visitLdcInsn(beanInfo.profiles.get(i));
+                    mv.visitInsn(org.objectweb.asm.Opcodes.AASTORE);
+                }
+            }
+            
+            // Create condition classes array
+            if (beanInfo.conditionClassNames.isEmpty()) {
+                mv.visitInsn(org.objectweb.asm.Opcodes.ACONST_NULL);
+            } else {
+                mv.visitLdcInsn(beanInfo.conditionClassNames.size());
+                mv.visitTypeInsn(org.objectweb.asm.Opcodes.ANEWARRAY, "java/lang/String");
+                for (int i = 0; i < beanInfo.conditionClassNames.size(); i++) {
+                    mv.visitInsn(org.objectweb.asm.Opcodes.DUP);
+                    mv.visitLdcInsn(i);
+                    mv.visitLdcInsn(beanInfo.conditionClassNames.get(i));
+                    mv.visitInsn(org.objectweb.asm.Opcodes.AASTORE);
+                }
+            }
+            
+            StringBuilder beanDefCtorDesc = new StringBuilder("(Ljava/lang/Class;Ljava/lang/String;Lcom/warmup/core/scope/Scope;Lcom/warmup/core/lifecycle/LifecycleCallbacks;Z[Ljava/lang/String;[Ljava/lang/String;[Ljava/lang/String;)V");
             mv.visitMethodInsn(org.objectweb.asm.Opcodes.INVOKESPECIAL, beanDefInternal, "<init>", beanDefCtorDesc.toString(), false);
             
             // Create new factory instance

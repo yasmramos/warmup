@@ -17,13 +17,15 @@ import com.warmup.core.config.PropertyResolver;
  * @param autoDiscoverFactories if true, automatically discovers FactoryRegistrar via ServiceLoader (default: true)
  * @param metricsEnabled if true, enables metrics collection (default: false for performance)
  * @param propertyResolver resolver for configuration values via @Value annotations (default: null)
+ * @param activeProfiles array of active profile names for @Profile conditional registration (default: empty)
  */
 public record HybridContainerConfig(
     boolean diagnosticMode,
     int maxPendingCompilations,
     boolean autoDiscoverFactories,
     boolean metricsEnabled,
-    PropertyResolver propertyResolver
+    PropertyResolver propertyResolver,
+    String[] activeProfiles
 ) {
     /**
      * Default configuration optimized for production use.
@@ -34,7 +36,8 @@ public record HybridContainerConfig(
         10,     // maxPendingCompilations
         true,   // autoDiscoverFactories
         false,  // metricsEnabled - disabled by default for performance
-        null    // propertyResolver - null by default, configure via builder
+        null,   // propertyResolver - null by default, configure via builder
+        new String[0]  // activeProfiles - empty by default
     );
     
     /**
@@ -42,7 +45,7 @@ public record HybridContainerConfig(
      */
     public HybridContainerConfig() {
         this(DEFAULT.diagnosticMode, DEFAULT.maxPendingCompilations, 
-             DEFAULT.autoDiscoverFactories, DEFAULT.metricsEnabled, DEFAULT.propertyResolver);
+             DEFAULT.autoDiscoverFactories, DEFAULT.metricsEnabled, DEFAULT.propertyResolver, DEFAULT.activeProfiles);
     }
     
     /**
@@ -63,6 +66,7 @@ public record HybridContainerConfig(
         private boolean autoDiscoverFactories = DEFAULT.autoDiscoverFactories;
         private boolean metricsEnabled = DEFAULT.metricsEnabled;
         private PropertyResolver propertyResolver = DEFAULT.propertyResolver;
+        private String[] activeProfiles = DEFAULT.activeProfiles;
         
         /**
          * Enables or disables diagnostic mode.
@@ -139,6 +143,17 @@ public record HybridContainerConfig(
         }
         
         /**
+         * Sets the active profiles for @Profile conditional bean registration.
+         * 
+         * @param activeProfiles array of profile names to activate
+         * @return this builder
+         */
+        public Builder activeProfiles(String... activeProfiles) {
+            this.activeProfiles = activeProfiles != null ? activeProfiles : new String[0];
+            return this;
+        }
+        
+        /**
          * Builds the configuration object.
          * 
          * @return new HybridContainerConfig instance
@@ -149,7 +164,8 @@ public record HybridContainerConfig(
                 maxPendingCompilations,
                 autoDiscoverFactories,
                 metricsEnabled,
-                propertyResolver
+                propertyResolver,
+                activeProfiles
             );
         }
     }

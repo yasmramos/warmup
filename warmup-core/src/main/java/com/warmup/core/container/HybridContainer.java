@@ -1,6 +1,8 @@
 package com.warmup.core.container;
 
 import com.warmup.core.annotation.InternalApi;
+import com.warmup.core.condition.Condition;
+import com.warmup.core.condition.ConditionContext;
 import com.warmup.core.graph.DependencyGraph;
 import com.warmup.core.jit.CompiledFactory;
 import com.warmup.core.jit.CompilationException;
@@ -118,6 +120,84 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
      */
     private final boolean autoDiscoverFactories;
     private final com.warmup.core.config.PropertyResolver propertyResolver;
+    private final String[] activeProfiles;
+
+    /**
+     * Creates a ConditionContext for evaluating conditional bean registration.
+     * 
+     * @return a new ConditionContext with the current property resolver and active profiles
+     */
+    private ConditionContext createConditionContext() {
+        return new ConditionContext(propertyResolver, activeProfiles != null ? activeProfiles : new String[0]);
+    }
+
+    /**
+     * Evaluates whether a bean definition should be registered based on its profile and condition constraints.
+     * 
+     * @param definition the bean definition to evaluate
+     * @return true if the bean should be registered, false otherwise
+     */
+    private boolean shouldRegisterBean(BeanDefinition<?> definition) {
+        // Check @Profile constraint
+        String[] profiles = definition.profiles();
+        if (profiles != null && profiles.length > 0) {
+            boolean profileMatch = false;
+            boolean hasNegatedProfile = false;
+            
+            for (String profile : profiles) {
+                if (profile.startsWith("!")) {
+                    // Negated profile: bean should NOT be registered if this profile is active
+                    String negatedProfileName = profile.substring(1);
+                    for (String activeProfile : activeProfiles) {
+                        if (activeProfile.equals(negatedProfileName)) {
+                            // Negated profile is active, so bean should NOT be registered
+                            return false;
+                        }
+                    }
+                    hasNegatedProfile = true;
+                } else {
+                    // Positive profile: bean should be registered if this profile is active
+                    for (String activeProfile : activeProfiles) {
+                        if (activeProfile.equals(profile)) {
+                            profileMatch = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            
+            // If we only have negated profiles and none matched (all returned false above), allow registration
+            // If we have positive profiles, at least one must match
+            if (!hasNegatedProfile && !profileMatch) {
+                return false;
+            }
+        }
+        
+        // Check @Conditional constraint
+        String[] conditionClasses = definition.conditionClasses();
+        if (conditionClasses != null && conditionClasses.length > 0) {
+            ConditionContext context = createConditionContext();
+            for (String conditionClassName : conditionClasses) {
+                try {
+                    @SuppressWarnings("unchecked")
+                    Class<? extends Condition> conditionClass = 
+                        (Class<? extends Condition>) Class.forName(conditionClassName);
+                    Condition condition = conditionClass.getDeclaredConstructor().newInstance();
+                    if (!condition.matches(context)) {
+                        return false;
+                    }
+                } catch (ClassNotFoundException e) {
+                    throw new RuntimeException("Condition class not found: " + conditionClassName, e);
+                } catch (InstantiationException | IllegalAccessException | java.lang.reflect.InvocationTargetException e) {
+                    throw new RuntimeException("Failed to instantiate condition: " + conditionClassName, e);
+                } catch (NoSuchMethodException e) {
+                    throw new RuntimeException("Condition class must have a no-arg constructor: " + conditionClassName, e);
+                }
+            }
+        }
+        
+        return true;
+    }
 
     /**
      * Cached flag indicating if running in GraalVM native image mode.
@@ -200,7 +280,7 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
      */
     @Deprecated(since = "2.0", forRemoval = false)
     public HybridContainer(JITCompiler jitCompiler, boolean diagnosticMode, int maxPendingCompilations, boolean autoDiscoverFactories, boolean metricsEnabled) {
-        this(new HybridContainerConfig(diagnosticMode, maxPendingCompilations, autoDiscoverFactories, metricsEnabled, null), jitCompiler);
+        this(new HybridContainerConfig(diagnosticMode, maxPendingCompilations, autoDiscoverFactories, metricsEnabled, null, new String[0]), jitCompiler);
     }
     
     /**
@@ -215,6 +295,7 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
         this.autoDiscoverFactories = config.autoDiscoverFactories();
         this.metricsEnabled = config.metricsEnabled();
         this.propertyResolver = config.propertyResolver();
+        this.activeProfiles = config.activeProfiles() != null ? config.activeProfiles() : new String[0];
         this.warmupSemaphore = new Semaphore(config.maxPendingCompilations());
         // Lazy initialization of warmupExecutor - created on first use
         this.warmupExecutor = null;
@@ -233,9 +314,14 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
      */
     private void discoverAndRegisterFactories() {
         ServiceLoader<FactoryRegistrar> loader = ServiceLoader.load(FactoryRegistrar.class);
-        // First pass: register all factories
+        // First pass: register all factories (filtered by @Profile and @Conditional)
         for (FactoryRegistrar registrar : loader) {
             registrar.registerAll((definition, factory) -> {
+                // Evaluate conditions before registering
+                if (!shouldRegisterBean(definition)) {
+                    // Skip registration for beans that don't match their profile/condition constraints
+                    return;
+                }
                 registry.register(definition);
                 factoryCache.put(definition.name(), factory);
                 // Mark as compile-time and get ResolvedBeanDefinition to set flags
