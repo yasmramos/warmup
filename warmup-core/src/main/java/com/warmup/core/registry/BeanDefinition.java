@@ -24,19 +24,28 @@ public class BeanDefinition<T> {
      * Array length matches dependencies.length. -1 means not yet resolved.
      */
     private final int[] dependencyIndices;
+    /**
+     * Profile names for conditional registration. Empty array means no profile restriction.
+     */
+    private final String[] profiles;
+    /**
+     * Fully qualified class names of Condition implementations for conditional registration.
+     * Empty array means no condition restriction.
+     */
+    private final String[] conditionClasses;
     
     /**
      * Creates a bean definition with default values.
      */
     public BeanDefinition(Class<T> type, String name) {
-        this(type, name, Scope.SINGLETON, LifecycleCallbacks.empty(), false, new Object[0]);
+        this(type, name, Scope.SINGLETON, LifecycleCallbacks.empty(), false, new Object[0], new String[0], new String[0]);
     }
 
     /**
      * Creates a bean definition with custom scope.
      */
     public BeanDefinition(Class<T> type, String name, Scope scope) {
-        this(type, name, scope, LifecycleCallbacks.empty(), false, new Object[0]);
+        this(type, name, scope, LifecycleCallbacks.empty(), false, new Object[0], new String[0], new String[0]);
     }
     
     /**
@@ -44,12 +53,31 @@ public class BeanDefinition<T> {
      */
     public BeanDefinition(Class<T> type, String name, Scope scope, LifecycleCallbacks<T> lifecycle, 
                           boolean isPrimary, Object[] dependencies) {
+        this(type, name, scope, lifecycle, isPrimary, dependencies, new String[0], new String[0]);
+    }
+    
+    /**
+     * Creates a bean definition with all parameters including conditional registration metadata.
+     * 
+     * @param type the bean type
+     * @param name the bean name
+     * @param scope the bean scope
+     * @param lifecycle lifecycle callbacks
+     * @param isPrimary whether this is a primary bean
+     * @param dependencies array of dependencies (bean names or ValueDependency objects)
+     * @param profiles array of profile names for conditional registration
+     * @param conditionClasses array of fully qualified condition class names
+     */
+    public BeanDefinition(Class<T> type, String name, Scope scope, LifecycleCallbacks<T> lifecycle, 
+                          boolean isPrimary, Object[] dependencies, String[] profiles, String[] conditionClasses) {
         this.type = type;
         this.name = name;
         this.scope = scope;
         this.lifecycle = lifecycle;
         this.isPrimary = isPrimary;
         this.dependencies = dependencies;
+        this.profiles = profiles != null ? profiles : new String[0];
+        this.conditionClasses = conditionClasses != null ? conditionClasses : new String[0];
         this.dependencyIndices = new int[dependencies.length];
         // Initialize all indices to -1 (not yet resolved)
         java.util.Arrays.fill(this.dependencyIndices, -1);
@@ -117,5 +145,21 @@ public class BeanDefinition<T> {
      */
     public boolean isDependencyName(int depIndex) {
         return depIndex >= 0 && depIndex < dependencies.length && dependencies[depIndex] instanceof String;
+    }
+    
+    /**
+     * Returns the array of profile names for conditional registration.
+     * @return the profiles array (empty if no profile restriction)
+     */
+    public String[] profiles() {
+        return profiles;
+    }
+    
+    /**
+     * Returns the array of fully qualified condition class names for conditional registration.
+     * @return the condition classes array (empty if no condition restriction)
+     */
+    public String[] conditionClasses() {
+        return conditionClasses;
     }
 }

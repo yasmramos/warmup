@@ -65,7 +65,9 @@ import java.util.*;
     "com.warmup.annotations.Named",
     "com.warmup.annotations.Provider",
     "com.warmup.annotations.Lazy",
-    "com.warmup.annotations.Value"
+    "com.warmup.annotations.Value",
+    "com.warmup.annotations.Profile",
+    "com.warmup.annotations.Conditional"
 })
 @SupportedSourceVersion(SourceVersion.RELEASE_17)
 public class WarmupProcessor extends AbstractProcessor {
@@ -113,10 +115,13 @@ public class WarmupProcessor extends AbstractProcessor {
         final List<String> valueExpressions;
         final boolean isPrimary;
         final List<InjectMethodInfo> injectMethods;
+        final List<String> profiles;
+        final List<String> conditionClassNames;
 
         BeanInfo(String packageName, String className, String beanName, String factoryClassName, String scope, 
                 List<String> dependencyNames, List<Boolean> isProviderDependency, List<Boolean> isValueDependency, 
-                List<String> valueExpressions, boolean isPrimary, List<InjectMethodInfo> injectMethods) {
+                List<String> valueExpressions, boolean isPrimary, List<InjectMethodInfo> injectMethods,
+                List<String> profiles, List<String> conditionClassNames) {
             this.packageName = packageName;
             this.className = className;
             this.beanName = beanName;
@@ -128,14 +133,16 @@ public class WarmupProcessor extends AbstractProcessor {
             this.valueExpressions = valueExpressions != null ? valueExpressions : new ArrayList<>();
             this.isPrimary = isPrimary;
             this.injectMethods = injectMethods != null ? injectMethods : new ArrayList<>();
+            this.profiles = profiles != null ? profiles : new ArrayList<>();
+            this.conditionClassNames = conditionClassNames != null ? conditionClassNames : new ArrayList<>();
         }
         
         BeanInfo(String packageName, String className, String beanName, String factoryClassName, String scope) {
-            this(packageName, className, beanName, factoryClassName, scope, new ArrayList<>(), new ArrayList<>(), new ArrayList<>(), new ArrayList<>(), false, new ArrayList<>());
+            this(packageName, className, beanName, factoryClassName, scope, new ArrayList<>(), new ArrayList<>(), new ArrayList<>(), new ArrayList<>(), false, new ArrayList<>(), new ArrayList<>(), new ArrayList<>());
         }
         
         BeanInfo(String packageName, String className, String beanName, String factoryClassName, String scope, List<String> dependencyNames) {
-            this(packageName, className, beanName, factoryClassName, scope, dependencyNames, new ArrayList<>(), new ArrayList<>(), new ArrayList<>(), false, new ArrayList<>());
+            this(packageName, className, beanName, factoryClassName, scope, dependencyNames, new ArrayList<>(), new ArrayList<>(), new ArrayList<>(), false, new ArrayList<>(), new ArrayList<>(), new ArrayList<>());
         }
     }
 
