@@ -1,5 +1,6 @@
 package com.warmup.javafx;
 
+import com.warmup.asm.AsmJITCompiler;
 import com.warmup.core.Warmup;
 import com.warmup.core.container.HybridContainer;
 import com.warmup.core.scope.Scope;
