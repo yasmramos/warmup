@@ -161,14 +161,18 @@ public class ResolutionBenchmark {
         // Register prototype with one dependency
         // Note: PrototypeBean dependency must be registered first (already done above)
         BeanDefinition<PrototypeBeanWithOneDependency> prototypeOneDepDef = new BeanDefinition<>(
-            PrototypeBeanWithOneDependency.class, "prototypeBeanWithOneDep", Scope.PROTOTYPE
+            PrototypeBeanWithOneDependency.class, "prototypeBeanWithOneDep", Scope.PROTOTYPE,
+            com.warmup.core.lifecycle.LifecycleCallbacks.empty(), false,
+            new Object[]{"prototypeBean"}
         );
         warmup.registerDynamic(prototypeOneDepDef);
         
         // Register prototype with five dependencies
         // Note: All PrototypeBean dependencies must be registered first (already done above)
         BeanDefinition<PrototypeBeanWithFiveDependencies> prototypeFiveDepsDef = new BeanDefinition<>(
-            PrototypeBeanWithFiveDependencies.class, "prototypeBeanWithFiveDeps", Scope.PROTOTYPE
+            PrototypeBeanWithFiveDependencies.class, "prototypeBeanWithFiveDeps", Scope.PROTOTYPE,
+            com.warmup.core.lifecycle.LifecycleCallbacks.empty(), false,
+            new Object[]{"prototypeBean", "prototypeBean", "prototypeBean", "prototypeBean", "prototypeBean"}
         );
         warmup.registerDynamic(prototypeFiveDepsDef);
 
