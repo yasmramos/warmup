@@ -9,6 +9,7 @@ import org.junit.jupiter.api.Test;
 
 import javax.tools.Diagnostic;
 import javax.tools.JavaFileObject;
+import javax.tools.StandardLocation;
 import java.io.IOException;
 import java.util.Optional;
 
@@ -47,8 +48,8 @@ class WarmupProcessorTest {
         // The processor should run without errors
         Compilation compilation = compiler.compile(source);
         
-        // Verify processor ran - it generates a file even if compilation fails due to missing deps
-        assertTrue(compilation.generatedSourceFile("test.SimpleBean$$WarmupFactory").isPresent());
+        // Verify processor ran - it generates a .class file now (not source)
+        assertTrue(compilation.generatedFile(StandardLocation.CLASS_OUTPUT, "test/SimpleBean$$WarmupFactory.class").isPresent());
     }
 
     @Test
@@ -69,7 +70,7 @@ class WarmupProcessorTest {
         );
 
         Compilation compilation = compiler.compile(source);
-        assertTrue(compilation.generatedSourceFile("test.SingleConstructorBean$$WarmupFactory").isPresent());
+        assertTrue(compilation.generatedFile(StandardLocation.CLASS_OUTPUT, "test/SingleConstructorBean$$WarmupFactory.class").isPresent());
     }
 
     @Test
@@ -94,7 +95,7 @@ class WarmupProcessorTest {
         );
 
         Compilation compilation = compiler.compile(source);
-        assertTrue(compilation.generatedSourceFile("test.InjectBean$$WarmupFactory").isPresent());
+        assertTrue(compilation.generatedFile(StandardLocation.CLASS_OUTPUT, "test/InjectBean$$WarmupFactory.class").isPresent());
     }
 
     @Test
@@ -111,7 +112,7 @@ class WarmupProcessorTest {
         );
 
         Compilation compilation = compiler.compile(source);
-        assertTrue(compilation.generatedSourceFile("test.PrototypeBean$$WarmupFactory").isPresent());
+        assertTrue(compilation.generatedFile(StandardLocation.CLASS_OUTPUT, "test/PrototypeBean$$WarmupFactory.class").isPresent());
     }
 
     @Test
@@ -128,7 +129,7 @@ class WarmupProcessorTest {
         );
 
         Compilation compilation = compiler.compile(source);
-        assertTrue(compilation.generatedSourceFile("test.ComponentBean$$WarmupFactory").isPresent());
+        assertTrue(compilation.generatedFile(StandardLocation.CLASS_OUTPUT, "test/ComponentBean$$WarmupFactory.class").isPresent());
     }
 
     @Test
@@ -150,7 +151,7 @@ class WarmupProcessorTest {
 
         Compilation compilation = compiler.compile(source);
         // Should generate a factory for the @Bean method (named AppConfig$$dataSource$$WarmupFactory)
-        assertTrue(compilation.generatedSourceFile("test.AppConfig$$dataSource$$WarmupFactory").isPresent());
+        assertTrue(compilation.generatedFile(StandardLocation.CLASS_OUTPUT, "test/AppConfig$$dataSource$$WarmupFactory.class").isPresent());
     }
 
     @Test
@@ -177,7 +178,7 @@ class WarmupProcessorTest {
 
         Compilation compilation = compiler.compile(source);
         // Should generate a factory for the @Bean method (named AppConfig$$service$$WarmupFactory)
-        assertTrue(compilation.generatedSourceFile("test.AppConfig$$service$$WarmupFactory").isPresent());
+        assertTrue(compilation.generatedFile(StandardLocation.CLASS_OUTPUT, "test/AppConfig$$service$$WarmupFactory.class").isPresent());
     }
 
     @Test
@@ -248,12 +249,13 @@ class WarmupProcessorTest {
 
         Compilation compilation = compiler.compile(beanPackageA, beanPackageB);
 
-        assertTrue(compilation.generatedSourceFile("com/example/alpha/BeanA$$WarmupFactory").isPresent());
-        assertTrue(compilation.generatedSourceFile("com/example/beta/BeanB$$WarmupFactory").isPresent());
-        assertTrue(compilation.generatedSourceFile("com/example/alpha/GeneratedFactoryRegistrar").isPresent());
-        assertTrue(compilation.generatedSourceFile("com/example/beta/GeneratedFactoryRegistrar").isPresent());
+        // Verify .class files are generated instead of .java source files
+        assertTrue(compilation.generatedFile(StandardLocation.CLASS_OUTPUT, "com/example/alpha/BeanA$$WarmupFactory.class").isPresent());
+        assertTrue(compilation.generatedFile(StandardLocation.CLASS_OUTPUT, "com/example/beta/BeanB$$WarmupFactory.class").isPresent());
+        assertTrue(compilation.generatedFile(StandardLocation.CLASS_OUTPUT, "com/example/alpha/GeneratedFactoryRegistrar.class").isPresent());
+        assertTrue(compilation.generatedFile(StandardLocation.CLASS_OUTPUT, "com/example/beta/GeneratedFactoryRegistrar.class").isPresent());
         
-        Optional<JavaFileObject> serviceFileOpt = compilation.generatedFile("/META-INF/services/com.warmup.core.jit.FactoryRegistrar");
+        Optional<JavaFileObject> serviceFileOpt = compilation.generatedFile(StandardLocation.CLASS_OUTPUT, "META-INF/services/com.warmup.core.jit.FactoryRegistrar");
         assertTrue(serviceFileOpt.isPresent(), "Service file should be generated");
         
         try {
