@@ -1,6 +1,6 @@
 package com.warmup.annotations;
 
-import com.warmup.core.condition.Condition;
+import com.warmup.annotations.condition.Condition;
 
 import java.lang.annotation.ElementType;
 import java.lang.annotation.Retention;

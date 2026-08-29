@@ -509,6 +509,24 @@ public class WarmupProcessor extends AbstractProcessor {
         // Check if the bean method is marked as @Primary
         boolean isPrimary = method.getAnnotation(Primary.class) != null;
         
+        // Extract @Profile annotation values from method
+        List<String> profiles = new ArrayList<>();
+        Profile profile = method.getAnnotation(Profile.class);
+        if (profile != null) {
+            for (String p : profile.value()) {
+                profiles.add(p);
+            }
+        }
+        
+        // Extract @Conditional annotation class names from method
+        List<String> conditionClassNames = new ArrayList<>();
+        Conditional conditional = method.getAnnotation(Conditional.class);
+        if (conditional != null) {
+            for (Class<?> c : conditional.value()) {
+                conditionClassNames.add(c.getName());
+            }
+        }
+        
         // Extract dependency names from method parameters
         List<String> depNames = new ArrayList<>();
         List<Boolean> providerFlags = new ArrayList<>();

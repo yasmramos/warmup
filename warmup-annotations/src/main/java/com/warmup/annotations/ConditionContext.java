@@ -1,5 +1,7 @@
 package com.warmup.annotations;
 
+import com.warmup.annotations.config.PropertyResolver;
+
 /**
  * Context object provided to {@link com.warmup.annotations.condition.Condition} implementations for evaluating conditions.
  *
@@ -8,11 +10,11 @@ package com.warmup.annotations;
  * and other environmental factors.</p>
  *
  * @see com.warmup.annotations.condition.Condition
- * @see com.warmup.core.config.PropertyResolver
+ * @see PropertyResolver
  */
 public class ConditionContext {
 
-    private final com.warmup.core.config.PropertyResolver propertyResolver;
+    private final PropertyResolver propertyResolver;
     private final String[] activeProfiles;
 
     /**
@@ -21,7 +23,7 @@ public class ConditionContext {
      * @param propertyResolver the property resolver for accessing configuration values
      * @param activeProfiles the array of currently active profile names
      */
-    public ConditionContext(com.warmup.core.config.PropertyResolver propertyResolver, String[] activeProfiles) {
+    public ConditionContext(PropertyResolver propertyResolver, String[] activeProfiles) {
         this.propertyResolver = propertyResolver;
         this.activeProfiles = activeProfiles != null ? activeProfiles : new String[0];
     }
@@ -31,7 +33,7 @@ public class ConditionContext {
      *
      * @return the property resolver
      */
-    public com.warmup.core.config.PropertyResolver getPropertyResolver() {
+    public PropertyResolver getPropertyResolver() {
         return propertyResolver;
     }
 

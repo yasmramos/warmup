@@ -280,7 +280,7 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
      */
     @Deprecated(since = "2.0", forRemoval = false)
     public HybridContainer(JITCompiler jitCompiler, boolean diagnosticMode, int maxPendingCompilations, boolean autoDiscoverFactories, boolean metricsEnabled) {
-        this(new HybridContainerConfig(diagnosticMode, maxPendingCompilations, autoDiscoverFactories, metricsEnabled, null), jitCompiler);
+        this(new HybridContainerConfig(diagnosticMode, maxPendingCompilations, autoDiscoverFactories, metricsEnabled, null, new String[0]), jitCompiler);
     }
     
     /**
