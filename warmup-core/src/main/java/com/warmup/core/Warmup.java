@@ -329,6 +329,7 @@ public class Warmup implements AutoCloseable {
         private int maxPendingCompilations = 10;
         private boolean autoDiscoverFactories = true;
         private boolean metricsEnabled = false;
+        private com.warmup.core.config.PropertyResolver propertyResolver = null;
 
         /**
          * Enables or disables diagnostic mode.
@@ -400,6 +401,76 @@ public class Warmup implements AutoCloseable {
         }
 
         /**
+         * Sets the PropertyResolver for resolving @Value expressions.
+         * 
+         * @param propertyResolver the property resolver to use
+         * @return this builder
+         */
+        public Builder propertyResolver(com.warmup.core.config.PropertyResolver propertyResolver) {
+            this.propertyResolver = propertyResolver;
+            return this;
+        }
+
+        /**
+         * Adds a PropertySource to the default PropertyResolver.
+         * If no resolver exists yet, creates one with default sources plus the given one.
+         * 
+         * @param source the property source to add
+         * @return this builder
+         */
+        public Builder propertySource(com.warmup.core.config.PropertySource source) {
+            if (this.propertyResolver == null) {
+                this.propertyResolver = new com.warmup.core.config.PropertyResolver();
+            }
+            this.propertyResolver.addSource(source);
+            return this;
+        }
+
+        /**
+         * Loads properties from a file path and adds them as a PropertySource.
+         * 
+         * @param path the path to the properties file
+         * @return this builder
+         */
+        public Builder propertiesFile(String path) {
+            com.warmup.core.config.PropertiesFilePropertySource source = 
+                new com.warmup.core.config.PropertiesFilePropertySource(path);
+            return propertySource(source);
+        }
+
+        /**
+         * Enables system environment variables as a PropertySource.
+         * 
+         * @param enabled true to enable environment variables (default: true)
+         * @return this builder
+         */
+        public Builder enableEnvironment(boolean enabled) {
+            if (enabled) {
+                if (this.propertyResolver == null) {
+                    this.propertyResolver = new com.warmup.core.config.PropertyResolver();
+                }
+                this.propertyResolver.addSource(new com.warmup.core.config.SystemEnvironmentPropertySource());
+            }
+            return this;
+        }
+
+        /**
+         * Enables system properties as a PropertySource.
+         * 
+         * @param enabled true to enable system properties (default: true)
+         * @return this builder
+         */
+        public Builder enableSystemProperties(boolean enabled) {
+            if (enabled) {
+                if (this.propertyResolver == null) {
+                    this.propertyResolver = new com.warmup.core.config.PropertyResolver();
+                }
+                this.propertyResolver.addSource(new com.warmup.core.config.SystemPropertiesPropertySource());
+            }
+            return this;
+        }
+
+        /**
          * Builds the Warmup instance.
          * 
          * Discovers JITCompiler via ServiceLoader if not explicitly set.
@@ -416,7 +487,8 @@ public class Warmup implements AutoCloseable {
                 diagnostic,
                 maxPendingCompilations,
                 autoDiscoverFactories,
-                metricsEnabled
+                metricsEnabled,
+                propertyResolver
             );
             return new Warmup(new HybridContainer(config, compiler));
         }

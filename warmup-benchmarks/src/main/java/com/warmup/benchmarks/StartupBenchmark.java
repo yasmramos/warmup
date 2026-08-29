@@ -110,7 +110,8 @@ public class StartupBenchmark {
             false,  // diagnosticMode
             10,     // maxPendingCompilations
             true,   // autoDiscoverFactories - discovers compile-time factories
-            false   // metricsEnabled - disabled for pure startup measurement
+            false,  // metricsEnabled - disabled for pure startup measurement
+            null    // propertyResolver
         );
         HybridContainer container = new HybridContainer(config, jitCompiler);
         containersToClose.add(container);

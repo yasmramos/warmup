@@ -12,6 +12,7 @@ import com.warmup.core.registry.BeanDefinition;
 import com.warmup.core.registry.BeanRegistry;
 import com.warmup.core.registry.BeanRegistryImpl;
 import com.warmup.core.registry.ResolvedBeanDefinition;
+import com.warmup.core.registry.ValueDependency;
 import com.warmup.core.scope.Scope;
 
 import java.util.*;
@@ -116,6 +117,7 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
      * or when using manual factory registration.
      */
     private final boolean autoDiscoverFactories;
+    private final com.warmup.core.config.PropertyResolver propertyResolver;
 
     /**
      * Cached flag indicating if running in GraalVM native image mode.
@@ -198,7 +200,7 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
      */
     @Deprecated(since = "2.0", forRemoval = false)
     public HybridContainer(JITCompiler jitCompiler, boolean diagnosticMode, int maxPendingCompilations, boolean autoDiscoverFactories, boolean metricsEnabled) {
-        this(new HybridContainerConfig(diagnosticMode, maxPendingCompilations, autoDiscoverFactories, metricsEnabled), jitCompiler);
+        this(new HybridContainerConfig(diagnosticMode, maxPendingCompilations, autoDiscoverFactories, metricsEnabled, null), jitCompiler);
     }
     
     /**
@@ -212,6 +214,7 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
         this.diagnosticMode = config.diagnosticMode();
         this.autoDiscoverFactories = config.autoDiscoverFactories();
         this.metricsEnabled = config.metricsEnabled();
+        this.propertyResolver = config.propertyResolver();
         this.warmupSemaphore = new Semaphore(config.maxPendingCompilations());
         // Lazy initialization of warmupExecutor - created on first use
         this.warmupExecutor = null;
@@ -1326,12 +1329,50 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
                 
                 // Fallback: resolve by name (handles prototypes, not-yet-cached, or forward references)
                 deps[i] = resolveByName(depName);
+            } else if (dep instanceof ValueDependency valueDep) {
+                // Resolve configuration value via PropertyResolver
+                if (propertyResolver == null) {
+                    throw new IllegalStateException(
+                        "PropertyResolver not configured but @Value dependency found in bean '" + 
+                        definition.name() + "'. Use Warmup.builder().propertySource(...) to configure."
+                    );
+                }
+                deps[i] = resolveValueDependency(valueDep);
             } else {
                 // Direct object reference (not a bean name)
                 deps[i] = dep;
             }
         }
         return deps;
+    }
+    
+    /**
+     * Resolves a ValueDependency to its typed value using the PropertyResolver.
+     * 
+     * @param valueDep the value dependency to resolve
+     * @return the resolved and converted value
+     */
+    @SuppressWarnings("unchecked")
+    private Object resolveValueDependency(ValueDependency valueDep) {
+        String expression = valueDep.expression();
+        Class<?> targetType = valueDep.targetType();
+        
+        if (targetType == String.class) {
+            return propertyResolver.resolveString(expression);
+        } else if (targetType == int.class || targetType == Integer.class) {
+            return propertyResolver.resolveInt(expression);
+        } else if (targetType == long.class || targetType == Long.class) {
+            return propertyResolver.resolveLong(expression);
+        } else if (targetType == boolean.class || targetType == Boolean.class) {
+            return propertyResolver.resolveBoolean(expression);
+        } else if (targetType == double.class || targetType == Double.class) {
+            return propertyResolver.resolveDouble(expression);
+        } else if (targetType.isEnum()) {
+            return propertyResolver.resolveEnum(expression, (Class<Enum>) targetType);
+        } else {
+            // Default to String resolution
+            return propertyResolver.resolveString(expression);
+        }
     }
 
     @SuppressWarnings("unchecked")

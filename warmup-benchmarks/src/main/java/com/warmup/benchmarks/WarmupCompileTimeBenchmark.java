@@ -100,7 +100,8 @@ public class WarmupCompileTimeBenchmark {
             false,  // diagnosticMode
             10,     // maxPendingCompilations
             true,   // autoDiscoverFactories
-            true    // metricsEnabled=true ONLY for path verification
+            true,   // metricsEnabled=true ONLY for path verification
+            null    // propertyResolver
         );
         verificationContainer = new HybridContainer(verifyConfig, jitCompiler);
         
