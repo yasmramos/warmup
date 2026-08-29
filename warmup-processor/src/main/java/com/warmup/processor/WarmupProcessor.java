@@ -8,6 +8,7 @@ import com.warmup.annotations.Component;
 import com.warmup.annotations.Inject;
 import com.warmup.annotations.Primary;
 import com.warmup.annotations.Named;
+import com.warmup.annotations.Value;
 
 import javax.annotation.processing.*;
 import javax.lang.model.SourceVersion;
@@ -63,7 +64,8 @@ import java.util.*;
     "com.warmup.annotations.Primary",
     "com.warmup.annotations.Named",
     "com.warmup.annotations.Provider",
-    "com.warmup.annotations.Lazy"
+    "com.warmup.annotations.Lazy",
+    "com.warmup.annotations.Value"
 })
 @SupportedSourceVersion(SourceVersion.RELEASE_17)
 public class WarmupProcessor extends AbstractProcessor {
@@ -81,13 +83,18 @@ public class WarmupProcessor extends AbstractProcessor {
         final List<String> paramTypes;
         final List<String> depNames;
         final List<Boolean> isProviderDependency;
+        final List<Boolean> isValueDependency;
+        final List<String> valueExpressions;
         
-        InjectMethodInfo(String methodName, int paramCount, List<String> paramTypes, List<String> depNames, List<Boolean> isProviderDependency) {
+        InjectMethodInfo(String methodName, int paramCount, List<String> paramTypes, List<String> depNames, 
+                        List<Boolean> isProviderDependency, List<Boolean> isValueDependency, List<String> valueExpressions) {
             this.methodName = methodName;
             this.paramCount = paramCount;
             this.paramTypes = paramTypes != null ? paramTypes : new ArrayList<>();
             this.depNames = depNames != null ? depNames : new ArrayList<>();
             this.isProviderDependency = isProviderDependency != null ? isProviderDependency : new ArrayList<>();
+            this.isValueDependency = isValueDependency != null ? isValueDependency : new ArrayList<>();
+            this.valueExpressions = valueExpressions != null ? valueExpressions : new ArrayList<>();
         }
     }
     
@@ -102,10 +109,14 @@ public class WarmupProcessor extends AbstractProcessor {
         final String scope;
         final List<String> dependencyNames;
         final List<Boolean> isProviderDependency;
+        final List<Boolean> isValueDependency;
+        final List<String> valueExpressions;
         final boolean isPrimary;
         final List<InjectMethodInfo> injectMethods;
 
-        BeanInfo(String packageName, String className, String beanName, String factoryClassName, String scope, List<String> dependencyNames, List<Boolean> isProviderDependency, boolean isPrimary, List<InjectMethodInfo> injectMethods) {
+        BeanInfo(String packageName, String className, String beanName, String factoryClassName, String scope, 
+                List<String> dependencyNames, List<Boolean> isProviderDependency, List<Boolean> isValueDependency, 
+                List<String> valueExpressions, boolean isPrimary, List<InjectMethodInfo> injectMethods) {
             this.packageName = packageName;
             this.className = className;
             this.beanName = beanName;
@@ -113,16 +124,18 @@ public class WarmupProcessor extends AbstractProcessor {
             this.scope = scope;
             this.dependencyNames = dependencyNames != null ? dependencyNames : new ArrayList<>();
             this.isProviderDependency = isProviderDependency != null ? isProviderDependency : new ArrayList<>();
+            this.isValueDependency = isValueDependency != null ? isValueDependency : new ArrayList<>();
+            this.valueExpressions = valueExpressions != null ? valueExpressions : new ArrayList<>();
             this.isPrimary = isPrimary;
             this.injectMethods = injectMethods != null ? injectMethods : new ArrayList<>();
         }
         
         BeanInfo(String packageName, String className, String beanName, String factoryClassName, String scope) {
-            this(packageName, className, beanName, factoryClassName, scope, new ArrayList<>(), new ArrayList<>(), false, new ArrayList<>());
+            this(packageName, className, beanName, factoryClassName, scope, new ArrayList<>(), new ArrayList<>(), new ArrayList<>(), new ArrayList<>(), false, new ArrayList<>());
         }
         
         BeanInfo(String packageName, String className, String beanName, String factoryClassName, String scope, List<String> dependencyNames) {
-            this(packageName, className, beanName, factoryClassName, scope, dependencyNames, new ArrayList<>(), false, new ArrayList<>());
+            this(packageName, className, beanName, factoryClassName, scope, dependencyNames, new ArrayList<>(), new ArrayList<>(), new ArrayList<>(), false, new ArrayList<>());
         }
     }
 
@@ -306,7 +319,7 @@ public class WarmupProcessor extends AbstractProcessor {
             }
         }
         
-        processedBeans.add(new BeanInfo(packageName, className, beanName, factoryClassName, scope, depNames, providerFlags, isPrimary, injectMethods));
+        processedBeans.add(new BeanInfo(packageName, className, beanName, factoryClassName, scope, depNames, providerFlags, new ArrayList<>(), new ArrayList<>(), isPrimary, injectMethods));
     }
     
     /**
@@ -319,6 +332,14 @@ public class WarmupProcessor extends AbstractProcessor {
         
         // Check if parameter is a Provider<T>
         boolean isProvider = isProviderType(param.asType());
+        
+        // Check for @Value annotation on parameter (configuration value, not bean reference)
+        Value value = param.getAnnotation(Value.class);
+        if (value != null) {
+            depNames.add(value.value()); // Store the expression as the "name"
+            providerFlags.add(false);
+            return;
+        }
         
         // Check for @Named annotation on parameter
         Named named = param.getAnnotation(Named.class);
@@ -350,6 +371,14 @@ public class WarmupProcessor extends AbstractProcessor {
         
         // Check if field is a Provider<T>
         boolean isProvider = isProviderType(field.asType());
+        
+        // Check for @Value annotation on field (configuration value, not bean reference)
+        Value value = field.getAnnotation(Value.class);
+        if (value != null) {
+            depNames.add(value.value()); // Store the expression as the "name"
+            providerFlags.add(false);
+            return;
+        }
         
         // Check for @Named annotation on field
         Named named = field.getAnnotation(Named.class);
@@ -386,6 +415,8 @@ public class WarmupProcessor extends AbstractProcessor {
         List<String> paramTypes = new ArrayList<>();
         List<String> methodDepNames = new ArrayList<>();
         List<Boolean> methodProviderFlags = new ArrayList<>();
+        List<Boolean> methodValueFlags = new ArrayList<>();
+        List<String> methodValueExpressions = new ArrayList<>();
         
         for (VariableElement param : method.getParameters()) {
             String paramType = param.asType().toString();
@@ -395,6 +426,21 @@ public class WarmupProcessor extends AbstractProcessor {
             
             // Check if parameter is a Provider<T>
             boolean isProvider = isProviderType(param.asType());
+            
+            // Check for @Value annotation on parameter (configuration value, not bean reference)
+            Value value = param.getAnnotation(Value.class);
+            if (value != null) {
+                methodDepNames.add(value.value());
+                depNames.add(value.value());
+                methodProviderFlags.add(false);
+                providerFlags.add(false);
+                methodValueFlags.add(true);
+                methodValueExpressions.add(value.value());
+                continue;
+            }
+            
+            methodValueFlags.add(false);
+            methodValueExpressions.add(null);
             
             // Check for @Named annotation on parameter
             Named named = param.getAnnotation(Named.class);
@@ -421,7 +467,7 @@ public class WarmupProcessor extends AbstractProcessor {
             providerFlags.add(isProvider);
         }
         
-        return new InjectMethodInfo(methodName, paramCount, paramTypes, methodDepNames, methodProviderFlags);
+        return new InjectMethodInfo(methodName, paramCount, paramTypes, methodDepNames, methodProviderFlags, methodValueFlags, methodValueExpressions);
     }
     
     /**
@@ -510,7 +556,7 @@ public class WarmupProcessor extends AbstractProcessor {
         // The BeanInfo.className will hold the FQN when the return type is from a different package
         String classNameForRegistration = returnTypeFqn;
         
-        processedBeans.add(new BeanInfo(packageName, classNameForRegistration, beanName, factoryClassName, scope, depNames, providerFlags, isPrimary, new ArrayList<>()));
+        processedBeans.add(new BeanInfo(packageName, classNameForRegistration, beanName, factoryClassName, scope, depNames, providerFlags, new ArrayList<>(), new ArrayList<>(), isPrimary, new ArrayList<>()));
     }
     
     /**

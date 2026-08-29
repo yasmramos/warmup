@@ -1,5 +1,7 @@
 package com.warmup.core.container;
 
+import com.warmup.core.config.PropertyResolver;
+
 /**
  * Configuration object for HybridContainer construction.
  * <p>
@@ -14,12 +16,14 @@ package com.warmup.core.container;
  * @param maxPendingCompilations maximum concurrent background compilations (default: 10)
  * @param autoDiscoverFactories if true, automatically discovers FactoryRegistrar via ServiceLoader (default: true)
  * @param metricsEnabled if true, enables metrics collection (default: false for performance)
+ * @param propertyResolver resolver for configuration values via @Value annotations (default: null)
  */
 public record HybridContainerConfig(
     boolean diagnosticMode,
     int maxPendingCompilations,
     boolean autoDiscoverFactories,
-    boolean metricsEnabled
+    boolean metricsEnabled,
+    PropertyResolver propertyResolver
 ) {
     /**
      * Default configuration optimized for production use.
@@ -29,7 +33,8 @@ public record HybridContainerConfig(
         false,  // diagnosticMode
         10,     // maxPendingCompilations
         true,   // autoDiscoverFactories
-        false   // metricsEnabled - disabled by default for performance
+        false,  // metricsEnabled - disabled by default for performance
+        null    // propertyResolver - null by default, configure via builder
     );
     
     /**
@@ -37,7 +42,7 @@ public record HybridContainerConfig(
      */
     public HybridContainerConfig() {
         this(DEFAULT.diagnosticMode, DEFAULT.maxPendingCompilations, 
-             DEFAULT.autoDiscoverFactories, DEFAULT.metricsEnabled);
+             DEFAULT.autoDiscoverFactories, DEFAULT.metricsEnabled, DEFAULT.propertyResolver);
     }
     
     /**
@@ -57,6 +62,7 @@ public record HybridContainerConfig(
         private int maxPendingCompilations = DEFAULT.maxPendingCompilations;
         private boolean autoDiscoverFactories = DEFAULT.autoDiscoverFactories;
         private boolean metricsEnabled = DEFAULT.metricsEnabled;
+        private PropertyResolver propertyResolver = DEFAULT.propertyResolver;
         
         /**
          * Enables or disables diagnostic mode.
@@ -116,6 +122,23 @@ public record HybridContainerConfig(
         }
         
         /**
+         * Sets the property resolver for @Value annotation support.
+         * <p>
+         * The PropertyResolver aggregates multiple PropertySource instances and resolves
+         * placeholder expressions like ${key} or ${key:default} with type conversion.
+         * </p>
+         * 
+         * @param propertyResolver the property resolver to use
+         * @return this builder
+         * @see com.warmup.core.config.PropertyResolver
+         * @see com.warmup.core.config.PropertySource
+         */
+        public Builder propertyResolver(PropertyResolver propertyResolver) {
+            this.propertyResolver = propertyResolver;
+            return this;
+        }
+        
+        /**
          * Builds the configuration object.
          * 
          * @return new HybridContainerConfig instance
@@ -125,7 +148,8 @@ public record HybridContainerConfig(
                 diagnosticMode,
                 maxPendingCompilations,
                 autoDiscoverFactories,
-                metricsEnabled
+                metricsEnabled,
+                propertyResolver
             );
         }
     }
