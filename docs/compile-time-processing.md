@@ -10,7 +10,9 @@ The `WarmupProcessor` is a JSR 269 annotation processor that:
 2. Analyzes constructors and `@Inject` annotations
 3. Generates factory classes implementing `CompiledFactory<T>`
 4. Creates a registrar aggregating all factories
-5. Registers the registrar via ServiceLoader
+5. Registers the registrar via ServiceLoader (for compile-time factory discovery)
+
+**Note:** The JIT compiler (`AsmJITCompiler`) used for runtime bytecode generation is now instantiated directly from `warmup-core` and no longer uses ServiceLoader discovery. Only the `FactoryRegistrar` mechanism for compile-time generated factories continues to use ServiceLoader.
 
 ## Processor Configuration
 
