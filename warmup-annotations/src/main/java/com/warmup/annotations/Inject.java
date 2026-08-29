@@ -6,9 +6,13 @@ import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
 
 /**
- * Marks a constructor, field, or parameter for injection by the Warmup container.
+ * Marks a constructor, field, method, or parameter for injection by the Warmup container.
+ * 
+ * When applied to a method, the container will invoke the method after constructing
+ * the bean instance, resolving all method parameters as dependencies. This supports
+ * setter injection and other method-based injection patterns.
  */
-@Target({ElementType.CONSTRUCTOR, ElementType.FIELD, ElementType.PARAMETER})
+@Target({ElementType.CONSTRUCTOR, ElementType.FIELD, ElementType.PARAMETER, ElementType.METHOD})
 @Retention(RetentionPolicy.RUNTIME)
 public @interface Inject {
     /**
