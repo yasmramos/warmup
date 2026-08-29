@@ -73,6 +73,25 @@ public class WarmupProcessor extends AbstractProcessor {
     private FactoryBytecodeGenerator bytecodeGenerator;
 
     /**
+     * Holds information about an injectable method for factory generation.
+     */
+    private static class InjectMethodInfo {
+        final String methodName;
+        final int paramCount;
+        final List<String> paramTypes;
+        final List<String> depNames;
+        final List<Boolean> isProviderDependency;
+        
+        InjectMethodInfo(String methodName, int paramCount, List<String> paramTypes, List<String> depNames, List<Boolean> isProviderDependency) {
+            this.methodName = methodName;
+            this.paramCount = paramCount;
+            this.paramTypes = paramTypes != null ? paramTypes : new ArrayList<>();
+            this.depNames = depNames != null ? depNames : new ArrayList<>();
+            this.isProviderDependency = isProviderDependency != null ? isProviderDependency : new ArrayList<>();
+        }
+    }
+    
+    /**
      * Holds information about a processed bean for later registrar generation.
      */
     private static class BeanInfo {
@@ -84,8 +103,9 @@ public class WarmupProcessor extends AbstractProcessor {
         final List<String> dependencyNames;
         final List<Boolean> isProviderDependency;
         final boolean isPrimary;
+        final List<InjectMethodInfo> injectMethods;
 
-        BeanInfo(String packageName, String className, String beanName, String factoryClassName, String scope, List<String> dependencyNames, List<Boolean> isProviderDependency, boolean isPrimary) {
+        BeanInfo(String packageName, String className, String beanName, String factoryClassName, String scope, List<String> dependencyNames, List<Boolean> isProviderDependency, boolean isPrimary, List<InjectMethodInfo> injectMethods) {
             this.packageName = packageName;
             this.className = className;
             this.beanName = beanName;
@@ -94,14 +114,15 @@ public class WarmupProcessor extends AbstractProcessor {
             this.dependencyNames = dependencyNames != null ? dependencyNames : new ArrayList<>();
             this.isProviderDependency = isProviderDependency != null ? isProviderDependency : new ArrayList<>();
             this.isPrimary = isPrimary;
+            this.injectMethods = injectMethods != null ? injectMethods : new ArrayList<>();
         }
         
         BeanInfo(String packageName, String className, String beanName, String factoryClassName, String scope) {
-            this(packageName, className, beanName, factoryClassName, scope, new ArrayList<>(), new ArrayList<>(), false);
+            this(packageName, className, beanName, factoryClassName, scope, new ArrayList<>(), new ArrayList<>(), false, new ArrayList<>());
         }
         
         BeanInfo(String packageName, String className, String beanName, String factoryClassName, String scope, List<String> dependencyNames) {
-            this(packageName, className, beanName, factoryClassName, scope, dependencyNames, new ArrayList<>(), false);
+            this(packageName, className, beanName, factoryClassName, scope, dependencyNames, new ArrayList<>(), false, new ArrayList<>());
         }
     }
 
@@ -249,39 +270,16 @@ public class WarmupProcessor extends AbstractProcessor {
         // Check if the bean is marked as @Primary
         boolean isPrimary = typeElement.getAnnotation(Primary.class) != null;
         
-        // Extract dependency names from constructor and @Inject fields
+        // Extract dependency names from constructor, @Inject fields, and @Inject methods
         List<String> depNames = new ArrayList<>();
         List<Boolean> providerFlags = new ArrayList<>();
+        List<InjectMethodInfo> injectMethods = new ArrayList<>();
         
         // Constructor dependencies
         ExecutableElement constructor = findInjectableConstructor(typeElement);
         if (constructor != null) {
             for (VariableElement param : constructor.getParameters()) {
-                String paramType = param.asType().toString();
-                int lastDot = paramType.lastIndexOf('.');
-                String simpleName = lastDot > 0 ? paramType.substring(lastDot + 1) : paramType;
-                
-                // Check if parameter is a Provider<T>
-                boolean isProvider = isProviderType(param.asType());
-                
-                // Check for @Named annotation on parameter
-                Named named = param.getAnnotation(Named.class);
-                if (named != null) {
-                    depNames.add(named.value());
-                } else if (isProvider) {
-                    // For Provider, extract the generic type T
-                    String providerTypeName = extractProviderGenericType(param.asType());
-                    depNames.add(providerTypeName);
-                } else {
-                    // Check for @Inject with value
-                    Inject inject = param.getAnnotation(Inject.class);
-                    if (inject != null && !inject.value().isEmpty()) {
-                        depNames.add(inject.value());
-                    } else {
-                        depNames.add(simpleName);
-                    }
-                }
-                providerFlags.add(isProvider);
+                extractDependencyInfo(param, depNames, providerFlags);
             }
         }
         
@@ -290,36 +288,140 @@ public class WarmupProcessor extends AbstractProcessor {
             if (enclosed.getKind() == ElementKind.FIELD) {
                 VariableElement field = (VariableElement) enclosed;
                 if (field.getAnnotation(Inject.class) != null) {
-                    String fieldType = field.asType().toString();
-                    int lastDot = fieldType.lastIndexOf('.');
-                    String simpleName = lastDot > 0 ? fieldType.substring(lastDot + 1) : fieldType;
-                    
-                    // Check if field is a Provider<T>
-                    boolean isProvider = isProviderType(field.asType());
-                    
-                    // Check for @Named annotation on field
-                    Named named = field.getAnnotation(Named.class);
-                    if (named != null) {
-                        depNames.add(named.value());
-                    } else if (isProvider) {
-                        // For Provider, extract the generic type T
-                        String providerTypeName = extractProviderGenericType(field.asType());
-                        depNames.add(providerTypeName);
-                    } else {
-                        // Check for @Inject with value
-                        Inject inject = field.getAnnotation(Inject.class);
-                        if (inject != null && !inject.value().isEmpty()) {
-                            depNames.add(inject.value());
-                        } else {
-                            depNames.add(simpleName);
-                        }
-                    }
-                    providerFlags.add(isProvider);
+                    extractFieldDependencyInfo(field, depNames, providerFlags);
                 }
             }
         }
         
-        processedBeans.add(new BeanInfo(packageName, className, beanName, factoryClassName, scope, depNames, providerFlags, isPrimary));
+        // @Inject method dependencies
+        for (Element enclosed : typeElement.getEnclosedElements()) {
+            if (enclosed.getKind() == ElementKind.METHOD) {
+                ExecutableElement method = (ExecutableElement) enclosed;
+                if (method.getAnnotation(Inject.class) != null) {
+                    InjectMethodInfo methodInfo = extractMethodDependencyInfo(method, depNames, providerFlags);
+                    if (methodInfo != null) {
+                        injectMethods.add(methodInfo);
+                    }
+                }
+            }
+        }
+        
+        processedBeans.add(new BeanInfo(packageName, className, beanName, factoryClassName, scope, depNames, providerFlags, isPrimary, injectMethods));
+    }
+    
+    /**
+     * Extracts dependency info from a parameter element.
+     */
+    private void extractDependencyInfo(VariableElement param, List<String> depNames, List<Boolean> providerFlags) {
+        String paramType = param.asType().toString();
+        int lastDot = paramType.lastIndexOf('.');
+        String simpleName = lastDot > 0 ? paramType.substring(lastDot + 1) : paramType;
+        
+        // Check if parameter is a Provider<T>
+        boolean isProvider = isProviderType(param.asType());
+        
+        // Check for @Named annotation on parameter
+        Named named = param.getAnnotation(Named.class);
+        if (named != null) {
+            depNames.add(named.value());
+        } else if (isProvider) {
+            // For Provider, extract the generic type T
+            String providerTypeName = extractProviderGenericType(param.asType());
+            depNames.add(providerTypeName);
+        } else {
+            // Check for @Inject with value
+            Inject inject = param.getAnnotation(Inject.class);
+            if (inject != null && !inject.value().isEmpty()) {
+                depNames.add(inject.value());
+            } else {
+                depNames.add(simpleName);
+            }
+        }
+        providerFlags.add(isProvider);
+    }
+    
+    /**
+     * Extracts dependency info from a field element.
+     */
+    private void extractFieldDependencyInfo(VariableElement field, List<String> depNames, List<Boolean> providerFlags) {
+        String fieldType = field.asType().toString();
+        int lastDot = fieldType.lastIndexOf('.');
+        String simpleName = lastDot > 0 ? fieldType.substring(lastDot + 1) : fieldType;
+        
+        // Check if field is a Provider<T>
+        boolean isProvider = isProviderType(field.asType());
+        
+        // Check for @Named annotation on field
+        Named named = field.getAnnotation(Named.class);
+        if (named != null) {
+            depNames.add(named.value());
+        } else if (isProvider) {
+            // For Provider, extract the generic type T
+            String providerTypeName = extractProviderGenericType(field.asType());
+            depNames.add(providerTypeName);
+        } else {
+            // Check for @Inject with value
+            Inject inject = field.getAnnotation(Inject.class);
+            if (inject != null && !inject.value().isEmpty()) {
+                depNames.add(inject.value());
+            } else {
+                depNames.add(simpleName);
+            }
+        }
+        providerFlags.add(isProvider);
+    }
+    
+    /**
+     * Extracts dependency info from an @Inject method and returns method info.
+     * Returns null if the method has no parameters.
+     */
+    private InjectMethodInfo extractMethodDependencyInfo(ExecutableElement method, List<String> depNames, List<Boolean> providerFlags) {
+        String methodName = method.getSimpleName().toString();
+        int paramCount = method.getParameters().size();
+        
+        if (paramCount == 0) {
+            return null; // No parameters to inject
+        }
+        
+        List<String> paramTypes = new ArrayList<>();
+        List<String> methodDepNames = new ArrayList<>();
+        List<Boolean> methodProviderFlags = new ArrayList<>();
+        
+        for (VariableElement param : method.getParameters()) {
+            String paramType = param.asType().toString();
+            int lastDot = paramType.lastIndexOf('.');
+            String simpleName = lastDot > 0 ? paramType.substring(lastDot + 1) : paramType;
+            paramTypes.add(paramType);
+            
+            // Check if parameter is a Provider<T>
+            boolean isProvider = isProviderType(param.asType());
+            
+            // Check for @Named annotation on parameter
+            Named named = param.getAnnotation(Named.class);
+            if (named != null) {
+                methodDepNames.add(named.value());
+                depNames.add(named.value());
+            } else if (isProvider) {
+                // For Provider, extract the generic type T
+                String providerTypeName = extractProviderGenericType(param.asType());
+                methodDepNames.add(providerTypeName);
+                depNames.add(providerTypeName);
+            } else {
+                // Check for @Inject with value
+                Inject inject = param.getAnnotation(Inject.class);
+                if (inject != null && !inject.value().isEmpty()) {
+                    methodDepNames.add(inject.value());
+                    depNames.add(inject.value());
+                } else {
+                    methodDepNames.add(simpleName);
+                    depNames.add(simpleName);
+                }
+            }
+            methodProviderFlags.add(isProvider);
+            providerFlags.add(isProvider);
+        }
+        
+        return new InjectMethodInfo(methodName, paramCount, paramTypes, methodDepNames, methodProviderFlags);
     }
     
     /**
@@ -408,7 +510,7 @@ public class WarmupProcessor extends AbstractProcessor {
         // The BeanInfo.className will hold the FQN when the return type is from a different package
         String classNameForRegistration = returnTypeFqn;
         
-        processedBeans.add(new BeanInfo(packageName, classNameForRegistration, beanName, factoryClassName, scope, depNames, providerFlags, isPrimary));
+        processedBeans.add(new BeanInfo(packageName, classNameForRegistration, beanName, factoryClassName, scope, depNames, providerFlags, isPrimary, new ArrayList<>()));
     }
     
     /**
@@ -448,6 +550,24 @@ public class WarmupProcessor extends AbstractProcessor {
                         continue;
                     }
                     injectFields.add(field);
+                }
+            }
+        }
+        
+        // Collect @Inject methods
+        List<ExecutableElement> injectMethods = new ArrayList<>();
+        for (Element enclosed : beanClass.getEnclosedElements()) {
+            if (enclosed.getKind() == ElementKind.METHOD) {
+                ExecutableElement method = (ExecutableElement) enclosed;
+                if (method.getAnnotation(Inject.class) != null) {
+                    // Validate method has parameters
+                    if (method.getParameters().isEmpty()) {
+                        processingEnv.getMessager().printMessage(Diagnostic.Kind.WARNING,
+                            "@Inject method without parameters will have no effect: " + 
+                            method.getSimpleName() + " in " + beanClass.getQualifiedName(), method);
+                        continue;
+                    }
+                    injectMethods.add(method);
                 }
             }
         }
