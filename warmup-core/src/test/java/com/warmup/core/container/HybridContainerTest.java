@@ -322,7 +322,7 @@ class HybridContainerTest {
     void testGetMetricsAfterResolutions() {
         // Create container with metrics explicitly enabled for this test
         var metricsContainer = new HybridContainer(
-            new HybridContainerConfig(false, 10, true, true, null),  // metricsEnabled=true
+            new HybridContainerConfig(false, 10, true, true, null, new String[0]),  // metricsEnabled=true
             jitCompiler
         );
         
