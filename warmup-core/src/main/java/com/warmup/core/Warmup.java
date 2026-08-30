@@ -1,6 +1,7 @@
 package com.warmup.core;
 
 import com.warmup.core.annotation.InternalApi;
+import com.warmup.asm.AsmJITCompiler;
 import com.warmup.core.container.HotReloadCapable;
 import com.warmup.core.container.HybridContainer;
 import com.warmup.core.container.HybridContainerConfig;
@@ -8,7 +9,6 @@ import com.warmup.core.jit.JITCompiler;
 import com.warmup.core.jit.NoOpJITCompiler;
 import com.warmup.core.registry.BeanDefinition;
 
-import java.util.ServiceLoader;
 import java.util.Set;
 import java.util.function.Function;
 
@@ -16,9 +16,8 @@ import java.util.function.Function;
  * Main entry point for the Warmup dependency injection container.
  * 
  * This class provides an ergonomic API for creating and using the DI container,
- * wrapping HybridContainer with a simpler interface. JIT compiler discovery
- * is done via ServiceLoader at runtime to maintain proper module dependencies
- * (warmup-core does not depend on warmup-asm).
+ * wrapping HybridContainer with a simpler interface. The JIT compiler (AsmJITCompiler)
+ * is instantiated directly from warmup-core since ASM is now embedded in the core module.
  * 
  * Usage:
  * <pre>{@code
@@ -36,10 +35,9 @@ import java.util.function.Function;
  *     .build();
  * }</pre>
  * 
- * Architecture note: The JITCompiler implementation is discovered via
- * {@link ServiceLoader}. If no provider is found (e.g., in GraalVM native
- * images or when warmup-asm is not on classpath), a NoOp fallback is used
- * that delegates to reflection-based bean creation.
+ * Architecture note: The JITCompiler implementation (AsmJITCompiler) is now
+ * instantiated directly from warmup-core. A NoOp fallback is available for
+ * environments where ASM bytecode generation should not be used (e.g., GraalVM native images).
  * 
  * @see HybridContainer
  * @see JITCompiler
@@ -51,8 +49,9 @@ public class Warmup implements AutoCloseable {
     /**
      * Creates a new Warmup instance with default settings.
      * 
-     * Uses ServiceLoader to discover JITCompiler implementation.
-     * Falls back to NoOpJITCompiler if no provider is found.
+     * Uses AsmJITCompiler directly for bytecode generation.
+     * Falls back to NoOpJITCompiler only if explicitly configured for environments
+     * where ASM should not be used (e.g., GraalVM native images).
      * 
      * @return new Warmup instance
      */
@@ -77,7 +76,8 @@ public class Warmup implements AutoCloseable {
      * @return new Warmup instance
      */
     public static Warmup create(JITCompiler jitCompiler) {
-        return new Warmup(new HybridContainer(jitCompiler, false));
+        HybridContainerConfig config = new HybridContainerConfig.Builder().build();
+        return new Warmup(new HybridContainer(config, jitCompiler));
     }
 
     /**
@@ -89,7 +89,11 @@ public class Warmup implements AutoCloseable {
      * @return new Warmup instance
      */
     public static Warmup create(JITCompiler jitCompiler, boolean diagnostic, int maxPendingCompilations) {
-        return new Warmup(new HybridContainer(jitCompiler, diagnostic, maxPendingCompilations));
+        HybridContainerConfig config = new HybridContainerConfig.Builder()
+            .diagnosticMode(diagnostic)
+            .maxPendingCompilations(maxPendingCompilations)
+            .build();
+        return new Warmup(new HybridContainer(config, jitCompiler));
     }
 
     /**
@@ -99,23 +103,6 @@ public class Warmup implements AutoCloseable {
      */
     private Warmup(HybridContainer container) {
         this.container = container;
-    }
-
-    /**
-     * Returns the underlying HybridContainer for advanced operations.
-     * 
-     * <p><strong>This method is deprecated.</strong> The {@code HybridContainer} exposes internal
-     * and potentially dangerous operations that should not be part of the stable public API.
-     * For hot-reload capabilities, use {@link #hotReload()} instead. For other advanced needs,
-     * consider that this escape hatch may change or be removed in future versions.</p>
-     * 
-     * @return the wrapped container
-     * @deprecated Use specific capability methods like {@link #hotReload()} instead.
-     *             This method will be removed in a future version.
-     */
-    @Deprecated(since = "2.0", forRemoval = true)
-    public HybridContainer container() {
-        return container;
     }
 
     /**
@@ -294,21 +281,6 @@ public class Warmup implements AutoCloseable {
     }
 
     /**
-     * Registers a compile-time factory for a bean by name.
-     * 
-     * @param beanName the bean name
-     * @param factory the compiled factory
-     * @deprecated Use {@link #registerFactory(String, Class, CompiledFactory)} for type-safe registration.
-     * This wildcard version does not validate types and may cause {@code ClassCastException}
-     * at resolution time if the factory type doesn't match the bean definition.
-     * Kept for backward compatibility with generated code.
-     */
-    @Deprecated(since = "1.0", forRemoval = false)
-    public void registerFactory(String beanName, com.warmup.core.jit.CompiledFactory<?> factory) {
-        container.registerFactory(beanName, factory);
-    }
-
-    /**
      * Shuts down the container, releasing resources.
      */
     public void shutdown() {
@@ -369,7 +341,7 @@ public class Warmup implements AutoCloseable {
 
         /**
          * Sets an explicit JIT compiler implementation.
-         * Bypasses ServiceLoader discovery.
+         * Bypasses the default AsmJITCompiler instantiation.
          * 
          * @param jitCompiler the JIT compiler to use
          * @return this builder
@@ -485,15 +457,15 @@ public class Warmup implements AutoCloseable {
         /**
          * Builds the Warmup instance.
          * 
-         * Discovers JITCompiler via ServiceLoader if not explicitly set.
-         * Falls back to NoOpJITCompiler if no provider is found.
+         * Uses AsmJITCompiler by default for bytecode generation.
+         * Falls back to NoOpJITCompiler only if explicitly set via jitCompiler().
          * 
          * @return new Warmup instance
          */
         public Warmup build() {
             JITCompiler compiler = jitCompiler;
             if (compiler == null) {
-                compiler = discoverJITCompiler();
+                compiler = new AsmJITCompiler();
             }
             // Set active profiles in property resolver if available
             if (propertyResolver != null && activeProfiles.length > 0) {
@@ -503,27 +475,15 @@ public class Warmup implements AutoCloseable {
                 propertyResolver = new com.warmup.core.config.PropertyResolver();
                 System.setProperty("warmup.profiles.active", String.join(",", activeProfiles));
             }
-            HybridContainerConfig config = new HybridContainerConfig(
-                diagnostic,
-                maxPendingCompilations,
-                autoDiscoverFactories,
-                metricsEnabled,
-                propertyResolver,
-                activeProfiles
-            );
+            HybridContainerConfig config = new HybridContainerConfig.Builder()
+                .diagnosticMode(diagnostic)
+                .maxPendingCompilations(maxPendingCompilations)
+                .autoDiscoverFactories(autoDiscoverFactories)
+                .metricsEnabled(metricsEnabled)
+                .propertyResolver(propertyResolver)
+                .activeProfiles(activeProfiles)
+                .build();
             return new Warmup(new HybridContainer(config, compiler));
-        }
-
-        /**
-         * Discovers JITCompiler implementation via ServiceLoader.
-         * Falls back to NoOpJITCompiler if no provider is found.
-         * 
-         * @return discovered or fallback JITCompiler
-         */
-        private JITCompiler discoverJITCompiler() {
-            return ServiceLoader.load(JITCompiler.class)
-                    .findFirst()
-                    .orElseGet(NoOpJITCompiler::new);
         }
     }
 }

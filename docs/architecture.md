@@ -21,8 +21,8 @@ warmup-parent/
 | Module | Responsibility |
 |--------|----------------|
 | `warmup-annotations` | Defines DI annotations: `@Bean`, `@Inject`, `@PostConstruct`, `@PreDestroy`. No dependencies on other modules. |
-| `warmup-core` | Core container logic: `HybridContainer`, `BeanRegistry`, `DependencyGraph`, `JITCompiler` interface, `CompiledFactory` interface. Discovers JITCompiler via ServiceLoader. |
-| `warmup-asm` | ASM-based JIT compiler implementation (`AsmJITCompiler`). Generates bytecode at runtime for dynamically registered beans. |
+| `warmup-core` | Core container logic: `HybridContainer`, `BeanRegistry`, `DependencyGraph`, `JITCompiler` interface, `CompiledFactory` interface. Instantiates `AsmJITCompiler` directly for runtime bytecode generation. |
+| `warmup-asm` | ASM-based JIT compiler implementation (`AsmJITCompiler`). Now embedded within `warmup-core` module. |
 | `warmup-processor` | Compile-time annotation processor. Generates `XXX$$WarmupFactory` classes and `GeneratedFactoryRegistrar`. |
 | `warmup-javafx` | JavaFX integration layer with lazy controller loading and FXML support. |
 | `warmup-benchmarks` | JMH benchmarks for performance validation. |

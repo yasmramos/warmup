@@ -22,7 +22,7 @@ class FxLoaderTest {
 
     @BeforeEach
     void setUp() {
-        container = new HybridContainer(new TestJITCompiler(), false);
+        container = new HybridContainer(new HybridContainerConfig.Builder().build(), new TestJITCompiler());
         fxLoader = new FxLoader(container, false);
     }
 

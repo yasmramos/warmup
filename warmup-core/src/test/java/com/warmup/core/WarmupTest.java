@@ -4,19 +4,17 @@ import com.warmup.core.jit.NoOpJITCompiler;
 import com.warmup.core.jit.JITCompiler;
 import org.junit.jupiter.api.Test;
 
-import java.util.ServiceLoader;
-
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
  * Tests for the Warmup facade class.
- * Verifies ServiceLoader discovery and fallback behavior.
+ * Verifies direct instantiation of AsmJITCompiler and fallback behavior.
  */
 public class WarmupTest {
 
     @Test
     public void testCreateWithDefaultSettings() {
-        // Should work with ServiceLoader-discovered JITCompiler (AsmJITCompiler if on classpath)
+        // Should work with default AsmJITCompiler (instantiated directly)
         try (Warmup warmup = Warmup.create()) {
             assertNotNull(warmup);
             // Use hotReload capability instead of deprecated container() method

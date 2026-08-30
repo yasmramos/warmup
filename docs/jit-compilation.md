@@ -8,9 +8,11 @@ The `AsmJITCompiler` is the runtime bytecode generation engine that:
 
 1. Analyzes bean class constructors at runtime
 2. Generates `CompiledFactory` bytecode using ASM 9.x
-3. Loads generated classes via custom `ClassLoader`
+3. Uses `MethodHandles.Lookup.defineHiddenClass` for efficient class definition
 4. Caches compiled factories to avoid recompilation
 5. Supports class unloading to prevent metaspace leaks
+
+**Note:** As of the latest version, `AsmJITCompiler` is now embedded within `warmup-core` and instantiated directly by the `Warmup.Builder`. It no longer uses ServiceLoader discovery. The service file `META-INF/services/com.warmup.core.jit.JITCompiler` has been removed.
 
 ## Architecture
 
