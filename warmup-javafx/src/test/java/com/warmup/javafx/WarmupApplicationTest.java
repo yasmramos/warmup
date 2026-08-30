@@ -107,7 +107,7 @@ class WarmupApplicationTest {
         }
         
         HybridContainer getContainer() {
-            return ((com.warmup.core.Warmup) getWarmup()).getContainer();
+            return ((com.warmup.core.Warmup) getWarmup()).unsafeContainer();
         }
     }
 
