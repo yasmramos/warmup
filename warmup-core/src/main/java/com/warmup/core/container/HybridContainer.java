@@ -222,69 +222,9 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
     }
 
     /**
-     * Creates a new HybridContainer with default settings.
-     * Auto-discovers FactoryRegistrar implementations via ServiceLoader.
-     * Metrics are disabled by default for performance.
-     * 
-     * @param jitCompiler the JIT compiler for runtime factory generation
-     * @param diagnosticMode if true, logs resolution path for each bean
-     * @deprecated Use {@link #HybridContainer(HybridContainerConfig)} or {@link Warmup#builder()} for explicit configuration.
-     */
-    @Deprecated(since = "2.0", forRemoval = false)
-    public HybridContainer(JITCompiler jitCompiler, boolean diagnosticMode) {
-        this(jitCompiler, diagnosticMode, 10, true, false);
-    }
-
-    /**
-     * Creates a new HybridContainer with custom warmup configuration.
-     * Auto-discovers FactoryRegistrar implementations via ServiceLoader.
-     * Metrics are disabled by default for performance.
-     * 
-     * @param jitCompiler the JIT compiler for runtime factory generation
-     * @param diagnosticMode if true, logs resolution path for each bean
-     * @param maxPendingCompilations maximum concurrent background compilations
-     * @deprecated Use {@link #HybridContainer(HybridContainerConfig)} or {@link Warmup#builder()} for explicit configuration.
-     */
-    @Deprecated(since = "2.0", forRemoval = false)
-    public HybridContainer(JITCompiler jitCompiler, boolean diagnosticMode, int maxPendingCompilations) {
-        this(jitCompiler, diagnosticMode, maxPendingCompilations, true, false);
-    }
-
-    /**
-     * Creates a new HybridContainer with full configuration.
-     * Metrics are disabled by default for performance.
-     * 
-     * @param jitCompiler the JIT compiler for runtime factory generation
-     * @param diagnosticMode if true, logs resolution path for each bean
-     * @param maxPendingCompilations maximum concurrent background compilations
-     * @param autoDiscoverFactories if true, automatically discovers and registers
-     *        compile-time factories via ServiceLoader at startup (default: true)
-     * @deprecated Use {@link #HybridContainer(HybridContainerConfig)} or {@link Warmup#builder()} for explicit configuration.
-     */
-    @Deprecated(since = "2.0", forRemoval = false)
-    public HybridContainer(JITCompiler jitCompiler, boolean diagnosticMode, int maxPendingCompilations, boolean autoDiscoverFactories) {
-        this(jitCompiler, diagnosticMode, maxPendingCompilations, autoDiscoverFactories, false);
-    }
-
-    /**
-     * Creates a new HybridContainer with full configuration including metrics toggle.
-     * 
-     * @param jitCompiler the JIT compiler for runtime factory generation
-     * @param diagnosticMode if true, logs resolution path for each bean
-     * @param maxPendingCompilations maximum concurrent background compilations
-     * @param autoDiscoverFactories if true, automatically discovers and registers
-     *        compile-time factories via ServiceLoader at startup (default: true)
-     * @param metricsEnabled if true, enables metrics collection (totalResolutions, timing, etc.);
-     *        when false, the fast path avoids all timing, Optional allocations, and LongAdder updates
-     * @deprecated Use {@link #HybridContainer(HybridContainerConfig)} or {@link Warmup#builder()} for explicit configuration.
-     */
-    @Deprecated(since = "2.0", forRemoval = false)
-    public HybridContainer(JITCompiler jitCompiler, boolean diagnosticMode, int maxPendingCompilations, boolean autoDiscoverFactories, boolean metricsEnabled) {
-        this(new HybridContainerConfig(diagnosticMode, maxPendingCompilations, autoDiscoverFactories, metricsEnabled, null, new String[0]), jitCompiler);
-    }
-    
-    /**
      * Creates a new HybridContainer with the specified configuration.
+     * Auto-discovers FactoryRegistrar implementations via ServiceLoader when enabled in config.
+     * Metrics are enabled/disabled based on config.
      * 
      * @param config the configuration object containing all flags
      * @param jitCompiler the JIT compiler for runtime factory generation

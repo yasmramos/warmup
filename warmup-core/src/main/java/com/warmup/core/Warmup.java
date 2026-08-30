@@ -101,23 +101,6 @@ public class Warmup implements AutoCloseable {
     }
 
     /**
-     * Returns the underlying HybridContainer for advanced operations.
-     * 
-     * <p><strong>This method is deprecated.</strong> The {@code HybridContainer} exposes internal
-     * and potentially dangerous operations that should not be part of the stable public API.
-     * For hot-reload capabilities, use {@link #hotReload()} instead. For other advanced needs,
-     * consider that this escape hatch may change or be removed in future versions.</p>
-     * 
-     * @return the wrapped container
-     * @deprecated Use specific capability methods like {@link #hotReload()} instead.
-     *             This method will be removed in a future version.
-     */
-    @Deprecated(since = "2.0", forRemoval = true)
-    public HybridContainer container() {
-        return container;
-    }
-
-    /**
      * Returns the hot-reload capability if available.
      * 
      * <p>This provides explicit opt-in access to hot-reload functionality without exposing
@@ -290,21 +273,6 @@ public class Warmup implements AutoCloseable {
      */
     public <T> void registerFactory(String beanName, Class<T> type, com.warmup.core.jit.CompiledFactory<T> factory) {
         container.registerFactory(beanName, type, factory);
-    }
-
-    /**
-     * Registers a compile-time factory for a bean by name.
-     * 
-     * @param beanName the bean name
-     * @param factory the compiled factory
-     * @deprecated Use {@link #registerFactory(String, Class, CompiledFactory)} for type-safe registration.
-     * This wildcard version does not validate types and may cause {@code ClassCastException}
-     * at resolution time if the factory type doesn't match the bean definition.
-     * Kept for backward compatibility with generated code.
-     */
-    @Deprecated(since = "1.0", forRemoval = false)
-    public void registerFactory(String beanName, com.warmup.core.jit.CompiledFactory<?> factory) {
-        container.registerFactory(beanName, factory);
     }
 
     /**
