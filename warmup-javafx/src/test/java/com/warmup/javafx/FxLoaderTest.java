@@ -28,8 +28,10 @@ class FxLoaderTest {
 
     @Test
     void testFieldInjectionWithInject() throws Exception {
-        // Register a service bean using the Warmup facade API
+        // Register TestController as a bean with @WarmupFxController behavior
+        // The controller has @Inject field that should be resolved by the container
         warmup.register("testService", TestService.class, TestService::new, Scope.SINGLETON);
+        warmup.register("testController", TestController.class, TestController::new, Scope.PROTOTYPE);
 
         // CreateController returns the injected controller instance
         TestController controller = fxLoader.createController(TestController.class);
@@ -40,13 +42,12 @@ class FxLoaderTest {
     }
 
     @Test
-    void testCreateControllerWithUnregisteredController_FallbackToNoArgConstructor() {
+    void testCreateControllerWithUnregisteredController_ThrowsException() {
         // UnregisteredController is NOT registered in the container
-        // FxLoader should fall back to no-arg constructor instantiation
-        
-        UnregisteredController controller = fxLoader.createController(UnregisteredController.class);
-        
-        assertNotNull(controller, "Controller should be created via fallback no-arg constructor");
+        // FxLoader should throw IllegalStateException since fallback was removed
+        assertThrows(IllegalStateException.class, () -> {
+            fxLoader.createController(UnregisteredController.class);
+        }, "Should throw exception for unregistered controller");
     }
 
     @Test
