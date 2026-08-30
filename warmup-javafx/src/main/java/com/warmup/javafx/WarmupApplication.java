@@ -3,6 +3,7 @@ package com.warmup.javafx;
 import com.warmup.asm.AsmJITCompiler;
 import com.warmup.core.Warmup;
 import com.warmup.core.container.HybridContainer;
+import com.warmup.core.container.HybridContainerConfig;
 import com.warmup.core.scope.Scope;
 import javafx.application.Application;
 import javafx.stage.Stage;
@@ -40,7 +41,7 @@ public abstract class WarmupApplication extends Application {
     public void init() throws Exception {
         // Initialize container via Warmup facade (or custom override)
         warmup = createWarmup();
-        container = warmup.container();
+        container = warmup.unsafeContainer();
         
         // Configure beans (implemented by subclass)
         configure(container);
@@ -91,7 +92,8 @@ public abstract class WarmupApplication extends Application {
         // Default: use explicit JIT compiler for backward compatibility
         // For simpler usage, override to use: return Warmup.create();
         com.warmup.asm.AsmJITCompiler jitCompiler = new com.warmup.asm.AsmJITCompiler();
-        return Warmup.create(jitCompiler, false, 10);
+        HybridContainerConfig config = new HybridContainerConfig.Builder().build();
+        return Warmup.create(jitCompiler);
     }
 
     /**
@@ -104,7 +106,8 @@ public abstract class WarmupApplication extends Application {
     @Deprecated
     protected HybridContainer createContainer() {
         com.warmup.asm.AsmJITCompiler jitCompiler = new com.warmup.asm.AsmJITCompiler();
-        return new HybridContainer(jitCompiler, false);
+        HybridContainerConfig config = new HybridContainerConfig.Builder().build();
+        return new HybridContainer(config, jitCompiler);
     }
 
     /**

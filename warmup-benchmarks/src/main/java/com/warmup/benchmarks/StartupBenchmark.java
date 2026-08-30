@@ -74,7 +74,8 @@ public class StartupBenchmark {
         // Using explicit constructor for benchmark measurement
         // In production, use: com.warmup.core.Warmup warmup = com.warmup.core.Warmup.create();
         AsmJITCompiler jitCompiler = new AsmJITCompiler();
-        HybridContainer container = new HybridContainer(jitCompiler, false);
+        HybridContainerConfig config = new HybridContainerConfig.Builder().build();
+        HybridContainer container = new HybridContainer(config, jitCompiler);
         containersToClose.add(container);
         
         // Register beans dynamically - triggers JIT warmup
@@ -106,14 +107,14 @@ public class StartupBenchmark {
         // Create container with autoDiscoverFactories=true to enable compile-time factory discovery
         // No JIT compiler needed since we're using pre-generated factories
         AsmJITCompiler jitCompiler = new AsmJITCompiler();
-        HybridContainerConfig config = new HybridContainerConfig(
-            false,  // diagnosticMode
-            10,     // maxPendingCompilations
-            true,   // autoDiscoverFactories - discovers compile-time factories
-            false,  // metricsEnabled - disabled for pure startup measurement
-            null,   // propertyResolver
-            new String[0]  // activeProfiles
-        );
+        HybridContainerConfig config = new HybridContainerConfig.Builder()
+            .diagnosticMode(false)
+            .maxPendingCompilations(10)
+            .autoDiscoverFactories(true)
+            .metricsEnabled(false)
+            .propertyResolver(null)
+            .activeProfiles(new String[0])
+            .build();
         HybridContainer container = new HybridContainer(config, jitCompiler);
         containersToClose.add(container);
         
@@ -166,7 +167,7 @@ public class StartupBenchmark {
             BeanDefinition<Object> definition = new BeanDefinition<>(
                 Object.class, beanName, Scope.SINGLETON
             );
-            warmup.container().registerDynamic(definition);
+            warmup.unsafeContainer().registerDynamic(definition);
         }
         
         blackhole.consume(warmup);

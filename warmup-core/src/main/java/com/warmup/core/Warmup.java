@@ -1,7 +1,7 @@
 package com.warmup.core;
 
 import com.warmup.core.annotation.InternalApi;
-import com.warmup.core.asm.AsmJITCompiler;
+import com.warmup.asm.AsmJITCompiler;
 import com.warmup.core.container.HotReloadCapable;
 import com.warmup.core.container.HybridContainer;
 import com.warmup.core.container.HybridContainerConfig;
@@ -76,7 +76,8 @@ public class Warmup implements AutoCloseable {
      * @return new Warmup instance
      */
     public static Warmup create(JITCompiler jitCompiler) {
-        return new Warmup(new HybridContainer(jitCompiler, false));
+        HybridContainerConfig config = new HybridContainerConfig.Builder().build();
+        return new Warmup(new HybridContainer(config, jitCompiler));
     }
 
     /**
@@ -88,7 +89,11 @@ public class Warmup implements AutoCloseable {
      * @return new Warmup instance
      */
     public static Warmup create(JITCompiler jitCompiler, boolean diagnostic, int maxPendingCompilations) {
-        return new Warmup(new HybridContainer(jitCompiler, diagnostic, maxPendingCompilations));
+        HybridContainerConfig config = new HybridContainerConfig.Builder()
+            .diagnosticMode(diagnostic)
+            .maxPendingCompilations(maxPendingCompilations)
+            .build();
+        return new Warmup(new HybridContainer(config, jitCompiler));
     }
 
     /**
@@ -470,14 +475,14 @@ public class Warmup implements AutoCloseable {
                 propertyResolver = new com.warmup.core.config.PropertyResolver();
                 System.setProperty("warmup.profiles.active", String.join(",", activeProfiles));
             }
-            HybridContainerConfig config = new HybridContainerConfig(
-                diagnostic,
-                maxPendingCompilations,
-                autoDiscoverFactories,
-                metricsEnabled,
-                propertyResolver,
-                activeProfiles
-            );
+            HybridContainerConfig config = new HybridContainerConfig.Builder()
+                .diagnosticMode(diagnostic)
+                .maxPendingCompilations(maxPendingCompilations)
+                .autoDiscoverFactories(autoDiscoverFactories)
+                .metricsEnabled(metricsEnabled)
+                .propertyResolver(propertyResolver)
+                .activeProfiles(activeProfiles)
+                .build();
             return new Warmup(new HybridContainer(config, compiler));
         }
     }

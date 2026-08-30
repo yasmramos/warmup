@@ -19,7 +19,7 @@ class HybridContainerTest {
     @BeforeEach
     void setUp() {
         jitCompiler = new TestJITCompiler();
-        container = new HybridContainer(jitCompiler, false);
+        container = new HybridContainer(new HybridContainerConfig.Builder().build(), jitCompiler);
     }
 
     @Test
@@ -162,7 +162,7 @@ class HybridContainerTest {
     @Test
     void testGetDiagnostics() {
         // Enable diagnostic mode
-        HybridContainer diagnosticContainer = new HybridContainer(jitCompiler, true);
+        HybridContainer diagnosticContainer = new HybridContainer(new HybridContainerConfig.Builder().diagnosticMode(true).build(), jitCompiler);
         var definition = new com.warmup.core.registry.BeanDefinition<>(TestService.class, "diagBean");
         diagnosticContainer.register(definition, null);
         
@@ -176,7 +176,7 @@ class HybridContainerTest {
     @Test
     void testGetDiagnosticsConcurrentAccess() throws InterruptedException {
         // Test concurrent writes and reads to diagnostics list
-        HybridContainer diagnosticContainer = new HybridContainer(jitCompiler, true);
+        HybridContainer diagnosticContainer = new HybridContainer(new HybridContainerConfig.Builder().diagnosticMode(true).build(), jitCompiler);
         // Use PROTOTYPE scope so each resolution calls createBean and records diagnostics
         var definition = new com.warmup.core.registry.BeanDefinition<>(
             TestService.class, "concurrentBean", 
@@ -242,7 +242,7 @@ class HybridContainerTest {
     @Test
     void testDiagnosticsNotCollectedWhenDisabled() {
         // Verify that in production mode (diagnosticMode=false), no diagnostics are collected
-        HybridContainer productionContainer = new HybridContainer(jitCompiler, false);
+        HybridContainer productionContainer = new HybridContainer(new HybridContainerConfig.Builder().build(), jitCompiler);
         var definition = new com.warmup.core.registry.BeanDefinition<>(TestService.class, "prodBean");
         productionContainer.register(definition, null);
         
@@ -482,7 +482,7 @@ class HybridContainerTest {
     @Test
     void testTriggerBackgroundWarmupWithCompilationError() {
         // Use a JIT compiler that throws during compilation
-        HybridContainer containerWithErrorJit = new HybridContainer(new ErrorJITCompiler(), false);
+        HybridContainer containerWithErrorJit = new HybridContainer(new HybridContainerConfig.Builder().build(), new ErrorJITCompiler());
         
         var def = new com.warmup.core.registry.BeanDefinition<>(TestService.class, "errorBean");
         
@@ -503,7 +503,7 @@ class HybridContainerTest {
     @Test
     void testCreateViaReflectionWithDependencies() {
         // Use NoOpJITCompiler to force reflection fallback
-        var noopContainer = new HybridContainer(new NoOpJITCompiler(), false, 10, false, false);
+        var noopContainer = new HybridContainer(new HybridContainerConfig.Builder().build(), new NoOpJITCompiler());
         try {
             // Register dependency first
             var serviceDef = new com.warmup.core.registry.BeanDefinition<>(TestService.class, "testService");
@@ -526,7 +526,7 @@ class HybridContainerTest {
     @Test
     void testCreateViaReflectionWithMultipleDependencies() {
         // Use NoOpJITCompiler to force reflection fallback
-        var noopContainer = new HybridContainer(new NoOpJITCompiler(), false, 10, false, false);
+        var noopContainer = new HybridContainer(new HybridContainerConfig.Builder().build(), new NoOpJITCompiler());
         try {
             // Register dependencies first
             var service1Def = new com.warmup.core.registry.BeanDefinition<>(TestService.class, "service1");
