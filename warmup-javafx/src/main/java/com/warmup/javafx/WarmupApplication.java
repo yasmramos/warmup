@@ -1,10 +1,6 @@
 package com.warmup.javafx;
 
-import com.warmup.asm.AsmJITCompiler;
 import com.warmup.core.Warmup;
-import com.warmup.core.container.HybridContainer;
-import com.warmup.core.container.HybridContainerConfig;
-import com.warmup.core.scope.Scope;
 import javafx.application.Application;
 import javafx.stage.Stage;
 
@@ -16,8 +12,8 @@ import javafx.stage.Stage;
  * <pre>
  * public class MyApp extends WarmupApplication {
  *     {@code @Override}
- *     protected void configure(HybridContainer container) {
- *         container.register("service", MyService.class, MyService::new, Scope.SINGLETON);
+ *     protected void configure(Warmup warmup) {
+ *         warmup.register("service", MyService.class, MyService::new, Scope.SINGLETON);
  *     }
  *     
  *     {@code @Override}
@@ -27,28 +23,25 @@ import javafx.stage.Stage;
  * }
  * </pre>
  * 
- * Note: The default implementation uses explicit HybridContainer construction.
- * For simpler usage, override createContainer() to use Warmup.create() or
- * Warmup.builder() for custom configuration.
+ * Note: The default implementation uses Warmup.create() for simple setup.
+ * Override createWarmup() for custom configuration using Warmup.builder().
  */
 public abstract class WarmupApplication extends Application {
 
-    protected HybridContainer container;
-    protected FxLoader fxLoader;
     private Warmup warmup;
+    protected FxLoader fxLoader;
 
     @Override
     public void init() throws Exception {
         // Initialize container via Warmup facade (or custom override)
         warmup = createWarmup();
-        container = warmup.unsafeContainer();
         
         // Configure beans (implemented by subclass)
-        configure(container);
+        configure(warmup);
         
         // Initialize FxLoader
         boolean devMode = Boolean.getBoolean("warmup.dev.mode");
-        fxLoader = new FxLoader(container, devMode);
+        fxLoader = new FxLoader(warmup, devMode);
         
         // Call custom init hook
         onInit();
@@ -66,8 +59,8 @@ public abstract class WarmupApplication extends Application {
         onStop();
         
         // Shutdown container
-        if (container != null) {
-            container.shutdown();
+        if (warmup != null) {
+            warmup.shutdown();
         }
     }
 
@@ -89,34 +82,18 @@ public abstract class WarmupApplication extends Application {
      * @return configured Warmup instance
      */
     protected Warmup createWarmup() {
-        // Default: use explicit JIT compiler for backward compatibility
-        // For simpler usage, override to use: return Warmup.create();
-        com.warmup.asm.AsmJITCompiler jitCompiler = new com.warmup.asm.AsmJITCompiler();
-        HybridContainerConfig config = new HybridContainerConfig.Builder().build();
-        return Warmup.create(jitCompiler);
+        // Default: use Warmup.create() for simple setup
+        // ASM is now embedded in core, so no explicit JIT compiler construction needed
+        return Warmup.create();
     }
 
     /**
-     * Creates and configures the HybridContainer (deprecated).
-     * Override createWarmup() instead for custom configuration.
-     *
-     * @return configured HybridContainer
-     * @deprecated Use {@link #createWarmup()} instead
-     */
-    @Deprecated
-    protected HybridContainer createContainer() {
-        com.warmup.asm.AsmJITCompiler jitCompiler = new com.warmup.asm.AsmJITCompiler();
-        HybridContainerConfig config = new HybridContainerConfig.Builder().build();
-        return new HybridContainer(config, jitCompiler);
-    }
-
-    /**
-     * Configure beans in the container.
+     * Configure beans in the Warmup container.
      * Must be implemented by subclass.
      * 
-     * @param container the HybridContainer to configure
+     * @param warmup the Warmup instance to configure
      */
-    protected abstract void configure(HybridContainer container);
+    protected abstract void configure(Warmup warmup);
 
     /**
      * Called after container initialization but before UI start.
@@ -145,12 +122,12 @@ public abstract class WarmupApplication extends Application {
     }
 
     /**
-     * Get the HybridContainer instance.
+     * Get the Warmup instance.
      * 
-     * @return the container
+     * @return the Warmup instance
      */
-    public HybridContainer getContainer() {
-        return container;
+    public Warmup getWarmup() {
+        return warmup;
     }
 
     /**
@@ -164,11 +141,9 @@ public abstract class WarmupApplication extends Application {
 
     /**
      * Enable hot-reload mode for development.
-     * Call this in your configure method during development.
-     * 
-     * @param container the container
+     * Call this during development to enable controller cache clearing.
      */
-    protected void enableHotReload(HybridContainer container) {
+    protected void enableHotReload() {
         System.setProperty("warmup.dev.mode", "true");
         if (fxLoader != null) {
             fxLoader.clearCache();

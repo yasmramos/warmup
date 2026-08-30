@@ -1,8 +1,7 @@
 package com.warmup.javafx;
 
 import com.warmup.annotations.Inject;
-import com.warmup.core.container.HybridContainer;
-import com.warmup.core.container.HybridContainerConfig;
+import com.warmup.core.Warmup;
 import com.warmup.core.jit.CompiledFactory;
 import com.warmup.core.jit.CompilationException;
 import com.warmup.core.jit.JITCompiler;
@@ -19,19 +18,18 @@ import static org.junit.jupiter.api.Assertions.*;
 class FxLoaderTest {
 
     private FxLoader fxLoader;
-    private HybridContainer container;
+    private Warmup warmup;
 
     @BeforeEach
     void setUp() {
-        container = new HybridContainer(new HybridContainerConfig.Builder().build(), new TestJITCompiler());
-        fxLoader = new FxLoader(container, false);
+        warmup = Warmup.create();
+        fxLoader = new FxLoader(warmup, false);
     }
 
     @Test
     void testFieldInjectionWithInject() throws Exception {
-        // Register a service bean
-        var serviceDef = new BeanDefinition<>(TestService.class, "testService");
-        container.register(serviceDef, null);
+        // Register a service bean using the Warmup facade API
+        warmup.register("testService", TestService.class, TestService::new, Scope.SINGLETON);
 
         // CreateController returns the injected controller instance
         TestController controller = fxLoader.createController(TestController.class);

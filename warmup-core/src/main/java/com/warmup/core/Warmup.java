@@ -281,6 +281,43 @@ public class Warmup implements AutoCloseable {
     }
 
     /**
+     * Registers a bean with a Supplier and explicit scope.
+     * <p>
+     * This is a convenience method for registering beans without needing to create
+     * a BeanDefinition manually. The bean will be instantiated on-demand using the
+     * provided Supplier.
+     * </p>
+     * 
+     * @param <T> the bean type
+     * @param name the bean name
+     * @param type the bean type
+     * @param supplier the supplier that creates bean instances
+     * @param scope the scope for this bean (SINGLETON or PROTOTYPE)
+     * @throws IllegalStateException if a bean with this name already exists
+     */
+    public <T> void register(String name, Class<T> type, java.util.function.Supplier<T> supplier, com.warmup.core.scope.Scope scope) {
+        com.warmup.core.lifecycle.LifecycleCallbacks<T> lifecycle = com.warmup.core.lifecycle.LifecycleCallbacks.empty();
+        com.warmup.core.registry.BeanDefinition<T> definition = new com.warmup.core.registry.BeanDefinition<>(
+            type, name, scope, lifecycle, false, new Object[0], new String[0], new String[0]
+        );
+        container.registerDynamic(definition);
+        
+        // Create a simple CompiledFactory wrapper for the supplier
+        com.warmup.core.jit.CompiledFactory<T> factory = new com.warmup.core.jit.CompiledFactory<T>() {
+            @Override
+            public T create() {
+                return supplier.get();
+            }
+            
+            @Override
+            public Class<?> getBeanType() {
+                return type;
+            }
+        };
+        container.registerFactory(name, type, factory);
+    }
+
+    /**
      * Shuts down the container, releasing resources.
      */
     public void shutdown() {

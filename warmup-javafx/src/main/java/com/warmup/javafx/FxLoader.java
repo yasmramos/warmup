@@ -1,7 +1,7 @@
 package com.warmup.javafx;
 
 import com.warmup.annotations.Inject;
-import com.warmup.core.container.HybridContainer;
+import com.warmup.core.Warmup;
 import javafx.fxml.FXMLLoader;
 import javafx.scene.Parent;
 
@@ -23,16 +23,16 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 public class FxLoader {
 
-    private final HybridContainer container;
+    private final Warmup warmup;
     private final ConcurrentHashMap<String, Object> controllerCache;
     private final boolean developmentMode;
 
-    public FxLoader(HybridContainer container) {
-        this(container, false);
+    public FxLoader(Warmup warmup) {
+        this(warmup, false);
     }
 
-    public FxLoader(HybridContainer container, boolean developmentMode) {
-        this.container = container;
+    public FxLoader(Warmup warmup, boolean developmentMode) {
+        this.warmup = warmup;
         this.controllerCache = new ConcurrentHashMap<>();
         this.developmentMode = developmentMode;
     }
@@ -108,7 +108,7 @@ public class FxLoader {
         T controller;
         try {
             // Try to resolve from container (triggers JIT if needed)
-            controller = container.resolve(clazz);
+            controller = warmup.resolve(clazz);
         } catch (IllegalStateException e) {
             // Controller not registered - fall back to reflective no-arg instantiation
             controller = createControllerReflectively(clazz);
@@ -174,7 +174,7 @@ public class FxLoader {
     private void injectField(Object controller, Field field) {
         field.setAccessible(true);
         try {
-            Object dependency = container.resolve(field.getType());
+            Object dependency = warmup.resolve(field.getType());
             field.set(controller, dependency);
         } catch (Exception e) {
             throw new RuntimeException(
