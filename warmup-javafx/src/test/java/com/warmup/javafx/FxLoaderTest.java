@@ -2,6 +2,7 @@ package com.warmup.javafx;
 
 import com.warmup.annotations.Inject;
 import com.warmup.core.container.HybridContainer;
+import com.warmup.core.container.HybridContainerConfig;
 import com.warmup.core.jit.CompiledFactory;
 import com.warmup.core.jit.CompilationException;
 import com.warmup.core.jit.JITCompiler;
