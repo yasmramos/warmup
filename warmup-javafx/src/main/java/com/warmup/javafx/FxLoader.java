@@ -1,12 +1,10 @@
 package com.warmup.javafx;
 
-import com.warmup.annotations.Inject;
 import com.warmup.core.Warmup;
 import javafx.fxml.FXMLLoader;
 import javafx.scene.Parent;
 
 import java.io.IOException;
-import java.lang.reflect.Field;
 import java.net.URL;
 import java.util.ResourceBundle;
 import java.util.concurrent.ConcurrentHashMap;
@@ -18,7 +16,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * Features:
  * - Lazy initialization of controllers
  * - Hot-reload support in development mode
- * - Automatic field injection with @Inject
+ * - Automatic dependency injection via container (no manual reflection)
  * - Circular dependency resolution for UI frameworks
  */
 public class FxLoader {
@@ -83,10 +81,12 @@ public class FxLoader {
     /**
      * Create controller with dependency injection.
      * Uses prototype scope for controllers (new instance per request).
-     * Falls back to reflective instantiation if controller is not registered in container.
+     * Controllers annotated with @WarmupFxController are registered as beans by the annotation processor
+     * and resolved directly from the container with full dependency injection.
      * 
      * @param clazz controller class
      * @return injected controller instance
+     * @throws IllegalStateException if controller is not registered in the container
      */
     @SuppressWarnings("unchecked")
     public <T> T createController(Class<T> clazz) {
@@ -105,17 +105,10 @@ public class FxLoader {
             }
         }
         
-        T controller;
-        try {
-            // Try to resolve from container (triggers JIT if needed)
-            controller = warmup.resolve(clazz);
-        } catch (IllegalStateException e) {
-            // Controller not registered - fall back to reflective no-arg instantiation
-            controller = createControllerReflectively(clazz);
-        }
-        
-        // Inject fields marked with @Inject
-        injectFields(controller);
+        // Resolve from container - controllers must be registered as beans via @WarmupFxController
+        // The annotation processor generates the factory and registers it, so the container
+        // handles all construction and dependency injection automatically.
+        T controller = warmup.resolve(clazz);
         
         // Cache if not prototype
         if (!isPrototypeController(clazz)) {
@@ -123,65 +116,6 @@ public class FxLoader {
         }
         
         return controller;
-    }
-
-    /**
-     * Create controller instance via reflection using no-arg constructor.
-     * Used as fallback when controller is not registered in the container.
-     * 
-     * @param clazz controller class
-     * @return new controller instance
-     */
-    private <T> T createControllerReflectively(Class<T> clazz) {
-        try {
-            return clazz.getDeclaredConstructor().newInstance();
-        } catch (Exception e) {
-            throw new RuntimeException(
-                "Failed to create controller via reflection: " + clazz.getName() + 
-                ". Controller must either be registered in the container or have a public no-arg constructor.",
-                e
-            );
-        }
-    }
-
-    /**
-     * Inject dependencies into controller fields.
-     * 
-     * @param controller controller instance
-     */
-    private void injectFields(Object controller) {
-        if (controller == null) {
-            return;
-        }
-        
-        Class<?> clazz = controller.getClass();
-        while (clazz != null && clazz != Object.class) {
-            for (Field field : clazz.getDeclaredFields()) {
-                if (field.isAnnotationPresent(Inject.class)) {
-                    injectField(controller, field);
-                }
-            }
-            clazz = clazz.getSuperclass();
-        }
-    }
-
-    /**
-     * Inject a single field with dependency resolution.
-     * 
-     * @param controller owner instance
-     * @param field field to inject
-     */
-    private void injectField(Object controller, Field field) {
-        field.setAccessible(true);
-        try {
-            Object dependency = warmup.resolve(field.getType());
-            field.set(controller, dependency);
-        } catch (Exception e) {
-            throw new RuntimeException(
-                "Failed to inject field " + field.getName() + " in " + controller.getClass(), 
-                e
-            );
-        }
     }
 
     /**

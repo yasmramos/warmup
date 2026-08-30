@@ -384,3 +384,101 @@ Both naming conventions work because the processor registers factories under bot
 - [Getting Started](getting-started.md) - Basic usage examples
 - [Compile-Time Processing](compile-time-processing.md) - How the processor works
 - [Scopes and Lifecycle](scopes-and-lifecycle.md) - Detailed lifecycle documentation
+
+## `@WarmupFxController`
+
+JavaFX-specific annotation that marks a controller class as a bean managed by the Warmup container.
+This annotation is processed by the annotation processor to generate a zero-overhead factory, similar to `@Prototype` or `@Component`.
+
+### Definition
+
+```java
+package com.warmup.javafx;
+
+import com.warmup.core.scope.Scope;
+import javafx.fxml.Initializable;
+import java.lang.annotation.ElementType;
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
+import java.lang.annotation.Target;
+
+@Target(ElementType.TYPE)
+@Retention(RetentionPolicy.RUNTIME)
+public @interface WarmupFxController {
+    String fxml() default "";
+    Scope scope() default Scope.PROTOTYPE;
+}
+```
+
+### Attributes
+
+| Attribute | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `fxml()` | `String` | `""` | Optional FXML file path for auto-loading. |
+| `scope()` | `Scope` | `PROTOTYPE` | Lifecycle scope of the controller bean. |
+
+### Key Features
+
+- **Bean Registration**: Controllers annotated with `@WarmupFxController` are automatically registered as beans by the annotation processor.
+- **Dependency Injection**: Full constructor and field injection support via the container (no manual reflection in `FxLoader`).
+- **Scope Support**: Default is `PROTOTYPE` (new instance per FXML load), but can be changed to `SINGLETON` if needed.
+- **No Module Coupling**: The annotation processor discovers this annotation by qualified name, so `warmup-processor` does not depend on `warmup-javafx`.
+
+### Example
+
+```java
+package com.example.ui;
+
+import com.warmup.javafx.WarmupFxController;
+import com.warmup.annotations.Inject;
+import javafx.fxml.Initializable;
+import java.net.URL;
+import java.util.ResourceBundle;
+
+@WarmupFxController
+public class MainController implements Initializable {
+    
+    @Inject
+    private UserService userService;
+    
+    @Override
+    public void initialize(URL url, ResourceBundle rb) {
+        // userService is already injected by the container
+        loadData();
+    }
+    
+    private void loadData() {
+        // Use injected service
+        var users = userService.getAllUsers();
+    }
+}
+```
+
+### Integration with FxLoader
+
+The `FxLoader` class uses the container to resolve controllers:
+
+```java
+Warmup warmup = Warmup.create();
+FxLoader fxLoader = new FxLoader(warmup);
+
+// Load FXML - controller is created and injected by the container
+Parent root = fxLoader.loadFxml("/views/main.fxml");
+```
+
+**Important**: Controllers must be annotated with `@WarmupFxController` (or registered manually as beans) to be resolved by the container. The `FxLoader` no longer performs manual field injection via reflection—all injection is handled by the container when the bean is created.
+
+### Processor Behavior
+
+When the annotation processor encounters `@WarmupFxController`:
+
+1. It generates a `XXX$$WarmupFactory` class for the controller (same as `@Prototype`)
+2. Registers the factory in `GeneratedFactoryRegistrar`
+3. The container uses this factory to create and inject the controller instance
+
+If the `warmup-javafx` module is not on the classpath during compilation, the processor silently skips `@WarmupFxController` processing (no errors).
+
+### See Also
+
+- [JavaFX Integration](javafx-integration.md) - Complete JavaFX integration guide
+- [Scopes and Lifecycle](scopes-and-lifecycle.md) - PROTOTYPE vs SINGLETON behavior

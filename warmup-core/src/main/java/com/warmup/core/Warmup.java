@@ -305,12 +305,12 @@ public class Warmup implements AutoCloseable {
         // Create a simple CompiledFactory wrapper for the supplier
         com.warmup.core.jit.CompiledFactory<T> factory = new com.warmup.core.jit.CompiledFactory<T>() {
             @Override
-            public T create() {
+            public T create(Object... dependencies) {
                 return supplier.get();
             }
             
             @Override
-            public Class<?> getBeanType() {
+            public Class<T> getBeanType() {
                 return type;
             }
         };

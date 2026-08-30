@@ -69,7 +69,8 @@ import java.util.*;
     "com.warmup.annotations.Lazy",
     "com.warmup.annotations.Value",
     "com.warmup.annotations.Profile",
-    "com.warmup.annotations.Conditional"
+    "com.warmup.annotations.Conditional",
+    "com.warmup.javafx.WarmupFxController"
 })
 @SupportedSourceVersion(SourceVersion.RELEASE_17)
 public class WarmupProcessor extends AbstractProcessor {
@@ -165,6 +166,9 @@ public class WarmupProcessor extends AbstractProcessor {
         // These imply @Bean with a specific scope
         processClassStereotypes(roundEnv, filer, messager);
         
+        // Process @WarmupFxController annotation (by qualified name to avoid coupling)
+        processFxControllers(roundEnv, filer, messager);
+        
         // Process @Factory classes with @Bean methods
         processFactoryClasses(roundEnv, filer, messager);
         
@@ -240,6 +244,89 @@ public class WarmupProcessor extends AbstractProcessor {
                     "Failed to generate factory: " + e.getMessage(), element);
             }
         }
+    }
+    
+    /**
+     * Processes classes annotated with @WarmupFxController.
+     * This annotation is discovered by qualified name to avoid coupling warmup-processor to warmup-javafx.
+     * If the annotation class is not found (JavaFX module not on classpath), processing is silently skipped.
+     */
+    private void processFxControllers(RoundEnvironment roundEnv, Filer filer, Messager messager) {
+        // Try to get the annotation type element by qualified name
+        TypeElement annotationTypeElement = processingEnv.getElementUtils()
+            .getTypeElement("com.warmup.javafx.WarmupFxController");
+        
+        // If null, the JavaFX module is not on the classpath - skip silently
+        if (annotationTypeElement == null) {
+            return;
+        }
+        
+        // Process all elements annotated with @WarmupFxController
+        for (Element element : roundEnv.getElementsAnnotatedWith(annotationTypeElement)) {
+            if (element.getKind() != ElementKind.CLASS) {
+                messager.printMessage(Diagnostic.Kind.ERROR, 
+                    "@WarmupFxController only applies to classes", element);
+                continue;
+            }
+            
+            TypeElement typeElement = (TypeElement) element;
+            
+            // Extract scope from annotation mirror (since we can't import the annotation class)
+            String scope = extractScopeFromAnnotationMirror(element, annotationTypeElement);
+            
+            // Extract bean name from annotation mirror
+            String beanName = extractBeanNameFromAnnotationMirror(element, annotationTypeElement);
+            
+            try {
+                String factoryClassName = generateFactoryForClassBytecode(typeElement, scope, beanName, filer);
+                storeBeanInfo(typeElement, beanName, scope, factoryClassName);
+            } catch (IOException e) {
+                messager.printMessage(Diagnostic.Kind.ERROR, 
+                    "Failed to generate factory: " + e.getMessage(), element);
+            }
+        }
+    }
+    
+    /**
+     * Extracts the scope value from an annotation mirror.
+     * Default is PROTOTYPE for @WarmupFxController.
+     */
+    private String extractScopeFromAnnotationMirror(Element element, TypeElement annotationType) {
+        for (AnnotationMirror mirror : element.getAnnotationMirrors()) {
+            if (mirror.getAnnotationType().toString().equals(annotationType.getQualifiedName().toString())) {
+                for (Map.Entry<? extends ExecutableElement, ? extends AnnotationValue> entry : mirror.getElementValues().entrySet()) {
+                    if (entry.getKey().getSimpleName().toString().equals("scope")) {
+                        AnnotationValue scopeValue = entry.getValue();
+                        // Scope is an enum, extract its name
+                        if (scopeValue.getValue() instanceof VariableElement) {
+                            return ((VariableElement) scopeValue.getValue()).getSimpleName().toString();
+                        }
+                    }
+                }
+            }
+        }
+        // Default to PROTOTYPE for controllers
+        return "PROTOTYPE";
+    }
+    
+    /**
+     * Extracts the bean name (value) from an annotation mirror.
+     * Returns empty string if not specified.
+     */
+    private String extractBeanNameFromAnnotationMirror(Element element, TypeElement annotationType) {
+        for (AnnotationMirror mirror : element.getAnnotationMirrors()) {
+            if (mirror.getAnnotationType().toString().equals(annotationType.getQualifiedName().toString())) {
+                for (Map.Entry<? extends ExecutableElement, ? extends AnnotationValue> entry : mirror.getElementValues().entrySet()) {
+                    if (entry.getKey().getSimpleName().toString().equals("value") || 
+                        entry.getKey().getSimpleName().toString().equals("fxml")) {
+                        // For @WarmupFxController, there's no 'value' attribute for bean name
+                        // The fxml attribute is separate, bean name uses default behavior
+                        return "";
+                    }
+                }
+            }
+        }
+        return "";
     }
     
     /**

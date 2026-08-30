@@ -131,6 +131,16 @@ public abstract class WarmupApplication extends Application {
     }
 
     /**
+     * Get the underlying HybridContainer for advanced operations.
+     * Package-private for testing purposes.
+     * 
+     * @return the HybridContainer
+     */
+    com.warmup.core.container.HybridContainer getContainer() {
+        return warmup != null ? warmup.getContainer() : null;
+    }
+
+    /**
      * Get the FxLoader instance for loading FXML views.
      * 
      * @return the FxLoader

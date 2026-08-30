@@ -92,7 +92,7 @@ class WarmupApplicationTest {
         private boolean stopCalled = false;
         
         @Override
-        protected void configure(HybridContainer container) {
+        protected void configure(Warmup warmup) {
             // No configuration needed for tests
         }
         
@@ -105,6 +105,10 @@ class WarmupApplicationTest {
         boolean isStopCalled() {
             return stopCalled;
         }
+        
+        HybridContainer getContainer() {
+            return ((com.warmup.core.Warmup) getWarmup()).getContainer();
+        }
     }
 
     /**
@@ -115,7 +119,7 @@ class WarmupApplicationTest {
         private boolean onInitCalled = false;
         
         @Override
-        protected void configure(HybridContainer container) {
+        protected void configure(Warmup warmup) {
         }
         
         @Override
@@ -136,7 +140,7 @@ class WarmupApplicationTest {
         private boolean onStopCalled = false;
         
         @Override
-        protected void configure(HybridContainer container) {
+        protected void configure(Warmup warmup) {
         }
         
         @Override
