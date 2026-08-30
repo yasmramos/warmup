@@ -137,7 +137,7 @@ public abstract class WarmupApplication extends Application {
      * @return the HybridContainer
      */
     com.warmup.core.container.HybridContainer getContainer() {
-        return warmup != null ? warmup.getContainer() : null;
+        return warmup != null ? warmup.unsafeContainer() : null;
     }
 
     /**
