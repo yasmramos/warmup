@@ -49,84 +49,76 @@ public class AsmJITCompiler implements JITCompiler {
 
     @Override
     public <T> CompiledFactory<T> compile(Class<T> beanClass, Class<?>... dependencyClasses) throws CompilationException {
-        // Check cache first
+        // Use computeIfAbsent to ensure thread-safe compilation without redundant work
         @SuppressWarnings("unchecked")
-        CompiledFactory<T> cached = (CompiledFactory<T>) factoryCache.get(beanClass);
-        if (cached != null) {
-            return cached;
-        }
-
-        long startTime = System.nanoTime();
-        totalCompilations.incrementAndGet();
-
-        try {
-            // Get or create generation counter for this bean class (for hot-reload support)
-            AtomicLong generationCounter = generationCounters.computeIfAbsent(beanClass, k -> new AtomicLong(0));
-            long generation = generationCounter.incrementAndGet();
+        CompiledFactory<T> factory = (CompiledFactory<T>) factoryCache.computeIfAbsent(beanClass, bc -> {
+            long startTime = System.nanoTime();
+            totalCompilations.incrementAndGet();
             
-            // Generate bytecode with unique class name per generation to avoid LinkageError on reload
-            byte[] bytecode = generateFactoryBytecode(beanClass, dependencyClasses, generation);
-            
-            // Use MethodHandles.Lookup.defineHiddenClass to define the factory without a custom ClassLoader
-            // This allows individual unloading when the Lookup/hidden class becomes unreachable
-            MethodHandles.Lookup lookup = MethodHandles.privateLookupIn(beanClass, MethodHandles.lookup());
-            
-            // Define as hidden class - no need for custom ClassLoader
-            // Hidden classes are unloaded when their Lookup and all instances become unreachable
-            // Note: defineHiddenClass doesn't use the class name directly; it's inferred from bytecode
-            Class<?> factoryClass = lookup.defineHiddenClass(bytecode, true, MethodHandles.Lookup.ClassOption.NESTMATE).lookupClass();
-            
-            // Instantiate the factory
-            @SuppressWarnings("unchecked")
-            CompiledFactory<T> factory = (CompiledFactory<T>) factoryClass.getDeclaredConstructor().newInstance();
-            
-            // Cache factory and track hidden class reference for potential unload tracking
-            factoryCache.put(beanClass, factory);
-            hiddenClasses.put(beanClass, factoryClass);
-            
-            successfulCompilations.incrementAndGet();
-            totalCompilationTimeNs.addAndGet(System.nanoTime() - startTime);
-            
-            return factory;
-        } catch (Exception e) {
-            failedCompilations.incrementAndGet();
-            throw new CompilationException("Failed to compile factory for " + beanClass.getName(), e);
-        }
+            try {
+                // Get or create generation counter for this bean class (for hot-reload support)
+                AtomicLong generationCounter = generationCounters.computeIfAbsent(bc, k -> new AtomicLong(0));
+                long generation = generationCounter.incrementAndGet();
+                
+                // Generate bytecode with unique class name per generation to avoid LinkageError on reload
+                byte[] bytecode = generateFactoryBytecode(beanClass, dependencyClasses, generation);
+                
+                // Use MethodHandles.Lookup.defineHiddenClass to define the factory without a custom ClassLoader
+                MethodHandles.Lookup lookup = MethodHandles.privateLookupIn(beanClass, MethodHandles.lookup());
+                
+                // Define as hidden class
+                Class<?> factoryClass = lookup.defineHiddenClass(bytecode, true, MethodHandles.Lookup.ClassOption.NESTMATE).lookupClass();
+                
+                // Instantiate the factory
+                CompiledFactory<T> result = (CompiledFactory<T>) factoryClass.getDeclaredConstructor().newInstance();
+                
+                // Track hidden class reference for potential unload tracking
+                hiddenClasses.put(beanClass, factoryClass);
+                
+                successfulCompilations.incrementAndGet();
+                totalCompilationTimeNs.addAndGet(System.nanoTime() - startTime);
+                
+                return result;
+            } catch (Exception e) {
+                failedCompilations.incrementAndGet();
+                throw new RuntimeException("Failed to compile factory for " + beanClass.getName(), e);
+            }
+        });
+        
+        return factory;
     }
 
     @Override
     @SuppressWarnings("unchecked")
     public <T> CompletableFuture<CompiledFactory<T>> compileAsync(Class<T> beanClass, Class<?>... dependencyClasses) {
-        // Check if already compiled or compiling
+        // Check if already compiled
         CompiledFactory<T> cached = (CompiledFactory<T>) factoryCache.get(beanClass);
         if (cached != null) {
             return CompletableFuture.completedFuture(cached);
         }
 
-        // Check if already pending
-        CompletableFuture<CompiledFactory<?>> pending = pendingCompilations.get(beanClass);
-        if (pending != null) {
-            return (CompletableFuture)(pending);
-        }
-
-        // Start new async compilation
-        CompletableFuture<CompiledFactory<?>> future = new CompletableFuture<>();
-        pendingCompilations.put(beanClass, future);
-
-        CompletableFuture.supplyAsync(() -> {
-            try {
-                CompiledFactory<T> factory = compile(beanClass, dependencyClasses);
-                future.complete(factory);
-                return factory;
-            } catch (Exception e) {
-                future.completeExceptionally(e);
-                throw new CompletionException(e);
-            } finally {
-                pendingCompilations.remove(beanClass);
-            }
+        // Use computeIfAbsent to atomically check/create pending compilation
+        @SuppressWarnings("unchecked")
+        CompletableFuture<CompiledFactory<?>> future = pendingCompilations.computeIfAbsent(beanClass, bc -> {
+            CompletableFuture<CompiledFactory<?>> newFuture = new CompletableFuture<>();
+            
+            CompletableFuture.supplyAsync(() -> {
+                try {
+                    CompiledFactory<T> factory = compile(beanClass, dependencyClasses);
+                    newFuture.complete(factory);
+                    return factory;
+                } catch (Exception e) {
+                    newFuture.completeExceptionally(e);
+                    throw new CompletionException(e);
+                } finally {
+                    pendingCompilations.remove(beanClass);
+                }
+            });
+            
+            return newFuture;
         });
 
-        return (CompletableFuture)(future);
+        return (CompletableFuture<CompiledFactory<T>>) (CompletableFuture<?>) future;
     }
 
     @Override

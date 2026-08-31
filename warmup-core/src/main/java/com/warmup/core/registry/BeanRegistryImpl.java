@@ -44,9 +44,6 @@ public class BeanRegistryImpl implements BeanRegistry {
     // Cached singleton instances
     private final ConcurrentMap<String, Object> singletonInstances = new ConcurrentHashMap<>();
     
-    // Track which singletons have had their init callback applied (to avoid deadlocks)
-    private final java.util.Set<String> singletonInitCallbacksApplied = java.util.Collections.newSetFromMap(new ConcurrentHashMap<>());
-    
     // Type-to-name mapping for resolving conflicts
     private final ConcurrentMap<Class<?>, String> typeToNameMap = new ConcurrentHashMap<>();
     
@@ -232,16 +229,14 @@ public class BeanRegistryImpl implements BeanRegistry {
 
         return switch (definition.scope()) {
             case SINGLETON -> {
-                // Track if we created a new instance to apply init callback outside the lock
-                boolean newInstanceCreated = false;
-                T instance = (T) singletonInstances.get(name);
-                
                 // Fast path: instance already exists
+                T instance = (T) singletonInstances.get(name);
                 if (instance != null) {
                     yield instance;
                 }
                 
                 // ComputeIfAbsent ensures thread-safe lazy initialization
+                // Init callback is applied INSIDE the lambda to prevent publishing uninitialized instances
                 instance = (T) singletonInstances.computeIfAbsent(name, k -> {
                     T newInstance = factory.get();
                     // Also write to indexed array for fast indexed resolution using release semantics
@@ -249,15 +244,10 @@ public class BeanRegistryImpl implements BeanRegistry {
                     if (idx != null && idx >= 0 && idx < singletonInstancesByIndex.length) {
                         ARRAY_ELEMENT_HANDLE.setRelease(singletonInstancesByIndex, idx, newInstance);
                     }
+                    // Apply init callback BEFORE returning the instance (inside the lock)
+                    applyInitCallback(newInstance, definition);
                     return newInstance;
                 });
-                
-                // Apply init callback only if this thread created the instance
-                // Check if instance was just created by verifying it's the same reference
-                // and applying callback exactly once using a separate tracking set
-                if (singletonInitCallbacksApplied.add(name)) {
-                    applyInitCallback(instance, definition);
-                }
                 
                 yield instance;
             }
@@ -265,7 +255,6 @@ public class BeanRegistryImpl implements BeanRegistry {
                 // Always create new instance for prototype scope
                 T instance = factory.get();
                 // Only apply init callback if the bean has lifecycle callbacks defined
-                // Avoid the method call and lifecycle check overhead for beans without lifecycle
                 if (definition.lifecycle().onInit() != null) {
                     definition.lifecycle().onInit().onInit(instance);
                 }
@@ -290,16 +279,14 @@ public class BeanRegistryImpl implements BeanRegistry {
 
         return switch (definition.scope()) {
             case SINGLETON -> {
-                // Track if we created a new instance to apply init callback outside the lock
-                T instance = (T) singletonInstances.get(name);
-                
                 // Fast path: instance already exists
+                T instance = (T) singletonInstances.get(name);
                 if (instance != null) {
                     yield instance;
                 }
                 
                 // ComputeIfAbsent ensures thread-safe lazy initialization
-                // Use factory directly without lambda allocation
+                // Init callback is applied INSIDE the lambda to prevent publishing uninitialized instances
                 instance = (T) singletonInstances.computeIfAbsent(name, k -> {
                     T newInstance = factory.get();
                     // Also write to indexed array for fast indexed resolution using release semantics
@@ -307,13 +294,10 @@ public class BeanRegistryImpl implements BeanRegistry {
                     if (idx != null && idx >= 0 && idx < singletonInstancesByIndex.length) {
                         ARRAY_ELEMENT_HANDLE.setRelease(singletonInstancesByIndex, idx, newInstance);
                     }
+                    // Apply init callback BEFORE returning the instance (inside the lock)
+                    applyInitCallback(newInstance, definition);
                     return newInstance;
                 });
-                
-                // Apply init callback only if this thread created the instance
-                if (singletonInitCallbacksApplied.add(name)) {
-                    applyInitCallback(instance, definition);
-                }
                 
                 yield instance;
             }
