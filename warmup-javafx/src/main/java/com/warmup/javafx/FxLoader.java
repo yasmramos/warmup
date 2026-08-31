@@ -18,6 +18,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * - Hot-reload support in development mode
  * - Automatic dependency injection via container (no manual reflection)
  * - Circular dependency resolution for UI frameworks
+ * - Auto-loading FXML from @WarmupFxController annotation
  */
 public class FxLoader {
 
@@ -55,21 +56,94 @@ public class FxLoader {
      * @throws IOException if FXML loading fails
      */
     public Parent loadFxml(String fxmlPath, ResourceBundle resourceBundle) throws IOException {
+        return loadFxmlInternal(null, fxmlPath, resourceBundle);
+    }
+
+    /**
+     * Load FXML automatically from @WarmupFxController annotation.
+     * Reads the fxml() attribute from the annotation and loads the associated FXML file.
+     * The controller is constructed and injected by the container.
+     * 
+     * @param controllerClass the controller class annotated with @WarmupFxController
+     * @return loaded Parent node
+     * @throws IOException if FXML loading fails
+     * @throws IllegalArgumentException if controller is not annotated or fxml() is empty
+     */
+    public <T> Parent loadController(Class<T> controllerClass) throws IOException {
+        return loadController(controllerClass, null);
+    }
+
+    /**
+     * Load FXML automatically from @WarmupFxController annotation with ResourceBundle.
+     * Reads the fxml() attribute from the annotation and loads the associated FXML file.
+     * The controller is constructed and injected by the container.
+     * 
+     * @param controllerClass the controller class annotated with @WarmupFxController
+     * @param resourceBundle optional resource bundle for localization
+     * @return loaded Parent node
+     * @throws IOException if FXML loading fails
+     * @throws IllegalArgumentException if controller is not annotated or fxml() is empty
+     */
+    public <T> Parent loadController(Class<T> controllerClass, ResourceBundle resourceBundle) throws IOException {
+        WarmupFxController annotation = controllerClass.getAnnotation(WarmupFxController.class);
+        if (annotation == null) {
+            throw new IllegalArgumentException(
+                "Controller class " + controllerClass.getName() + 
+                " must be annotated with @WarmupFxController to use auto-loading"
+            );
+        }
+        
+        String fxmlPath = annotation.fxml();
+        if (fxmlPath.isEmpty()) {
+            throw new IllegalArgumentException(
+                "Controller class " + controllerClass.getName() + 
+                " must declare a non-empty fxml() attribute in @WarmupFxController for auto-loading"
+            );
+        }
+        
+        return loadFxmlInternal(controllerClass, fxmlPath, resourceBundle);
+    }
+
+    /**
+     * Internal method to load FXML, shared by loadFxml and loadController.
+     * 
+     * @param controllerClass optional controller class for relative path resolution (null for absolute paths)
+     * @param fxmlPath path to FXML file (relative to controller class if controllerClass provided, otherwise absolute)
+     * @param resourceBundle optional resource bundle for localization
+     * @return loaded Parent node
+     * @throws IOException if FXML loading fails
+     */
+    private Parent loadFxmlInternal(Class<?> controllerClass, String fxmlPath, ResourceBundle resourceBundle) throws IOException {
         FXMLLoader loader = new FXMLLoader();
         
-        // Resolve FXML URL for proper relative reference resolution
-        URL fxmlUrl = getClass().getResource(fxmlPath);
-        if (fxmlUrl == null) {
-            throw new IOException("FXML not found: " + fxmlPath);
+        // Resolve FXML URL: try relative to controller class first, then as absolute resource
+        URL fxmlUrl = null;
+        if (controllerClass != null) {
+            // Try relative to controller class package
+            fxmlUrl = controllerClass.getResource(fxmlPath);
         }
+        
+        if (fxmlUrl == null) {
+            // Try as absolute resource from classpath
+            fxmlUrl = getClass().getResource(fxmlPath);
+        }
+        
+        if (fxmlUrl == null) {
+            throw new IOException(
+                "FXML not found: " + fxmlPath + 
+                (controllerClass != null ? " (relative to " + controllerClass.getName() + ")" : "") +
+                ". Ensure the FXML file exists in the classpath."
+            );
+        }
+        
         loader.setLocation(fxmlUrl);
         
-        // Set resource bundle for localization (not location!)
+        // Set resource bundle for localization
         if (resourceBundle != null) {
             loader.setResources(resourceBundle);
         }
         
-        // Set controller factory for DI
+        // Set controller factory for DI - all controllers are resolved from container
         loader.setControllerFactory(this::createController);
         
         // Load FXML - let FXMLLoader handle the stream internally to avoid file handle leaks
