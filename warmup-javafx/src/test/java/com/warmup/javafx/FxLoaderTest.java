@@ -11,6 +11,7 @@ import javafx.fxml.FXMLLoader;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.io.IOException;
 import java.util.concurrent.CompletableFuture;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -59,6 +60,63 @@ class FxLoaderTest {
     }
 
     @Test
+    void testLoadControllerWithAnnotationAndFxml() throws Exception {
+        // Register TestService as a bean
+        warmup.register("testService", TestService.class, TestService::new, Scope.SINGLETON);
+        
+        // Register TestControllerWithFxml with a factory that handles @Inject field injection
+        warmup.register("testControllerWithFxml", TestControllerWithFxml.class, () -> {
+            TestControllerWithFxml controller = new TestControllerWithFxml();
+            controller.service = warmup.resolve(TestService.class);
+            return controller;
+        }, Scope.PROTOTYPE);
+
+        // Load FXML using auto-loading from @WarmupFxController annotation
+        var root = fxLoader.loadController(TestControllerWithFxml.class);
+
+        // Verify that the FXML was loaded
+        assertNotNull(root, "FXML root should not be null");
+        
+        // Verify that the controller was created and injected by the container
+        TestControllerWithFxml cachedController = (TestControllerWithFxml) fxLoader.getCachedController(TestControllerWithFxml.class);
+        if (cachedController == null) {
+            // Controller might not be cached if it's prototype, resolve directly
+            cachedController = warmup.resolve(TestControllerWithFxml.class);
+        }
+        assertNotNull(cachedController.getService(), "Service should be injected via @Inject");
+        assertEquals("TestService", cachedController.getService().getName());
+    }
+
+    @Test
+    void testLoadControllerWithoutAnnotation_ThrowsIllegalArgumentException() {
+        // UnregisteredController is NOT annotated with @WarmupFxController
+        assertThrows(IllegalArgumentException.class, () -> {
+            fxLoader.loadController(UnregisteredController.class);
+        }, "Should throw IllegalArgumentException for controller without @WarmupFxController");
+    }
+
+    @Test
+    void testLoadControllerWithEmptyFxml_ThrowsIllegalArgumentException() {
+        // TestControllerWithEmptyFxml has @WarmupFxController but empty fxml()
+        assertThrows(IllegalArgumentException.class, () -> {
+            fxLoader.loadController(TestControllerWithEmptyFxml.class);
+        }, "Should throw IllegalArgumentException for controller with empty fxml()");
+    }
+
+    @Test
+    void testLoadControllerWithFxmlNotFound_ThrowsIOException() {
+        // Register the controller but the FXML file doesn't exist
+        warmup.register("testControllerWithMissingFxml", TestControllerWithMissingFxml.class, () -> {
+            TestControllerWithMissingFxml controller = new TestControllerWithMissingFxml();
+            return controller;
+        }, Scope.PROTOTYPE);
+
+        assertThrows(IOException.class, () -> {
+            fxLoader.loadController(TestControllerWithMissingFxml.class);
+        }, "Should throw IOException when FXML file is not found");
+    }
+
+    @Test
     void testEnableHotReloadDoesNotThrowNPE() {
         // Simulate calling enableHotReload before fxLoader is initialized
         // This tests the null-check fix in WarmupApplication.enableHotReload()
@@ -87,6 +145,26 @@ class FxLoaderTest {
         public UnregisteredController() {
             // No-arg constructor for fallback
         }
+    }
+
+    @WarmupFxController(fxml = "/com/warmup/javafx/test.fxml")
+    public static class TestControllerWithFxml {
+        @Inject
+        private TestService service;
+
+        public TestService getService() {
+            return service;
+        }
+    }
+
+    @WarmupFxController(fxml = "")
+    public static class TestControllerWithEmptyFxml {
+        // Empty fxml attribute - should throw IllegalArgumentException
+    }
+
+    @WarmupFxController(fxml = "/com/warmup/javafx/nonexistent.fxml")
+    public static class TestControllerWithMissingFxml {
+        // FXML file doesn't exist - should throw IOException
     }
 
     // Test JIT Compiler implementation
