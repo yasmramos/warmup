@@ -1303,12 +1303,12 @@ public class WarmupProcessor extends AbstractProcessor {
             // Push isPrimary flag
             mv.visitLdcInsn(beanInfo.isPrimary);
             
-            // Create dependency names array
+            // Create dependency names array (actually Object[] for BeanDefinition constructor)
             if (beanInfo.dependencyNames.isEmpty()) {
                 mv.visitInsn(org.objectweb.asm.Opcodes.ACONST_NULL);
             } else {
                 mv.visitLdcInsn(beanInfo.dependencyNames.size());
-                mv.visitTypeInsn(org.objectweb.asm.Opcodes.ANEWARRAY, "java/lang/String");
+                mv.visitTypeInsn(org.objectweb.asm.Opcodes.ANEWARRAY, "java/lang/Object");
                 for (int i = 0; i < beanInfo.dependencyNames.size(); i++) {
                     mv.visitInsn(org.objectweb.asm.Opcodes.DUP);
                     mv.visitLdcInsn(i);
@@ -1348,7 +1348,8 @@ public class WarmupProcessor extends AbstractProcessor {
                 }
             }
             
-            StringBuilder beanDefCtorDesc = new StringBuilder("(Ljava/lang/Class;Ljava/lang/String;Lcom/warmup/core/scope/Scope;Lcom/warmup/core/lifecycle/LifecycleCallbacks;Z[Ljava/lang/String;[Ljava/lang/String;[Ljava/lang/String;)V");
+            // Constructor descriptor: (Class, String, Scope, LifecycleCallbacks, boolean, Object[], String[], String[])V
+            StringBuilder beanDefCtorDesc = new StringBuilder("(Ljava/lang/Class;Ljava/lang/String;Lcom/warmup/core/scope/Scope;Lcom/warmup/core/lifecycle/LifecycleCallbacks;Z[Ljava/lang/Object;[Ljava/lang/String;[Ljava/lang/String;)V");
             mv.visitMethodInsn(org.objectweb.asm.Opcodes.INVOKESPECIAL, beanDefInternal, "<init>", beanDefCtorDesc.toString(), false);
             
             // Create new factory instance
