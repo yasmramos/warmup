@@ -25,28 +25,20 @@ public class WarmupClassLoader extends ClassLoader {
     }
     
     /**
-     * Defines a class from bytecode and caches it.
+     * Defines a class from bytecode and caches it atomically.
+     * Uses computeIfAbsent to prevent duplicate class definition under concurrency.
      * 
      * @param name Fully qualified class name
      * @param bytecode Class bytecode
      * @return The defined Class object
      */
     public Class<?> defineClass(String name, byte[] bytecode) {
-        // Check cache first
-        Class<?> cached = loadedClasses.get(name);
-        if (cached != null) {
-            return cached;
-        }
-        
-        // Define the class
-        Class<?> clazz = defineClass(name, bytecode, 0, bytecode.length,
-                                    WarmupClassLoader.class.getProtectionDomain());
-        
-        // Cache the class and bytecode
-        loadedClasses.put(name, clazz);
-        bytecodeCache.put(name, bytecode);
-        
-        return clazz;
+        return loadedClasses.computeIfAbsent(name, n -> {
+            Class<?> clazz = defineClass(n, bytecode, 0, bytecode.length,
+                                        WarmupClassLoader.class.getProtectionDomain());
+            bytecodeCache.put(n, bytecode);
+            return clazz;
+        });
     }
     
     /**
