@@ -562,7 +562,7 @@ public class FactoryBytecodeGenerator {
         } else if (type.getKind() == TypeKind.ARRAY) {
             // Handle array types
             TypeMirror componentType = ((javax.lang.model.type.ArrayType) type).getComponentType();
-            return "[" + getDescriptor(componentType).replace('/', '.');
+            return "[" + getDescriptor(componentType);
         }
         throw new IllegalArgumentException("Unsupported type: " + type);
     }
