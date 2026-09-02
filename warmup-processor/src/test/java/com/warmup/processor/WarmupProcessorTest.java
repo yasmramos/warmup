@@ -269,4 +269,62 @@ class WarmupProcessorTest {
             fail("Failed to read service file: " + e.getMessage());
         }
     }
+
+    /**
+     * Regression test for array type dependencies in constructor parameters.
+     * Verifies that CHECKCAST receives valid array descriptors (e.g., [Ljava/lang/String;)
+     * and the generated factory class loads without VerifyError or ClassFormatError.
+     */
+    @Test
+    void testArrayDependencyInConstructorLoadsCorrectly() throws Exception {
+        JavaFileObject source = JavaFileObjects.forSourceLines(
+            "test.ArrayBean",
+            "package test;",
+            "import com.warmup.annotations.Singleton;",
+            "",
+            "@Singleton",
+            "public class ArrayBean {",
+            "    private String[] values;",
+            "    private int[] numbers;",
+            "    ",
+            "    public ArrayBean(String[] values, int[] numbers) {",
+            "        this.values = values;",
+            "        this.numbers = numbers;",
+            "    }",
+            "    ",
+            "    public String[] getValues() { return values; }",
+            "    public int[] getNumbers() { return numbers; }",
+            "}"
+        );
+
+        Compilation compilation = compiler.compile(source);
+        
+        // Verify factory class is generated
+        Optional<JavaFileObject> factoryClassOpt = compilation.generatedFile(
+            StandardLocation.CLASS_OUTPUT, 
+            "test/ArrayBean$$WarmupFactory.class"
+        );
+        assertTrue(factoryClassOpt.isPresent(), "Factory class should be generated");
+
+        // Load and define the generated factory class to verify it doesn't throw VerifyError
+        JavaFileObject factoryClass = factoryClassOpt.get();
+        byte[] factoryBytes = factoryClass.openInputStream().readAllBytes();
+        
+        // Define the class using a custom ClassLoader to verify bytecode validity
+        TestClassLoader classLoader = new TestClassLoader();
+        Class<?> factoryClassLoaded = classLoader.defineClass("test.ArrayBean$$WarmupFactory", factoryBytes);
+        
+        // Verify the class can be instantiated
+        Object factoryInstance = factoryClassLoaded.getDeclaredConstructor().newInstance();
+        assertNotNull(factoryInstance, "Factory instance should be created successfully");
+    }
+
+    /**
+     * Helper ClassLoader for loading generated classes during tests.
+     */
+    private static class TestClassLoader extends ClassLoader {
+        public Class<?> defineClass(String name, byte[] bytes) {
+            return defineClass(name, bytes, 0, bytes.length);
+        }
+    }
 }
