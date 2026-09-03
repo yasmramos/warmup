@@ -327,4 +327,413 @@ class WarmupProcessorTest {
             return defineClass(name, bytes, 0, bytes.length);
         }
     }
+
+    @Test
+    void testProcessClassWithProfileAnnotation() {
+        JavaFileObject source = JavaFileObjects.forSourceLines(
+            "test.ProfileBean",
+            "package test;",
+            "import com.warmup.annotations.Singleton;",
+            "import com.warmup.annotations.Profile;",
+            "",
+            "@Singleton",
+            "@Profile(\"prod\")",
+            "public class ProfileBean {",
+            "    public ProfileBean() {}",
+            "}"
+        );
+
+        Compilation compilation = compiler.compile(source);
+        assertTrue(compilation.generatedFile(StandardLocation.CLASS_OUTPUT, "test/ProfileBean$$WarmupFactory.class").isPresent());
+    }
+
+    @Test
+    void testProcessClassWithMultipleProfiles() {
+        JavaFileObject source = JavaFileObjects.forSourceLines(
+            "test.MultiProfileBean",
+            "package test;",
+            "import com.warmup.annotations.Singleton;",
+            "import com.warmup.annotations.Profile;",
+            "",
+            "@Singleton",
+            "@Profile({\"dev\", \"test\"})",
+            "public class MultiProfileBean {",
+            "    public MultiProfileBean() {}",
+            "}"
+        );
+
+        Compilation compilation = compiler.compile(source);
+        assertTrue(compilation.generatedFile(StandardLocation.CLASS_OUTPUT, "test/MultiProfileBean$$WarmupFactory.class").isPresent());
+    }
+
+    @Test
+    void testProcessClassWithPrimaryAnnotation() {
+        JavaFileObject source = JavaFileObjects.forSourceLines(
+            "test.PrimaryBean",
+            "package test;",
+            "import com.warmup.annotations.Singleton;",
+            "import com.warmup.annotations.Primary;",
+            "",
+            "@Singleton",
+            "@Primary",
+            "public class PrimaryBean {",
+            "    public PrimaryBean() {}",
+            "}"
+        );
+
+        Compilation compilation = compiler.compile(source);
+        assertTrue(compilation.generatedFile(StandardLocation.CLASS_OUTPUT, "test/PrimaryBean$$WarmupFactory.class").isPresent());
+    }
+
+    @Test
+    void testProcessClassWithNamedAnnotation() {
+        JavaFileObject source = JavaFileObjects.forSourceLines(
+            "test.NamedBean",
+            "package test;",
+            "import com.warmup.annotations.Singleton;",
+            "",
+            "@Singleton",
+            "public class NamedBean {",
+            "    public NamedBean() {}",
+            "}"
+        );
+
+        Compilation compilation = compiler.compile(source);
+        assertTrue(compilation.generatedFile(StandardLocation.CLASS_OUTPUT, "test/NamedBean$$WarmupFactory.class").isPresent());
+    }
+
+    @Test
+    void testProcessClassWithValueAnnotation() {
+        JavaFileObject source = JavaFileObjects.forSourceLines(
+            "test.ValueBean",
+            "package test;",
+            "import com.warmup.annotations.Singleton;",
+            "import com.warmup.annotations.Value;",
+            "",
+            "@Singleton",
+            "public class ValueBean {",
+            "    @Value(\"${app.name}\")",
+            "    private String appName;",
+            "    ",
+            "    public ValueBean(@Value(\"${app.name}\") String appName) {",
+            "        this.appName = appName;",
+            "    }",
+            "}"
+        );
+
+        Compilation compilation = compiler.compile(source);
+        assertTrue(compilation.generatedFile(StandardLocation.CLASS_OUTPUT, "test/ValueBean$$WarmupFactory.class").isPresent());
+    }
+
+    @Test
+    void testProcessClassWithPrivateConstructor() {
+        JavaFileObject source = JavaFileObjects.forSourceLines(
+            "test.PrivateConstructorBean",
+            "package test;",
+            "import com.warmup.annotations.Singleton;",
+            "",
+            "@Singleton",
+            "public class PrivateConstructorBean {",
+            "    private PrivateConstructorBean() {}",
+            "    ",
+            "    public static PrivateConstructorBean create() {",
+            "        return new PrivateConstructorBean();",
+            "    }",
+            "}"
+        );
+
+        Compilation compilation = compiler.compile(source);
+        // Should still generate factory even with private constructor
+        assertTrue(compilation.generatedFile(StandardLocation.CLASS_OUTPUT, "test/PrivateConstructorBean$$WarmupFactory.class").isPresent());
+    }
+
+    @Test
+    void testProcessClassWithMultipleConstructorsAndInject() {
+        JavaFileObject source = JavaFileObjects.forSourceLines(
+            "test.MultiConstructorBean",
+            "package test;",
+            "import com.warmup.annotations.Singleton;",
+            "import com.warmup.annotations.Inject;",
+            "",
+            "@Singleton",
+            "public class MultiConstructorBean {",
+            "    public MultiConstructorBean() {}",
+            "    ",
+            "    @Inject",
+            "    public MultiConstructorBean(String dep) {}",
+            "    ",
+            "    public MultiConstructorBean(String dep, Integer value) {}",
+            "}"
+        );
+
+        Compilation compilation = compiler.compile(source);
+        assertTrue(compilation.generatedFile(StandardLocation.CLASS_OUTPUT, "test/MultiConstructorBean$$WarmupFactory.class").isPresent());
+    }
+
+    @Test
+    void testProcessFactoryWithMultipleBeanMethods() {
+        JavaFileObject source = JavaFileObjects.forSourceLines(
+            "test.MultiBeanConfig",
+            "package test;",
+            "import com.warmup.annotations.Factory;",
+            "import com.warmup.annotations.Bean;",
+            "",
+            "@Factory",
+            "public class MultiBeanConfig {",
+            "    @Bean",
+            "    public String bean1() {",
+            "        return \"bean1\";",
+            "    }",
+            "    ",
+            "    @Bean",
+            "    public Integer bean2() {",
+            "        return 42;",
+            "    }",
+            "    ",
+            "    @Bean",
+            "    public Double bean3(String dep) {",
+            "        return 3.14;",
+            "    }",
+            "}"
+        );
+
+        Compilation compilation = compiler.compile(source);
+        assertTrue(compilation.generatedFile(StandardLocation.CLASS_OUTPUT, "test/MultiBeanConfig$$bean1$$WarmupFactory.class").isPresent());
+        assertTrue(compilation.generatedFile(StandardLocation.CLASS_OUTPUT, "test/MultiBeanConfig$$bean2$$WarmupFactory.class").isPresent());
+        assertTrue(compilation.generatedFile(StandardLocation.CLASS_OUTPUT, "test/MultiBeanConfig$$bean3$$WarmupFactory.class").isPresent());
+    }
+
+    @Test
+    void testProcessFactoryWithBeanMethodHavingMultipleDependencies() {
+        JavaFileObject source = JavaFileObjects.forSourceLines(
+            "test.ComplexConfig",
+            "package test;",
+            "import com.warmup.annotations.Factory;",
+            "import com.warmup.annotations.Bean;",
+            "",
+            "@Factory",
+            "public class ComplexConfig {",
+            "    @Bean",
+            "    public Service service(Repository repo, Database db, String config) {",
+            "        return new Service(repo, db, config);",
+            "    }",
+            "    ",
+            "    public static class Repository {}",
+            "    public static class Database {}",
+            "    public static class Service {",
+            "        public Service(Repository repo, Database db, String config) {}",
+            "    }",
+            "}"
+        );
+
+        Compilation compilation = compiler.compile(source);
+        assertTrue(compilation.generatedFile(StandardLocation.CLASS_OUTPUT, "test/ComplexConfig$$service$$WarmupFactory.class").isPresent());
+    }
+
+    @Test
+    void testComponentWithDefaultScope() {
+        JavaFileObject source = JavaFileObjects.forSourceLines(
+            "test.DefaultComponent",
+            "package test;",
+            "import com.warmup.annotations.Component;",
+            "",
+            "@Component",
+            "public class DefaultComponent {",
+            "    public DefaultComponent() {}",
+            "}"
+        );
+
+        Compilation compilation = compiler.compile(source);
+        assertTrue(compilation.generatedFile(StandardLocation.CLASS_OUTPUT, "test/DefaultComponent$$WarmupFactory.class").isPresent());
+    }
+
+    @Test
+    void testComponentWithCustomBeanName() {
+        JavaFileObject source = JavaFileObjects.forSourceLines(
+            "test.NamedComponent",
+            "package test;",
+            "import com.warmup.annotations.Component;",
+            "",
+            "@Component(\"myCustomBean\")",
+            "public class NamedComponent {",
+            "    public NamedComponent() {}",
+            "}"
+        );
+
+        Compilation compilation = compiler.compile(source);
+        assertTrue(compilation.generatedFile(StandardLocation.CLASS_OUTPUT, "test/NamedComponent$$WarmupFactory.class").isPresent());
+    }
+
+    @Test
+    void testPrototypeWithCustomBeanName() {
+        JavaFileObject source = JavaFileObjects.forSourceLines(
+            "test.NamedPrototype",
+            "package test;",
+            "import com.warmup.annotations.Prototype;",
+            "",
+            "@Prototype(\"prototypeBean\")",
+            "public class NamedPrototype {",
+            "    public NamedPrototype() {}",
+            "}"
+        );
+
+        Compilation compilation = compiler.compile(source);
+        assertTrue(compilation.generatedFile(StandardLocation.CLASS_OUTPUT, "test/NamedPrototype$$WarmupFactory.class").isPresent());
+    }
+
+    @Test
+    void testSingletonWithCustomBeanName() {
+        JavaFileObject source = JavaFileObjects.forSourceLines(
+            "test.NamedSingleton",
+            "package test;",
+            "import com.warmup.annotations.Singleton;",
+            "",
+            "@Singleton(\"singletonBean\")",
+            "public class NamedSingleton {",
+            "    public NamedSingleton() {}",
+            "}"
+        );
+
+        Compilation compilation = compiler.compile(source);
+        assertTrue(compilation.generatedFile(StandardLocation.CLASS_OUTPUT, "test/NamedSingleton$$WarmupFactory.class").isPresent());
+    }
+
+    @Test
+    void testBeanMethodWithPrimaryAnnotation() {
+        JavaFileObject source = JavaFileObjects.forSourceLines(
+            "test.PrimaryConfig",
+            "package test;",
+            "import com.warmup.annotations.Factory;",
+            "import com.warmup.annotations.Bean;",
+            "import com.warmup.annotations.Primary;",
+            "",
+            "@Factory",
+            "public class PrimaryConfig {",
+            "    @Bean",
+            "    @Primary",
+            "    public String primaryBean() {",
+            "        return \"primary\";",
+            "    }",
+            "}"
+        );
+
+        Compilation compilation = compiler.compile(source);
+        assertTrue(compilation.generatedFile(StandardLocation.CLASS_OUTPUT, "test/PrimaryConfig$$primaryBean$$WarmupFactory.class").isPresent());
+    }
+
+    @Test
+    void testBeanMethodWithNamedAnnotation() {
+        JavaFileObject source = JavaFileObjects.forSourceLines(
+            "test.NamedConfig",
+            "package test;",
+            "import com.warmup.annotations.Factory;",
+            "import com.warmup.annotations.Bean;",
+            "",
+            "@Factory",
+            "public class NamedConfig {",
+            "    @Bean",
+            "    public String namedBean() {",
+            "        return \"named\";",
+            "    }",
+            "}"
+        );
+
+        Compilation compilation = compiler.compile(source);
+        assertTrue(compilation.generatedFile(StandardLocation.CLASS_OUTPUT, "test/NamedConfig$$namedBean$$WarmupFactory.class").isPresent());
+    }
+
+    @Test
+    void testErrorOnInterfaceWithPrototype() {
+        JavaFileObject source = JavaFileObjects.forSourceLines(
+            "test.InvalidPrototype",
+            "package test;",
+            "import com.warmup.annotations.Prototype;",
+            "",
+            "@Prototype",
+            "public interface InvalidPrototype {",
+            "}"
+        );
+
+        Compilation compilation = compiler.compile(source);
+        assertThat(compilation).failed();
+        assertThat(compilation).hadErrorContaining("@Prototype only applies to classes");
+    }
+
+    @Test
+    void testErrorOnInterfaceWithComponent() {
+        JavaFileObject source = JavaFileObjects.forSourceLines(
+            "test.InvalidComponent",
+            "package test;",
+            "import com.warmup.annotations.Component;",
+            "",
+            "@Component",
+            "public interface InvalidComponent {",
+            "}"
+        );
+
+        Compilation compilation = compiler.compile(source);
+        assertThat(compilation).failed();
+        assertThat(compilation).hadErrorContaining("@Component only applies to classes");
+    }
+
+    @Test
+    void testBeanMethodWithoutReturnType() {
+        JavaFileObject source = JavaFileObjects.forSourceLines(
+            "test.VoidBeanConfig",
+            "package test;",
+            "import com.warmup.annotations.Factory;",
+            "import com.warmup.annotations.Bean;",
+            "",
+            "@Factory",
+            "public class VoidBeanConfig {",
+            "    @Bean",
+            "    public String voidBean() {",
+            "        return \"void\";",
+            "    }",
+            "}"
+        );
+
+        Compilation compilation = compiler.compile(source);
+        assertTrue(compilation.generatedFile(StandardLocation.CLASS_OUTPUT, "test/VoidBeanConfig$$voidBean$$WarmupFactory.class").isPresent());
+    }
+
+    @Test
+    void testFactoryWithStaticBeanMethod() {
+        JavaFileObject source = JavaFileObjects.forSourceLines(
+            "test.StaticBeanConfig",
+            "package test;",
+            "import com.warmup.annotations.Factory;",
+            "import com.warmup.annotations.Bean;",
+            "",
+            "@Factory",
+            "public class StaticBeanConfig {",
+            "    @Bean",
+            "    public static String staticBean() {",
+            "        return \"static\";",
+            "    }",
+            "}"
+        );
+
+        Compilation compilation = compiler.compile(source);
+        assertTrue(compilation.generatedFile(StandardLocation.CLASS_OUTPUT, "test/StaticBeanConfig$$staticBean$$WarmupFactory.class").isPresent());
+    }
+
+    @Test
+    void testClassWithAllStereotypeAnnotations() {
+        JavaFileObject source = JavaFileObjects.forSourceLines(
+            "test.OverAnnotatedBean",
+            "package test;",
+            "import com.warmup.annotations.*;",
+            "",
+            "@Singleton",
+            "@Primary",
+            "@Profile(\"test\")",
+            "public class OverAnnotatedBean {",
+            "    public OverAnnotatedBean() {}",
+            "}"
+        );
+
+        Compilation compilation = compiler.compile(source);
+        assertTrue(compilation.generatedFile(StandardLocation.CLASS_OUTPUT, "test/OverAnnotatedBean$$WarmupFactory.class").isPresent());
+    }
 }
