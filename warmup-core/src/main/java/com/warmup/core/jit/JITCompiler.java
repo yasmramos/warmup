@@ -38,6 +38,23 @@ public interface JITCompiler {
     );
 
     /**
+     * Asynchronously compiles a factory in the background using the provided executor.
+     * Used for warmup scenarios to ensure compilations run on the container's executor
+     * and can be properly awaited during shutdown.
+     * 
+     * @param <T> the bean type
+     * @param beanClass the class to create a factory for
+     * @param executor the executor service to run the compilation on
+     * @param dependencyClasses array of dependency classes
+     * @return CompletableFuture that completes with the compiled factory
+     */
+    <T> CompletableFuture<CompiledFactory<T>> compileAsync(
+        Class<T> beanClass,
+        java.util.concurrent.ExecutorService executor,
+        Class<?>... dependencyClasses
+    );
+
+    /**
      * Checks if a compiled factory exists for the given class.
      * 
      * @param beanClass the bean class

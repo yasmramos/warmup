@@ -29,6 +29,12 @@ public class NoOpJITCompiler implements JITCompiler {
     @Override
     public <T> CompletableFuture<CompiledFactory<T>> compileAsync(
             Class<T> beanClass, Class<?>... dependencyClasses) {
+        return compileAsync(beanClass, null, dependencyClasses);
+    }
+
+    @Override
+    public <T> CompletableFuture<CompiledFactory<T>> compileAsync(
+            Class<T> beanClass, java.util.concurrent.ExecutorService executor, Class<?>... dependencyClasses) {
         CompletableFuture<CompiledFactory<T>> future = new CompletableFuture<>();
         future.completeExceptionally(NOT_SUPPORTED);
         return future;

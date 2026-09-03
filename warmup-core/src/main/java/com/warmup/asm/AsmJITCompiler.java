@@ -91,6 +91,12 @@ public class AsmJITCompiler implements JITCompiler {
     @Override
     @SuppressWarnings("unchecked")
     public <T> CompletableFuture<CompiledFactory<T>> compileAsync(Class<T> beanClass, Class<?>... dependencyClasses) {
+        return compileAsync(beanClass, null, dependencyClasses);
+    }
+
+    @Override
+    @SuppressWarnings("unchecked")
+    public <T> CompletableFuture<CompiledFactory<T>> compileAsync(Class<T> beanClass, ExecutorService executor, Class<?>... dependencyClasses) {
         // Check if already compiled
         CompiledFactory<T> cached = (CompiledFactory<T>) factoryCache.get(beanClass);
         if (cached != null) {
@@ -102,18 +108,39 @@ public class AsmJITCompiler implements JITCompiler {
         CompletableFuture<CompiledFactory<?>> future = pendingCompilations.computeIfAbsent(beanClass, bc -> {
             CompletableFuture<CompiledFactory<?>> newFuture = new CompletableFuture<>();
             
-            CompletableFuture.supplyAsync(() -> {
+            Runnable compileTask = () -> {
                 try {
                     CompiledFactory<T> factory = compile(beanClass, dependencyClasses);
                     newFuture.complete(factory);
-                    return factory;
                 } catch (Exception e) {
                     newFuture.completeExceptionally(e);
-                    throw new CompletionException(e);
                 } finally {
                     pendingCompilations.remove(beanClass);
                 }
-            });
+            };
+            
+            if (executor != null) {
+                executor.execute(() -> {
+                    try {
+                        compileTask.run();
+                    } catch (Exception e) {
+                        newFuture.completeExceptionally(e);
+                    }
+                });
+            } else {
+                CompletableFuture.supplyAsync(() -> {
+                    try {
+                        CompiledFactory<T> factory = compile(beanClass, dependencyClasses);
+                        newFuture.complete(factory);
+                        return factory;
+                    } catch (Exception e) {
+                        newFuture.completeExceptionally(e);
+                        throw new CompletionException(e);
+                    } finally {
+                        pendingCompilations.remove(beanClass);
+                    }
+                });
+            }
             
             return newFuture;
         });
