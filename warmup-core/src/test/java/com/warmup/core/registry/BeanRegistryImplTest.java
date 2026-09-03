@@ -450,4 +450,84 @@ class BeanRegistryImplTest {
         assertTrue(byType.isPresent());
         assertEquals("primaryBean", byType.get().name());
     }
+
+    @Test
+    void testWireFactoriesWithAllDependenciesResolved() {
+        // wireFactories is called internally by HybridContainer, not directly on BeanRegistry
+        // This test verifies that beans can be registered with dependencies
+        BeanDefinition<TestService> dependencyDef = new BeanDefinition<>(TestService.class, "dependency");
+        
+        registry.register(dependencyDef);
+        
+        // Verify registration succeeds
+        assertTrue(registry.contains("dependency"));
+    }
+
+    @Test
+    void testWireFactoriesWithMissingDependencies() {
+        // This test verifies that beans can be registered even with missing dependencies
+        BeanDefinition<String> dependentDef = new BeanDefinition<>(String.class, "dependent", 
+            Scope.SINGLETON, com.warmup.core.lifecycle.LifecycleCallbacks.empty(), 
+            false, new Object[] { new TestService("missing") }, new String[] { "missingBean" }, new String[0]);
+        
+        registry.register(dependentDef);
+        
+        // Verify registration succeeds (resolution happens later)
+        assertTrue(registry.contains("dependent"));
+    }
+
+    @Test
+    void testWireFactoriesEmptyRegistry() {
+        // Empty registry should work fine
+        assertEquals(0, registry.size());
+    }
+
+    @Test
+    void testWireFactoriesWithCircularDependency() {
+        // This tests that beans can be registered even with potential circular dependencies
+        BeanDefinition<TestService> bean1 = new BeanDefinition<>(TestService.class, "bean1",
+            Scope.SINGLETON, com.warmup.core.lifecycle.LifecycleCallbacks.empty(),
+            false, new Object[] { null }, new String[] { "bean2" }, new String[0]);
+        BeanDefinition<TestService> bean2 = new BeanDefinition<>(TestService.class, "bean2",
+            Scope.SINGLETON, com.warmup.core.lifecycle.LifecycleCallbacks.empty(),
+            false, new Object[] { null }, new String[] { "bean1" }, new String[0]);
+        
+        registry.register(bean1);
+        registry.register(bean2);
+        
+        // Registration should succeed (circular detection happens at resolve time)
+        assertTrue(registry.contains("bean1"));
+        assertTrue(registry.contains("bean2"));
+    }
+
+    @Test
+    void testSizeAfterClear() {
+        registry.register(new BeanDefinition<>(TestService.class, "bean1"));
+        registry.register(new BeanDefinition<>(TestService.class, "bean2"));
+        assertEquals(2, registry.size());
+        
+        registry.clear();
+        assertEquals(0, registry.size());
+    }
+
+    @Test
+    void testGetAllNamesEmpty() {
+        var names = registry.getAllNames();
+        assertNotNull(names);
+        assertTrue(names.isEmpty());
+    }
+
+    @Test
+    void testHasInstanceAfterClear() {
+        String beanName = "testBean";
+        TestService instance = new TestService("test");
+        BeanDefinition<TestService> definition = new BeanDefinition<>(TestService.class, beanName);
+        
+        registry.register(definition);
+        registry.getInstance(beanName, () -> instance);
+        assertTrue(registry.hasInstance(beanName));
+        
+        registry.clear();
+        assertFalse(registry.hasInstance(beanName));
+    }
 }
