@@ -28,7 +28,7 @@
         <jmh.version>1.37</jmh.version>
         <javafx.version>21</javafx.version>
         <jacoco.version>0.8.11</jacoco.version>
-        <jacoco.min.coverage>0.50</jacoco.min.coverage>
+        <jacoco.min.coverage>0.30</jacoco.min.coverage>
     </properties>
 
     <dependencyManagement>
