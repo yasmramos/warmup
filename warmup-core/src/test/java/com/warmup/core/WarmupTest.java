@@ -186,4 +186,57 @@ public class WarmupTest {
         // Should not throw after close
         assertDoesNotThrow(() -> warmup.shutdown());
     }
+
+    @Test
+    public void testBuilderWithProfiles() {
+        Warmup warmup = Warmup.builder()
+                .profiles("prod", "test")
+                .build();
+        
+        assertNotNull(warmup);
+        warmup.shutdown();
+    }
+
+    @Test
+    public void testBuilderWithNullProfiles() {
+        Warmup warmup = Warmup.builder()
+                .profiles(null)
+                .build();
+        
+        assertNotNull(warmup);
+        warmup.shutdown();
+    }
+
+    @Test
+    public void testBuilderWithPropertyResolver() {
+        var propertyResolver = new com.warmup.core.config.PropertyResolver();
+        
+        Warmup warmup = Warmup.builder()
+                .propertyResolver(propertyResolver)
+                .build();
+        
+        assertNotNull(warmup);
+        warmup.shutdown();
+    }
+
+    @Test
+    public void testBuilderWithMetricsEnabled() {
+        Warmup warmup = Warmup.builder()
+                .metrics(true)
+                .build();
+        
+        assertNotNull(warmup);
+        assertNotNull(warmup.getMetrics());
+        warmup.shutdown();
+    }
+
+    @Test
+    public void testBuilderWithAutoDiscoverFactories() {
+        Warmup warmup = Warmup.builder()
+                .autoDiscoverFactories(false)
+                .build();
+        
+        assertNotNull(warmup);
+        warmup.shutdown();
+    }
 }

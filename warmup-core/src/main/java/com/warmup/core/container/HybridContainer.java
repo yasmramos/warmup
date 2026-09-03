@@ -142,7 +142,7 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
      * @param definition the bean definition to evaluate
      * @return true if the bean should be registered, false otherwise
      */
-    private boolean shouldRegisterBean(BeanDefinition<?> definition) {
+    boolean shouldRegisterBean(BeanDefinition<?> definition) {
         // Check @Profile constraint
         String[] profiles = definition.profiles();
         if (profiles != null && profiles.length > 0) {
