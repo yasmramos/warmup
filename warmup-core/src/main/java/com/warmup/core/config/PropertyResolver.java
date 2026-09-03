@@ -189,4 +189,20 @@ public class PropertyResolver {
             return false;
         }
     }
+    
+    /**
+     * Gets the raw string value for a property key directly (without placeholder syntax).
+     * 
+     * @param key the property key
+     * @return the resolved value, or null if not found
+     */
+    public String getProperty(String key) {
+        for (PropertySource source : propertySources) {
+            String value = source.getProperty(key);
+            if (value != null) {
+                return value;
+            }
+        }
+        return null;
+    }
 }
