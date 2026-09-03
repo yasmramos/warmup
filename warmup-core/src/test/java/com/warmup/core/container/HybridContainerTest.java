@@ -7,6 +7,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -688,6 +690,11 @@ class HybridContainerTest {
 
         @Override
         public <T> CompletableFuture<CompiledFactory<T>> compileAsync(Class<T> type, Class<?>... dependencies) {
+            return compileAsync(type, null, dependencies);
+        }
+
+        @Override
+        public <T> CompletableFuture<CompiledFactory<T>> compileAsync(Class<T> type, java.util.concurrent.ExecutorService executor, Class<?>... dependencies) {
             return CompletableFuture.completedFuture(deps -> {
                 try {
                     return type.getDeclaredConstructor().newInstance();
@@ -734,6 +741,11 @@ class HybridContainerTest {
 
         @Override
         public <T> CompletableFuture<CompiledFactory<T>> compileAsync(Class<T> type, Class<?>... dependencies) {
+            return compileAsync(type, null, dependencies);
+        }
+
+        @Override
+        public <T> CompletableFuture<CompiledFactory<T>> compileAsync(Class<T> type, java.util.concurrent.ExecutorService executor, Class<?>... dependencies) {
             return CompletableFuture.completedFuture(null);
         }
 
@@ -762,6 +774,51 @@ class HybridContainerTest {
         }
     }
 
+    /**
+     * Test to verify that shutdown properly waits for pending warmup compilations
+     * and no compilations are "resurrected" after clear() is called.
+     */
+    @Test
+    void testShutdownWaitsForPendingCompilations() throws Exception {
+        // Use the real AsmJITCompiler to test actual async compilation behavior
+        com.warmup.asm.AsmJITCompiler realJitCompiler = new com.warmup.asm.AsmJITCompiler();
+        HybridContainer realContainer = new HybridContainer(new HybridContainerConfig.Builder().build(), realJitCompiler);
+        
+        // Register multiple beans to trigger background warmup
+        int beanCount = 5;
+        for (int i = 0; i < beanCount; i++) {
+            var definition = new com.warmup.core.registry.BeanDefinition<>(TestService.class, "testBean" + i);
+            realContainer.register(definition, null);
+        }
+        
+        // Give some time for warmup tasks to start
+        Thread.sleep(100);
+        
+        // Capture compilation count before shutdown
+        long compilationsBeforeShutdown = realJitCompiler.getStats().totalCompilations();
+        
+        // Shutdown the container - should wait for pending compilations
+        realContainer.shutdown();
+        
+        // Capture compilation count immediately after shutdown
+        long compilationsAfterShutdown = realJitCompiler.getStats().totalCompilations();
+        
+        // Wait a margin of time to ensure no "resurrected" compilations
+        Thread.sleep(500);
+        
+        // Verify no additional compilations occurred after shutdown
+        long compilationsAfterWait = realJitCompiler.getStats().totalCompilations();
+        
+        // The count after shutdown should equal the count after waiting
+        // This proves no compilations continued after clear() was called
+        assertEquals(compilationsAfterShutdown, compilationsAfterWait, 
+            "No compilations should occur after shutdown completes");
+        
+        // Verify that compilations did complete (at least some should have started before shutdown)
+        assertTrue(compilationsAfterShutdown >= compilationsBeforeShutdown,
+            "Compilations should not decrease after shutdown");
+    }
+
     // Error JIT Compiler for testing error paths
     private static class ErrorJITCompiler implements JITCompiler {
         @Override
@@ -771,6 +828,11 @@ class HybridContainerTest {
 
         @Override
         public <T> CompletableFuture<CompiledFactory<T>> compileAsync(Class<T> type, Class<?>... dependencies) {
+            return compileAsync(type, null, dependencies);
+        }
+
+        @Override
+        public <T> CompletableFuture<CompiledFactory<T>> compileAsync(Class<T> type, java.util.concurrent.ExecutorService executor, Class<?>... dependencies) {
             CompletableFuture<CompiledFactory<T>> future = new CompletableFuture<>();
             future.completeExceptionally(new CompilationException("Async test error", new RuntimeException("test")));
             return future;
@@ -798,6 +860,156 @@ class HybridContainerTest {
 
         @Override
         public void clear() {
+        }
+    }
+
+    /**
+     * Regression test to verify that shutdown() properly waits for pending warmup compilations
+     * and no compilations are "resurrected" after shutdown completes.
+     * 
+     * This test verifies the fix for the bug where:
+     * 1. Background warmup tasks are submitted via compileAsync()
+     * 2. shutdown() is called while compilations are in progress
+     * 3. jitCompiler.clear() is called before compilations complete
+     * 4. Compilations complete AFTER clear() and write to factoryCache/hiddenClasses
+     * 
+     * The fix ensures:
+     * - All pending CompletableFuture tasks complete before clear()
+     * - No new entries appear in jitCompiler after shutdown returns
+     */
+    @Test
+    void testShutdownWaitsForPendingWarmupCompilations() throws InterruptedException {
+        // Use TestJITCompiler with tracking capabilities
+        TrackingJITCompiler trackingCompiler = new TrackingJITCompiler();
+        HybridContainer testContainer = new HybridContainer(
+            new HybridContainerConfig.Builder().build(), 
+            trackingCompiler
+        );
+        
+        // Register multiple beans to trigger background warmup
+        int beanCount = 5;
+        for (int i = 0; i < beanCount; i++) {
+            String beanName = "testBean" + i;
+            var definition = new com.warmup.core.registry.BeanDefinition<>(TestService.class, beanName);
+            testContainer.registerDynamic(definition);
+        }
+        
+        // Give warmup tasks time to start but not complete
+        Thread.sleep(50);
+        
+        // Capture compilation count just before shutdown
+        int compilationsBeforeShutdown = trackingCompiler.getCompilationCount();
+        
+        // Shutdown should wait for all pending compilations
+        testContainer.shutdown();
+        
+        // Capture compilation count immediately after shutdown
+        int compilationsAfterShutdown = trackingCompiler.getCompilationCount();
+        
+        // Wait a margin of time to ensure no "resurrected" compilations
+        Thread.sleep(500);
+        
+        // Capture final compilation count
+        int compilationsFinal = trackingCompiler.getCompilationCount();
+        
+        // Verify no new compilations occurred after shutdown
+        assertEquals(compilationsAfterShutdown, compilationsFinal, 
+            "No compilations should occur after shutdown() returns");
+        
+        // Verify jitCompiler has no new entries after clear
+        assertTrue(trackingCompiler.factoryCache.isEmpty(), 
+            "factoryCache should be empty after shutdown");
+        assertTrue(trackingCompiler.hiddenClasses.isEmpty(), 
+            "hiddenClasses should be empty after shutdown");
+    }
+    
+    /**
+     * Extended tracking JIT compiler for regression testing.
+     */
+    static class TrackingJITCompiler implements JITCompiler {
+        final ConcurrentHashMap<Class<?>, CompiledFactory<?>> factoryCache = new ConcurrentHashMap<>();
+        final ConcurrentHashMap<Class<?>, Class<?>> hiddenClasses = new ConcurrentHashMap<>();
+        final java.util.concurrent.atomic.AtomicInteger compilationCount = new java.util.concurrent.atomic.AtomicInteger(0);
+        
+        @Override
+        @SuppressWarnings("unchecked")
+        public <T> CompiledFactory<T> compile(Class<T> beanClass, Class<?>... dependencyClasses) throws CompilationException {
+            compilationCount.incrementAndGet();
+            CompiledFactory<T> factory = deps -> {
+                try {
+                    return beanClass.getDeclaredConstructor().newInstance();
+                } catch (Exception e) {
+                    throw new RuntimeException(e);
+                }
+            };
+            factoryCache.put(beanClass, factory);
+            hiddenClasses.put(beanClass, beanClass);
+            return factory;
+        }
+        
+        @Override
+        @SuppressWarnings("unchecked")
+        public <T> CompletableFuture<CompiledFactory<T>> compileAsync(Class<T> beanClass, Class<?>... dependencyClasses) {
+            return compileAsync(beanClass, null, dependencyClasses);
+        }
+        
+        @Override
+        @SuppressWarnings("unchecked")
+        public <T> CompletableFuture<CompiledFactory<T>> compileAsync(Class<T> beanClass, ExecutorService executor, Class<?>... dependencyClasses) {
+            CompletableFuture<CompiledFactory<T>> future = new CompletableFuture<>();
+            Runnable task = () -> {
+                try {
+                    CompiledFactory<T> factory = compile(beanClass, dependencyClasses);
+                    future.complete(factory);
+                } catch (Exception e) {
+                    future.completeExceptionally(e);
+                }
+            };
+            if (executor != null) {
+                executor.execute(task);
+            } else {
+                CompletableFuture.runAsync(task);
+            }
+            return future;
+        }
+        
+        @Override
+        public boolean hasCompiledFactory(Class<?> beanClass) {
+            return factoryCache.containsKey(beanClass);
+        }
+        
+        @Override
+        @SuppressWarnings("unchecked")
+        public <T> java.util.Optional<CompiledFactory<T>> getCachedFactory(Class<T> beanClass) {
+            return java.util.Optional.ofNullable((CompiledFactory<T>) factoryCache.get(beanClass));
+        }
+        
+        @Override
+        public boolean unloadFactory(Class<?> beanClass) {
+            factoryCache.remove(beanClass);
+            hiddenClasses.remove(beanClass);
+            return true;
+        }
+        
+        @Override
+        public com.warmup.core.jit.CompilationStats getStats() {
+            return new com.warmup.core.jit.CompilationStats(
+                compilationCount.get(), 
+                compilationCount.get(), 
+                0, 
+                0, 
+                factoryCache.size()
+            );
+        }
+        
+        @Override
+        public void clear() {
+            factoryCache.clear();
+            hiddenClasses.clear();
+        }
+        
+        public int getCompilationCount() {
+            return compilationCount.get();
         }
     }
 }

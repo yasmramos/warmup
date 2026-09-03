@@ -24,6 +24,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Semaphore;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.LongAdder;
 import java.util.function.BiConsumer;
@@ -112,6 +113,10 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
     // Beans are marked pending during registerDynamic and warmed up on first resolve
     // Using ConcurrentHashMap.newKeySet() for thread-safe set operations
     private final Set<String> pendingWarmupBeans = ConcurrentHashMap.newKeySet();
+    
+    // Track pending warmup futures to await them during shutdown
+    // This ensures no compilation tasks write to jitCompiler after clear() is called
+    private final Set<CompletableFuture<?>> pendingWarmupFutures = ConcurrentHashMap.newKeySet();
     
     /**
      * Flag to enable/disable auto-discovery of FactoryRegistrar via ServiceLoader.
@@ -854,7 +859,38 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
     public void shutdown() {
         ExecutorService executor = warmupExecutor;
         if (executor != null) {
-            executor.shutdownNow();
+            // First, wait for all pending warmup compilations to complete
+            // This ensures no compilation tasks write to jitCompiler after clear() is called
+            if (!pendingWarmupFutures.isEmpty()) {
+                CompletableFuture<?>[] futuresArray = pendingWarmupFutures.toArray(new CompletableFuture[0]);
+                CompletableFuture<Void> allFutures = CompletableFuture.allOf(futuresArray);
+                try {
+                    // Wait up to 5 seconds for all pending compilations to complete
+                    allFutures.get(5, TimeUnit.SECONDS);
+                } catch (java.util.concurrent.TimeoutException e) {
+                    // Timeout: force cancel remaining futures
+                    for (CompletableFuture<?> future : pendingWarmupFutures) {
+                        future.cancel(true);
+                    }
+                } catch (java.util.concurrent.ExecutionException | InterruptedException e) {
+                    // Ignore errors during wait - will proceed with shutdown
+                    if (e instanceof InterruptedException) {
+                        Thread.currentThread().interrupt();
+                    }
+                }
+            }
+            
+            // Now shutdown the executor gracefully with timeout and fallback
+            executor.shutdown();
+            try {
+                if (!executor.awaitTermination(5, TimeUnit.SECONDS)) {
+                    executor.shutdownNow();
+                    executor.awaitTermination(2, TimeUnit.SECONDS);
+                }
+            } catch (InterruptedException e) {
+                executor.shutdownNow();
+                Thread.currentThread().interrupt();
+            }
         }
         registry.clear();
         jitCompiler.clear();
@@ -1525,9 +1561,15 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
         }
         
         try {
-            CompletableFuture<CompiledFactory<T>> future = jitCompiler.compileAsync(definition.type(), getDependencyClasses(definition));
-            // Release semaphore when compilation completes (success or failure)
-            future.whenComplete((r, e) -> warmupSemaphore.release());
+            ExecutorService warmupExec = warmupExecutor;
+            CompletableFuture<CompiledFactory<T>> future = jitCompiler.compileAsync(definition.type(), warmupExec, getDependencyClasses(definition));
+            // Track the future for shutdown synchronization
+            pendingWarmupFutures.add(future);
+            // Release semaphore and remove from tracking when compilation completes (success or failure)
+            future.whenComplete((r, e) -> {
+                warmupSemaphore.release();
+                pendingWarmupFutures.remove(future);
+            });
         } catch (Exception e) {
             // If compileAsync or getDependencyClasses throws synchronously, release the semaphore immediately
             // to prevent permanent loss of warmup capacity
