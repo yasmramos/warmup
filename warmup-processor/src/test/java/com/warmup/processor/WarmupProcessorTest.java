@@ -736,4 +736,260 @@ class WarmupProcessorTest {
         Compilation compilation = compiler.compile(source);
         assertTrue(compilation.generatedFile(StandardLocation.CLASS_OUTPUT, "test/OverAnnotatedBean$$WarmupFactory.class").isPresent());
     }
+
+    @Test
+    void testFactoryWithMultipleBeanMethodsAndDependencies() {
+        JavaFileObject source = JavaFileObjects.forSourceLines(
+            "test.MultiBeanFactory",
+            "package test;",
+            "import com.warmup.annotations.*;",
+            "",
+            "@Factory",
+            "public class MultiBeanFactory {",
+            "    @Bean",
+            "    public ServiceA serviceA() {",
+            "        return new ServiceA();",
+            "    }",
+            "",
+            "    @Bean",
+            "    public ServiceB serviceB(ServiceA svc) {",
+            "        return new ServiceB(svc);",
+            "    }",
+            "",
+            "    @Bean",
+            "    public ServiceC serviceC(ServiceA svc1, ServiceB svc2) {",
+            "        return new ServiceC(svc1, svc2);",
+            "    }",
+            "}",
+            "",
+            "class ServiceA {}",
+            "class ServiceB { public ServiceB(ServiceA s) {} }",
+            "class ServiceC { public ServiceC(ServiceA s1, ServiceB s2) {} }"
+        );
+
+        Compilation compilation = compiler.compile(source);
+        assertTrue(compilation.generatedFile(StandardLocation.CLASS_OUTPUT, "test/MultiBeanFactory$$serviceA$$WarmupFactory.class").isPresent());
+        assertTrue(compilation.generatedFile(StandardLocation.CLASS_OUTPUT, "test/MultiBeanFactory$$serviceB$$WarmupFactory.class").isPresent());
+        assertTrue(compilation.generatedFile(StandardLocation.CLASS_OUTPUT, "test/MultiBeanFactory$$serviceC$$WarmupFactory.class").isPresent());
+    }
+
+    @Test
+    void testBeanWithConstructorInjectionAndFieldInjection() {
+        JavaFileObject source = JavaFileObjects.forSourceLines(
+            "test.MixedInjectionBean",
+            "package test;",
+            "import com.warmup.annotations.*;",
+            "",
+            "@Singleton",
+            "public class MixedInjectionBean {",
+            "    @Inject",
+            "    DependencyA fieldDep;",
+            "",
+            "    @Inject",
+            "    public MixedInjectionBean(ConstructorDep ctorDep) {",
+            "    }",
+            "",
+            "    @Inject",
+            "    public void setService(Service svc) {",
+            "    }",
+            "}",
+            "",
+            "class ConstructorDep {}",
+            "class DependencyA {}",
+            "class Service {}"
+        );
+
+        Compilation compilation = compiler.compile(source);
+        assertTrue(compilation.generatedFile(StandardLocation.CLASS_OUTPUT, "test/MixedInjectionBean$$WarmupFactory.class").isPresent());
+    }
+
+    @Test
+    void testBeanMethodWithPrimitiveReturnType() {
+        JavaFileObject source = JavaFileObjects.forSourceLines(
+            "test.PrimitiveBeanFactory",
+            "package test;",
+            "import com.warmup.annotations.*;",
+            "",
+            "@Factory",
+            "public class PrimitiveBeanFactory {",
+            "    @Bean",
+            "    public int intBean() {",
+            "        return 42;",
+            "    }",
+            "",
+            "    @Bean",
+            "    public boolean booleanBean() {",
+            "        return true;",
+            "    }",
+            "",
+            "    @Bean",
+            "    public double doubleBean() {",
+            "        return 3.14;",
+            "    }",
+            "}"
+        );
+
+        Compilation compilation = compiler.compile(source);
+        assertTrue(compilation.generatedFile(StandardLocation.CLASS_OUTPUT, "test/PrimitiveBeanFactory$$intBean$$WarmupFactory.class").isPresent());
+        assertTrue(compilation.generatedFile(StandardLocation.CLASS_OUTPUT, "test/PrimitiveBeanFactory$$booleanBean$$WarmupFactory.class").isPresent());
+        assertTrue(compilation.generatedFile(StandardLocation.CLASS_OUTPUT, "test/PrimitiveBeanFactory$$doubleBean$$WarmupFactory.class").isPresent());
+    }
+
+    @Test
+    void testBeanWithMultipleInjectMethods() {
+        JavaFileObject source = JavaFileObjects.forSourceLines(
+            "test.MultiInjectBean",
+            "package test;",
+            "import com.warmup.annotations.*;",
+            "",
+            "@Singleton",
+            "public class MultiInjectBean {",
+            "    @Inject",
+            "    public void setDep1(Dependency1 d1) {}",
+            "",
+            "    @Inject",
+            "    public void setDep2(Dependency2 d2) {}",
+            "",
+            "    @Inject",
+            "    public void setDep3(Dependency3 d3) {}",
+            "}",
+            "",
+            "class Dependency1 {}",
+            "class Dependency2 {}",
+            "class Dependency3 {}"
+        );
+
+        Compilation compilation = compiler.compile(source);
+        assertTrue(compilation.generatedFile(StandardLocation.CLASS_OUTPUT, "test/MultiInjectBean$$WarmupFactory.class").isPresent());
+    }
+
+    @Test
+    void testFactoryWithStaticAndInstanceBeanMethods() {
+        JavaFileObject source = JavaFileObjects.forSourceLines(
+            "test.MixedFactory",
+            "package test;",
+            "import com.warmup.annotations.*;",
+            "",
+            "@Factory",
+            "public class MixedFactory {",
+            "    @Bean",
+            "    public static String staticBean() {",
+            "        return \"static\";",
+            "    }",
+            "",
+            "    @Bean",
+            "    public String instanceBean() {",
+            "        return \"instance\";",
+            "    }",
+            "}"
+        );
+
+        Compilation compilation = compiler.compile(source);
+        assertTrue(compilation.generatedFile(StandardLocation.CLASS_OUTPUT, "test/MixedFactory$$staticBean$$WarmupFactory.class").isPresent());
+        assertTrue(compilation.generatedFile(StandardLocation.CLASS_OUTPUT, "test/MixedFactory$$instanceBean$$WarmupFactory.class").isPresent());
+    }
+
+    @Test
+    void testBeanWithManyConstructorParameters() {
+        JavaFileObject source = JavaFileObjects.forSourceLines(
+            "test.ManyDepsBean",
+            "package test;",
+            "import com.warmup.annotations.*;",
+            "",
+            "@Singleton",
+            "public class ManyDepsBean {",
+            "    @Inject",
+            "    public ManyDepsBean(Dep1 d1, Dep2 d2, Dep3 d3, Dep4 d4, Dep5 d5) {",
+            "    }",
+            "}",
+            "",
+            "class Dep1 {}",
+            "class Dep2 {}",
+            "class Dep3 {}",
+            "class Dep4 {}",
+            "class Dep5 {}"
+        );
+
+        Compilation compilation = compiler.compile(source);
+        assertTrue(compilation.generatedFile(StandardLocation.CLASS_OUTPUT, "test/ManyDepsBean$$WarmupFactory.class").isPresent());
+    }
+
+    @Test
+    void testBeanMethodInNestedFactory() {
+        JavaFileObject source = JavaFileObjects.forSourceLines(
+            "test.SimpleInnerFactory",
+            "package test;",
+            "import com.warmup.annotations.*;",
+            "",
+            "@Factory",
+            "public class SimpleInnerFactory {",
+            "    @Bean",
+            "    public String bean1() {",
+            "        return \"bean1\";",
+            "    }",
+            "",
+            "    @Bean",
+            "    public Integer bean2() {",
+            "        return 42;",
+            "    }",
+            "}"
+        );
+
+        Compilation compilation = compiler.compile(source);
+        assertTrue(compilation.generatedFile(StandardLocation.CLASS_OUTPUT, "test/SimpleInnerFactory$$bean1$$WarmupFactory.class").isPresent());
+        assertTrue(compilation.generatedFile(StandardLocation.CLASS_OUTPUT, "test/SimpleInnerFactory$$bean2$$WarmupFactory.class").isPresent());
+    }
+
+    @Test
+    void testBeanWithGenericReturnType() {
+        JavaFileObject source = JavaFileObjects.forSourceLines(
+            "test.GenericBeanFactory",
+            "package test;",
+            "import com.warmup.annotations.*;",
+            "import java.util.*;",
+            "",
+            "@Factory",
+            "public class GenericBeanFactory {",
+            "    @Bean",
+            "    public List<String> listBean() {",
+            "        return new ArrayList<>();",
+            "    }",
+            "",
+            "    @Bean",
+            "    public Map<String, Integer> mapBean() {",
+            "        return new HashMap<>();",
+            "    }",
+            "}"
+        );
+
+        Compilation compilation = compiler.compile(source);
+        assertTrue(compilation.generatedFile(StandardLocation.CLASS_OUTPUT, "test/GenericBeanFactory$$listBean$$WarmupFactory.class").isPresent());
+        assertTrue(compilation.generatedFile(StandardLocation.CLASS_OUTPUT, "test/GenericBeanFactory$$mapBean$$WarmupFactory.class").isPresent());
+    }
+
+    @Test
+    void testBeanWithFieldInjectionOnly() {
+        JavaFileObject source = JavaFileObjects.forSourceLines(
+            "test.FieldInjectionOnlyBean",
+            "package test;",
+            "import com.warmup.annotations.*;",
+            "",
+            "@Singleton",
+            "public class FieldInjectionOnlyBean {",
+            "    @Inject",
+            "    DependencyA depA;",
+            "",
+            "    @Inject",
+            "    DependencyB depB;",
+            "",
+            "    public FieldInjectionOnlyBean() {}",
+            "}",
+            "",
+            "class DependencyA {}",
+            "class DependencyB {}"
+        );
+
+        Compilation compilation = compiler.compile(source);
+        assertTrue(compilation.generatedFile(StandardLocation.CLASS_OUTPUT, "test/FieldInjectionOnlyBean$$WarmupFactory.class").isPresent());
+    }
 }
