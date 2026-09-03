@@ -181,6 +181,11 @@ class FxLoaderTest {
         }
 
         @Override
+        public <T> CompletableFuture<CompiledFactory<T>> compileAsync(Class<T> type, Class<?>... dependencies) {
+            return compileAsync(type, java.util.concurrent.ForkJoinPool.commonPool(), dependencies);
+        }
+
+        @Override
         public <T> CompletableFuture<CompiledFactory<T>> compileAsync(Class<T> type, java.util.concurrent.ExecutorService executor, Class<?>... dependencies) {
             return CompletableFuture.supplyAsync(() -> {
                 try {
