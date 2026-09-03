@@ -3,6 +3,7 @@ package com.warmup.core.container;
 import com.warmup.core.jit.JITCompiler;
 import com.warmup.core.jit.CompiledFactory;
 import com.warmup.core.jit.CompilationException;
+import com.warmup.core.registry.BeanDefinition;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -1169,13 +1170,14 @@ class HybridContainerTest {
             jitCompiler
         );
         
-        var definition = new com.warmup.core.registry.BeanDefinition<>(
+        BeanDefinition<TestService> definition = new BeanDefinition<>(
             TestService.class, "negatedProfileBean",
             com.warmup.core.scope.Scope.SINGLETON,
             com.warmup.core.lifecycle.LifecycleCallbacks.empty(),
             false,
             new Object[0],
-            new String[]{"!dev"}
+            new String[]{"!dev"},
+            new String[0]
         );
         
         prodContainer.register(definition, null);
@@ -1189,13 +1191,14 @@ class HybridContainerTest {
             jitCompiler
         );
         
-        var definition = new com.warmup.core.registry.BeanDefinition<>(
+        BeanDefinition<TestService> definition = new BeanDefinition<>(
             TestService.class, "blockedByNegatedProfileBean",
             com.warmup.core.scope.Scope.SINGLETON,
             com.warmup.core.lifecycle.LifecycleCallbacks.empty(),
             false,
             new Object[0],
-            new String[]{"!prod"}
+            new String[]{"!prod"},
+            new String[0]
         );
         
         prodContainer.register(definition, null);
@@ -1209,13 +1212,14 @@ class HybridContainerTest {
             jitCompiler
         );
         
-        var definition = new com.warmup.core.registry.BeanDefinition<>(
+        BeanDefinition<TestService> definition = new BeanDefinition<>(
             TestService.class, "conditionBlockedBean",
             com.warmup.core.scope.Scope.SINGLETON,
             com.warmup.core.lifecycle.LifecycleCallbacks.empty(),
             false,
-            new String[]{AlwaysFalseCondition.class.getName()},
-            new String[0]
+            new Object[0],
+            new String[0],
+            new String[]{AlwaysFalseCondition.class.getName()}
         );
         
         container.register(definition, null);
@@ -1229,13 +1233,14 @@ class HybridContainerTest {
             jitCompiler
         );
         
-        var definition = new com.warmup.core.registry.BeanDefinition<>(
+        BeanDefinition<TestService> definition = new BeanDefinition<>(
             TestService.class, "conditionAllowedBean",
             com.warmup.core.scope.Scope.SINGLETON,
             com.warmup.core.lifecycle.LifecycleCallbacks.empty(),
             false,
-            new String[]{AlwaysTrueCondition.class.getName()},
-            new String[0]
+            new Object[0],
+            new String[0],
+            new String[]{AlwaysTrueCondition.class.getName()}
         );
         
         container.register(definition, null);
