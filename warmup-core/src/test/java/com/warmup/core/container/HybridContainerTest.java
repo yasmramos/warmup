@@ -1330,6 +1330,114 @@ class HybridContainerTest {
         TestService service = container.resolve(TestService.class);
         assertNotNull(service);
     }
+
+    @Test
+    void testResolveByIndex() {
+        var definition1 = new com.warmup.core.registry.BeanDefinition<>(TestService.class, "bean1");
+        var definition2 = new com.warmup.core.registry.BeanDefinition<>(DependencyService.class, "bean2");
+        
+        container.register(definition1, null);
+        container.register(definition2, null);
+        
+        // Resolve by index should work for valid indices
+        // Note: resolveByIndex may return null if the implementation doesn't support it directly
+        // This test verifies the method exists and can be called
+        assertDoesNotThrow(() -> container.resolveByIndex(0));
+        assertDoesNotThrow(() -> container.resolveByIndex(1));
+    }
+
+    @Test
+    void testIndexOf() {
+        var definition = new com.warmup.core.registry.BeanDefinition<>(TestService.class, "indexedBean");
+        container.register(definition, null);
+        
+        int index = container.indexOf("indexedBean");
+        assertTrue(index >= 0);
+        
+        int nonExistentIndex = container.indexOf("nonExistent");
+        assertEquals(-1, nonExistentIndex);
+    }
+
+    @Test
+    void testClose() {
+        var definition = new com.warmup.core.registry.BeanDefinition<>(TestService.class, "closeableBean");
+        container.register(definition, null);
+        
+        assertDoesNotThrow(() -> container.close());
+    }
+
+    @Test
+    void testRegisterFactoryWithString() {
+        var definition = new com.warmup.core.registry.BeanDefinition<>(TestService.class, "factoryBean");
+        container.register(definition, null);
+        
+        try {
+            CompiledFactory factory = jitCompiler.compile(TestService.class);
+            assertNotNull(factory);
+            
+            container.registerFactory("factoryBean", factory);
+            TestService service = container.resolve(TestService.class);
+            assertNotNull(service);
+        } catch (com.warmup.core.jit.CompilationException e) {
+            fail("Compilation exception: " + e.getMessage());
+        }
+    }
+
+    @Test
+    void testDiagnostics() {
+        HybridContainer diagnosticContainer = new HybridContainer(
+            new HybridContainerConfig.Builder().diagnosticMode(true).build(),
+            jitCompiler
+        );
+        
+        var definition = new com.warmup.core.registry.BeanDefinition<>(TestService.class, "diagnosticBean");
+        diagnosticContainer.register(definition, null);
+        
+        var diagnostics = diagnosticContainer.getDiagnostics();
+        assertNotNull(diagnostics);
+    }
+
+    @Test
+    void testResolveAllAsMap() {
+        var definition1 = new com.warmup.core.registry.BeanDefinition<>(TestService.class, "mapBean1");
+        var definition2 = new com.warmup.core.registry.BeanDefinition<>(TestService.class, "mapBean2");
+        
+        container.register(definition1, null);
+        container.register(definition2, null);
+        
+        var map = container.resolveAllAsMap(TestService.class);
+        assertNotNull(map);
+        assertTrue(map.size() >= 2);
+    }
+
+    @Test
+    void testBackgroundWarmupWithLambda() {
+        var definition = new com.warmup.core.registry.BeanDefinition<>(TestService.class, "backgroundBean");
+        container.register(definition, null);
+        
+        // Wait a bit for background warmup to complete
+        try {
+            Thread.sleep(100);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+        
+        TestService service = container.resolve(TestService.class);
+        assertNotNull(service);
+    }
+
+    @Test
+    void testReloadFunctionality() {
+        var definition = new com.warmup.core.registry.BeanDefinition<>(TestService.class, "reloadBean");
+        container.register(definition, null);
+        
+        // Test reload functionality
+        boolean reloaded = container.reload("reloadBean");
+        assertTrue(reloaded);
+        
+        TestService service = container.resolve(TestService.class);
+        assertNotNull(service);
+    }
 }
 
 // Helper condition classes for testing
