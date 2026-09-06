@@ -1278,11 +1278,15 @@ public class WarmupProcessor extends AbstractProcessor {
         mv.visitCode();
         
         // For each bean, create BeanDefinition and call sink.accept()
+        String beanDefInternal = "com/warmup/core/registry/BeanDefinition";
         for (BeanInfo beanInfo : beans) {
             // Load sink
             mv.visitVarInsn(org.objectweb.asm.Opcodes.ALOAD, 1);
             
-            // Create new BeanDefinition
+            // Create new BeanDefinition instance
+            mv.visitTypeInsn(org.objectweb.asm.Opcodes.NEW, beanDefInternal);
+            mv.visitInsn(org.objectweb.asm.Opcodes.DUP);
+            
             String beanTypeInternal = beanInfo.className.replace('.', '/');
             String beanTypeFqn = beanInfo.className;
             
@@ -1317,9 +1321,6 @@ public class WarmupProcessor extends AbstractProcessor {
                 }
             }
             
-            // Invoke BeanDefinition constructor
-            String beanDefInternal = "com/warmup/core/registry/BeanDefinition";
-            
             // Create profiles array
             if (beanInfo.profiles.isEmpty()) {
                 mv.visitInsn(org.objectweb.asm.Opcodes.ACONST_NULL);
@@ -1348,7 +1349,8 @@ public class WarmupProcessor extends AbstractProcessor {
                 }
             }
             
-            // Constructor descriptor: (Class, String, Scope, LifecycleCallbacks, boolean, Object[], String[], String[])V
+            // Invoke BeanDefinition constructor
+            // Constructor descriptor: (Ljava/lang/Class;Ljava/lang/String;Lcom/warmup/core/scope/Scope;Lcom/warmup/core/lifecycle/LifecycleCallbacks;Z[Ljava/lang/Object;[Ljava/lang/String;[Ljava/lang/String;)V
             StringBuilder beanDefCtorDesc = new StringBuilder("(Ljava/lang/Class;Ljava/lang/String;Lcom/warmup/core/scope/Scope;Lcom/warmup/core/lifecycle/LifecycleCallbacks;Z[Ljava/lang/Object;[Ljava/lang/String;[Ljava/lang/String;)V");
             mv.visitMethodInsn(org.objectweb.asm.Opcodes.INVOKESPECIAL, beanDefInternal, "<init>", beanDefCtorDesc.toString(), false);
             
