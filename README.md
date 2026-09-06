@@ -28,9 +28,9 @@ Warmup is the evolution of traditional DI frameworks, featuring:
 
 ```
 warmup-parent/
-├── warmup-annotations    # Core annotations (@Bean, @Inject, @PostConstruct, @PreDestroy)
-├── warmup-core           # DI engine (Warmup, HybridContainer, BeanRegistry, DependencyGraph)
-├── warmup-asm            # JIT compiler implementation using ASM 9.x
+├── warmup-core           # Core DI engine (Warmup, HybridContainer, annotations, ASM JIT compiler)
+│                         # Annotations package: com.warmup.annotations
+│                         # ASM JIT package: com.warmup.asm
 ├── warmup-processor      # Annotation processor for compile-time factory generation
 ├── warmup-javafx         # Optional JavaFX integration (lazy controllers, hot-reload)
 └── warmup-benchmarks     # JMH benchmarks comparing vs Avaje Inject
@@ -52,11 +52,14 @@ warmup-parent/
 
 ```java
 import com.warmup.core.Warmup;
-import com.warmup.annotations.Bean;
+import com.warmup.annotations.Component;
+import com.warmup.annotations.Singleton;
 import com.warmup.annotations.Inject;
+import com.warmup.annotations.Factory;
+import com.warmup.annotations.Bean;
 
-// Define your beans
-@Bean
+// Define your beans using stereotype annotations
+@Singleton  // or @Component, @Prototype
 public class UserService {
     
     @Inject
@@ -67,10 +70,25 @@ public class UserService {
     }
 }
 
-@Bean
+@Singleton
 public class UserRepository {
     public User findById(int id) {
         return new User(id, "John Doe");
+    }
+}
+
+// Or use @Factory with @Bean methods for producer-style configuration
+@Factory
+public class AppConfig {
+    
+    @Bean
+    public DataSource dataSource() {
+        return new DataSource();
+    }
+    
+    @Bean(scope = Bean.Scope.PROTOTYPE)
+    public Service service(Repository repo) {
+        return new Service(repo);
     }
 }
 
@@ -81,7 +99,7 @@ public class Main {
         Warmup warmup = Warmup.create();
         
         // Resolve beans (automatically uses compile-time factories if available)
-        UserService service = warmup.resolve(UserService.class);
+        UserService service = warmup.get(UserService.class);
         System.out.println(service.getUser(1));
         
         // Shutdown when done
@@ -92,13 +110,41 @@ public class Main {
 
 ### Annotations
 
+Warmup provides a comprehensive set of annotations for dependency injection:
+
+**Stereotype Annotations (class-level):**
+- `@Singleton` - Marks a class as a singleton bean (single shared instance)
+- `@Component` - Marks a class as a component bean (equivalent to @Singleton)
+- `@Prototype` - Marks a class as a prototype bean (new instance on each resolution)
+- `@Factory` - Marks a class as a configuration class containing `@Bean` producer methods
+
+**Producer Annotation (method-level):**
+- `@Bean` - Used inside `@Factory` classes to mark methods that produce beans. Supports `scope` attribute with values: `SINGLETON`, `PROTOTYPE`, `CUSTOM`
+
+**Injection Annotations:**
+- `@Inject` - Marks constructor, field, method, or parameter for dependency injection
+- `@Named` - Qualifier to specify which bean to inject by name when multiple implementations exist
+- `@Primary` - Marks a bean as the primary candidate when multiple implementations of the same type exist
+- `@Lazy` - Marks a dependency for lazy resolution (instantiated on first access)
+- `@Provider<T>` - Functional interface for explicit lazy injection via `get()` method
+
+**Lifecycle Annotations:**
+- `@PostConstruct` - Marks a method to be called after bean construction and dependency injection
+- `@PreDestroy` - Marks a method to be called before bean destruction
+
+**Conditional Registration:**
+- `@Profile` - Conditionally register beans based on active profiles (supports negation with `!` prefix)
+- `@Conditional` - Specify custom conditions for bean registration via `Condition` implementations
+
+**Configuration:**
+- `@Value` - Inject configuration values with placeholder syntax `${key}` or `${key:defaultValue}`
+
 ```java
-import com.warmup.annotations.Bean;
-import com.warmup.annotations.Inject;
-import com.warmup.annotations.PostConstruct;
+import com.warmup.annotations.*;
 import com.warmup.annotations.Bean.Scope;
 
-@Bean(scope = Scope.SINGLETON)
+// Stereotype annotations for class-level bean registration
+@Singleton  // or @Component, @Prototype
 public class UserService {
     
     @Inject
@@ -106,7 +152,49 @@ public class UserService {
     
     @PostConstruct
     public void init() {
-        // Initialization logic
+        // Initialization logic after dependencies are injected
+    }
+}
+
+// Factory class with @Bean producer methods
+@Factory
+public class AppConfig {
+    
+    @Bean(scope = Scope.SINGLETON)
+    public DataSource dataSource() {
+        return new DataSource();
+    }
+    
+    @Bean
+    public Service service(Repository repo) {
+        return new Service(repo);
+    }
+}
+
+// Conditional registration with profiles
+@Singleton
+@Profile("dev")
+public class DevDatabase implements Database {
+    // Only registered when "dev" profile is active
+}
+
+// Custom condition for bean registration
+@Singleton
+@Conditional(DatabasePresentCondition.class)
+public class DatabaseService {
+    // Only registered if DatabasePresentCondition.matches() returns true
+}
+
+// Configuration value injection
+@Singleton
+public class ConfigService {
+    
+    @Value("${app.timeout:30}")
+    private int timeout;
+    
+    @Inject
+    public void setDatabaseUrl(@Value("${db.url:jdbc:h2:mem:test}") String url) {
+        // Setter injection with default value
     }
 }
 ```
@@ -122,10 +210,41 @@ For detailed annotation documentation, see [Annotations Reference](docs/annotati
 ```java
 @FunctionalInterface
 public interface CompiledFactory<T> {
+    /**
+     * Creates a new instance of the bean.
+     * @param dependencies array of resolved dependencies (order matches registration)
+     * @return a new bean instance
+     */
     T create(Object... dependencies);
     
+    /**
+     * Returns the bean class this factory creates.
+     * Used for validation and diagnostics.
+     */
     default Class<T> getBeanType() { return null; }
+    
+    /**
+     * Returns the number of dependencies this factory expects.
+     * Used for validation before invocation.
+     */
     default int getDependencyCount() { return 0; }
+    
+    /**
+     * Wires this factory with its dependency factories.
+     * Called by the container after all factories are registered.
+     */
+    default void wire(CompiledFactory<?>[] dependencyFactories) {
+        // Default: no wiring support (legacy or no dependencies)
+    }
+    
+    /**
+     * Creates a bean instance using wired dependency factories.
+     * Avoids Object[] allocation by calling dependency factories directly.
+     */
+    default T get() {
+        // Default: delegate to create() with no dependencies
+        return create();
+    }
 }
 ```
 
@@ -135,11 +254,26 @@ Implemented by both compile-time generated factories and JIT-compiled factories.
 
 ```java
 public interface JITCompiler {
+    /**
+     * Compiles a factory for the given bean type.
+     */
     <T> CompiledFactory<T> compile(Class<T> beanClass, Class<?>... dependencyClasses)
         throws CompilationException;
     
+    /**
+     * Asynchronously compiles a factory in the background.
+     */
     <T> CompletableFuture<CompiledFactory<T>> compileAsync(
         Class<T> beanClass, 
+        Class<?>... dependencyClasses
+    );
+    
+    /**
+     * Asynchronously compiles a factory using the provided executor service.
+     */
+    <T> CompletableFuture<CompiledFactory<T>> compileAsync(
+        Class<T> beanClass,
+        ExecutorService executor,
         Class<?>... dependencyClasses
     );
     
@@ -160,17 +294,34 @@ public class Warmup implements AutoCloseable {
     
     // Simple usage
     public static Warmup create();
+    public static Warmup create(JITCompiler jitCompiler);
+    public static Warmup create(JITCompiler jitCompiler, boolean diagnostic, int maxPendingCompilations);
     
     // Advanced configuration
     public static Builder builder();
     
-    // Resolve beans
+    // Resolve beans by type
     public <T> T resolve(Class<T> clazz);
-    public Object resolve(String name);
+    public <T> T get(Class<T> clazz);  // Alias for resolve()
     
-    // Check existence
-    public boolean contains(Class<?> clazz);
-    public boolean contains(String name);
+    // Collection resolution
+    public <T> List<T> resolveAll(Class<T> clazz);           // For List<T>, Set<T> injection
+    public <T> Map<String, T> resolveAllAsMap(Class<T> clazz); // For Map<String, T> injection
+    
+    // Bean names
+    public Set<String> getBeanNames();
+    
+    // Diagnostics
+    public List<ResolutionDiagnostic> getDiagnostics();
+    
+    // Registration methods
+    public <T> void register(String name, Class<T> type, Supplier<T> supplier, Scope scope);
+    public <T> void registerFactory(String beanName, Class<T> type, CompiledFactory<T> factory);
+    public void registerDynamic(BeanDefinition definition);
+    public <T> void register(BeanDefinition definition, CompiledFactory<T> factory);
+    
+    // Hot reload capability
+    public HotReloadCapable hotReload();
     
     // Metrics
     public ContainerMetrics getMetrics();
@@ -182,7 +333,150 @@ public class Warmup implements AutoCloseable {
 }
 ```
 
+**Builder API:**
+
+```java
+Warmup warmup = Warmup.builder()
+    .profiles("dev", "debug")              // Active profiles for @Profile conditional registration
+    .diagnostic(true)                      // Enable diagnostic mode for debugging
+    .maxPendingCompilations(20)            // Backpressure control for background JIT
+    .jitCompiler(customCompiler)           // Custom JIT compiler (optional)
+    .autoDiscoverFactories(true)           // Enable ServiceLoader factory discovery
+    .metrics(true)                         // Enable metrics collection
+    .propertyResolver(customResolver)      // Custom PropertyResolver for @Value
+    .propertySource(customSource)          // Add custom PropertySource
+    .propertiesFile("/path/to/app.properties") // Load properties from file
+    .enableEnvironment(true)               // Include system environment variables
+    .enableSystemProperties(true)          // Include system properties
+    .build();
+```
+
 See [Getting Started](docs/getting-started.md) for usage examples.
+
+## New Features
+
+### Configuration and Property System
+
+Warmup provides a comprehensive property resolution system for externalizing configuration:
+
+**Property Resolution:**
+- `@Value` annotation injects configuration values with placeholder syntax
+- Supports default values: `${key:defaultValue}`
+- Type conversion for int, long, boolean, and other primitive types
+
+**PropertySource Implementations:**
+- `SystemPropertiesPropertySource` - Java system properties
+- `SystemEnvironmentPropertySource` - OS environment variables
+- `PropertiesFilePropertySource` - Load from `.properties` files
+- Custom implementations via `PropertySource` interface
+
+```java
+@Singleton
+public class DatabaseConfig {
+    
+    @Value("${db.url:jdbc:h2:mem:test}")
+    private String url;
+    
+    @Value("${db.pool.size:10}")
+    private int poolSize;
+    
+    @Value("${db.enabled:true}")
+    private boolean enabled;
+}
+
+// Configure via Builder
+Warmup warmup = Warmup.builder()
+    .propertiesFile("/app/config.properties")
+    .enableEnvironment(true)
+    .enableSystemProperties(true)
+    .build();
+```
+
+### Profiles
+
+Conditional bean registration based on active profiles:
+
+```java
+// Only registered when "dev" profile is active
+@Singleton
+@Profile("dev")
+public class DevDatabase implements Database { }
+
+// Only registered when "prod" profile is active
+@Singleton
+@Profile("prod")
+public class ProdDatabase implements Database { }
+
+// Registered unless "test" profile is active (negation)
+@Singleton
+@Profile("!test")
+public class RealEmailService implements EmailService { }
+
+// Activate profiles via Builder
+Warmup warmup = Warmup.builder()
+    .profiles("dev", "debug")
+    .build();
+
+// Or via system property
+System.setProperty("warmup.profiles.active", "dev,debug");
+```
+
+### Conditional Registration
+
+Custom conditions for fine-grained control over bean registration:
+
+```java
+// Custom condition implementation
+public class DatabasePresentCondition implements Condition {
+    @Override
+    public boolean matches(ConditionContext context) {
+        return context.getPropertyResolver()
+            .getProperty("database.url") != null;
+    }
+}
+
+// Apply condition to bean
+@Singleton
+@Conditional(DatabasePresentCondition.class)
+public class DatabaseService {
+    // Only registered if condition matches
+}
+
+// Multiple conditions (all must match)
+@Singleton
+@Conditional({DatabasePresentCondition.class, CacheEnabledCondition.class})
+public class CachedDatabaseService { }
+```
+
+### Collection Injection
+
+Automatic resolution of multiple beans of the same type:
+
+```java
+@Singleton
+public class PaymentProcessorRegistry {
+    
+    private final List<PaymentProcessor> processors;
+    private final Map<String, PaymentProcessor> processorMap;
+    
+    // Inject all PaymentProcessor beans as a List
+    @Inject
+    public PaymentProcessorRegistry(List<PaymentProcessor> processors) {
+        this.processors = processors;
+    }
+    
+    // Inject all PaymentProcessor beans as a Map with bean names as keys
+    @Inject
+    public void setProcessorMap(Map<String, PaymentProcessor> map) {
+        this.processorMap = map;
+    }
+}
+
+// Resolve collections programmatically
+List<PaymentProcessor> allProcessors = warmup.resolveAll(PaymentProcessor.class);
+Map<String, PaymentProcessor> processorMap = warmup.resolveAllAsMap(PaymentProcessor.class);
+Set<String> beanNames = warmup.getBeanNames();
+```
 
 ## Paths Explained
 
@@ -310,21 +604,41 @@ native-image -cp target/warmup-core-1.0.0-SNAPSHOT.jar \
 ```java
 @Test
 void testMockInjection() {
-    HybridContainer container = new HybridContainerImpl();
+    // Use Warmup.create() for simple testing
+    Warmup warmup = Warmup.create();
     
     // Register mock without annotation processing
     MyService mock = Mockito.mock(MyService.class);
-    container.register("mockService", MyService.class, () -> mock, Scope.SINGLETON);
+    warmup.register("mockService", MyService.class, () -> mock, Scope.SINGLETON);
     
-    MyService resolved = container.resolve(MyService.class);
+    MyService resolved = warmup.get(MyService.class);
     assertSame(mock, resolved);
+    
+    warmup.shutdown();
 }
 
 @Test
 void testContainerReset() {
-    HybridContainer container = new HybridContainerImpl();
+    Warmup warmup = Warmup.create();
     // ... use container
-    container.shutdown(); // Clears all caches
+    warmup.shutdown(); // Clears all caches
+}
+
+@Test
+void testWithCustomConfig() {
+    // Use builder for advanced test configuration
+    Warmup warmup = Warmup.builder()
+        .diagnostic(true)
+        .profiles("test")
+        .build();
+    
+    // Register test doubles
+    warmup.register("testService", TestService.class, TestService::new, Scope.SINGLETON);
+    
+    TestService service = warmup.get(TestService.class);
+    assertNotNull(service);
+    
+    warmup.shutdown();
 }
 ```
 
