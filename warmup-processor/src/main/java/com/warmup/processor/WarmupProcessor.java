@@ -1303,12 +1303,12 @@ public class WarmupProcessor extends AbstractProcessor {
             // Push isPrimary flag
             mv.visitLdcInsn(beanInfo.isPrimary);
             
-            // Create dependency names array (actually Object[] for BeanDefinition constructor)
+            // Create dependency names array (String[] for BeanDefinition constructor)
             if (beanInfo.dependencyNames.isEmpty()) {
                 mv.visitInsn(org.objectweb.asm.Opcodes.ACONST_NULL);
             } else {
                 mv.visitLdcInsn(beanInfo.dependencyNames.size());
-                mv.visitTypeInsn(org.objectweb.asm.Opcodes.ANEWARRAY, "java/lang/Object");
+                mv.visitTypeInsn(org.objectweb.asm.Opcodes.ANEWARRAY, "java/lang/String");
                 for (int i = 0; i < beanInfo.dependencyNames.size(); i++) {
                     mv.visitInsn(org.objectweb.asm.Opcodes.DUP);
                     mv.visitLdcInsn(i);
