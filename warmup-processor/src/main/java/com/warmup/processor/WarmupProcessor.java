@@ -373,8 +373,8 @@ public class WarmupProcessor extends AbstractProcessor {
      */
     private void storeBeanInfo(TypeElement typeElement, String explicitName, String scope, String factoryClassName) {
         String packageName = getPackageName(typeElement);
-        String className = typeElement.getSimpleName().toString();
-        String beanName = explicitName.isEmpty() ? className : explicitName;
+        String className = getFullyQualifiedTypeName(typeElement);
+        String beanName = explicitName.isEmpty() ? typeElement.getSimpleName().toString() : explicitName;
         
         // Check if the bean is marked as @Primary
         boolean isPrimary = typeElement.getAnnotation(Primary.class) != null;
@@ -693,14 +693,15 @@ public class WarmupProcessor extends AbstractProcessor {
     
     /**
      * Generates bytecode for a class-level bean factory and writes it as a .class file.
-     * Returns the simple name of the generated factory class.
+     * Returns the fully qualified name of the generated factory class.
      */
     private String generateFactoryForClassBytecode(TypeElement beanClass, String scope, String explicitName, Filer filer) 
             throws IOException {
         
         String packageName = getPackageName(beanClass);
         String className = beanClass.getSimpleName().toString();
-        String factoryClassName = className + "$$WarmupFactory";
+        String factorySimpleClassName = className + "$$WarmupFactory";
+        String factoryFullClassName = packageName.isEmpty() ? factorySimpleClassName : packageName + "." + factorySimpleClassName;
         
         // Find constructor and dependencies
         ExecutableElement constructor = findInjectableConstructor(beanClass);
@@ -757,15 +758,15 @@ public class WarmupProcessor extends AbstractProcessor {
         // Write the .class file
         FileObject classFile;
         if (packageName.isEmpty()) {
-            classFile = filer.createResource(StandardLocation.CLASS_OUTPUT, "", factoryClassName + ".class");
+            classFile = filer.createResource(StandardLocation.CLASS_OUTPUT, "", factorySimpleClassName + ".class");
         } else {
-            classFile = filer.createResource(StandardLocation.CLASS_OUTPUT, packageName, factoryClassName + ".class");
+            classFile = filer.createResource(StandardLocation.CLASS_OUTPUT, packageName, factorySimpleClassName + ".class");
         }
         try (OutputStream os = classFile.openOutputStream()) {
             os.write(bytecode);
         }
         
-        return factoryClassName;
+        return factoryFullClassName;
     }
     
     /**
