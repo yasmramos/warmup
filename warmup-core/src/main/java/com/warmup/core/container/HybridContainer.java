@@ -303,20 +303,12 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
      * Registers the event publisher as a bean available for @Inject.
      * This allows beans to inject ApplicationEventPublisher and publish events.
      */
-    @SuppressWarnings("unchecked")
+    @SuppressWarnings({"unchecked", "rawtypes"})
     private void registerEventPublisherAsBean() {
         // Create a bean definition for the event publisher
-        BeanDefinition<ApplicationEventPublisher> publisherDef = new BeanDefinition<>(
-            "applicationEventPublisher",
+        BeanDefinition publisherDef = new BeanDefinition(
             com.warmup.core.event.ApplicationEventPublisher.class,
-            com.warmup.core.event.ApplicationEventPublisher.class,
-            false, // singleton
-            new Object[0], // no dependencies
-            null, // profiles
-            null, // conditions
-            false, // primary
-            null, // factory method name
-            null  // factory bean name
+            "applicationEventPublisher"
         );
         
         registry.register(publisherDef);
@@ -433,8 +425,8 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
         
         for (String beanName : beanNames) {
             try {
-                // Resolve the bean instance
-                Object bean = resolve(beanName);
+                // Resolve the bean instance by name
+                Object bean = resolveByName(beanName);
                 if (bean == null) {
                     continue;
                 }
@@ -456,7 +448,8 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
                         Class<?> eventType = parameters[0].getType();
                         
                         // Create a consumer that invokes the method on the bean instance
-                        Consumer<Object> listener = event -> {
+                        @SuppressWarnings("unchecked")
+                        Consumer<Object> listener = (Consumer<Object>) (event) -> {
                             try {
                                 method.setAccessible(true);
                                 method.invoke(bean, event);
@@ -467,7 +460,7 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
                         };
                         
                         // Register the listener with the event publisher
-                        eventPublisher.addListener(eventType, listener);
+                        eventPublisher.addListener((Class<Object>) eventType, listener);
                     }
                 }
             } catch (Exception e) {
@@ -653,6 +646,20 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
             resolvedDef.setCachedInstance(instance);
             return instance;
         }
+    }
+
+    /**
+     * Public method to resolve a bean by name.
+     * This allows tests and other code to resolve beans by their string name.
+     * 
+     * @param <T> the bean type
+     * @param name the bean name
+     * @return the resolved bean instance
+     * @throws IllegalStateException if the bean is not found
+     */
+    @SuppressWarnings("unchecked")
+    public <T> T resolve(String name) {
+        return resolveByName(name);
     }
 
     /**
