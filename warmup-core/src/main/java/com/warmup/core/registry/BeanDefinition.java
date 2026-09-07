@@ -33,19 +33,24 @@ public class BeanDefinition<T> {
      * Empty array means no condition restriction.
      */
     private final String[] conditionClasses;
+    /**
+     * The name of a custom scope handler when scope is CUSTOM.
+     * Empty string means no custom scope handler is specified.
+     */
+    private final String scopeName;
     
     /**
      * Creates a bean definition with default values.
      */
     public BeanDefinition(Class<T> type, String name) {
-        this(type, name, Scope.SINGLETON, LifecycleCallbacks.empty(), false, new Object[0], new String[0], new String[0]);
+        this(type, name, Scope.SINGLETON, LifecycleCallbacks.empty(), false, new Object[0], new String[0], new String[0], "");
     }
 
     /**
      * Creates a bean definition with custom scope.
      */
     public BeanDefinition(Class<T> type, String name, Scope scope) {
-        this(type, name, scope, LifecycleCallbacks.empty(), false, new Object[0], new String[0], new String[0]);
+        this(type, name, scope, LifecycleCallbacks.empty(), false, new Object[0], new String[0], new String[0], "");
     }
     
     /**
@@ -53,7 +58,7 @@ public class BeanDefinition<T> {
      */
     public BeanDefinition(Class<T> type, String name, Scope scope, LifecycleCallbacks<T> lifecycle, 
                           boolean isPrimary, Object[] dependencies) {
-        this(type, name, scope, lifecycle, isPrimary, dependencies, new String[0], new String[0]);
+        this(type, name, scope, lifecycle, isPrimary, dependencies, new String[0], new String[0], "");
     }
     
     /**
@@ -70,6 +75,24 @@ public class BeanDefinition<T> {
      */
     public BeanDefinition(Class<T> type, String name, Scope scope, LifecycleCallbacks<T> lifecycle, 
                           boolean isPrimary, Object[] dependencies, String[] profiles, String[] conditionClasses) {
+        this(type, name, scope, lifecycle, isPrimary, dependencies, profiles, conditionClasses, "");
+    }
+
+    /**
+     * Creates a bean definition with all parameters including custom scope name.
+     * 
+     * @param type the bean type
+     * @param name the bean name
+     * @param scope the bean scope
+     * @param lifecycle lifecycle callbacks
+     * @param isPrimary whether this is a primary bean
+     * @param dependencies array of dependencies (bean names or ValueDependency objects)
+     * @param profiles array of profile names for conditional registration
+     * @param conditionClasses array of fully qualified condition class names
+     * @param scopeName the name of a custom scope handler (used when scope is CUSTOM)
+     */
+    public BeanDefinition(Class<T> type, String name, Scope scope, LifecycleCallbacks<T> lifecycle, 
+                          boolean isPrimary, Object[] dependencies, String[] profiles, String[] conditionClasses, String scopeName) {
         this.type = type;
         this.name = name;
         this.scope = scope;
@@ -78,6 +101,7 @@ public class BeanDefinition<T> {
         this.dependencies = dependencies;
         this.profiles = profiles != null ? profiles : new String[0];
         this.conditionClasses = conditionClasses != null ? conditionClasses : new String[0];
+        this.scopeName = scopeName != null ? scopeName : "";
         this.dependencyIndices = new int[dependencies.length];
         // Initialize all indices to -1 (not yet resolved)
         java.util.Arrays.fill(this.dependencyIndices, -1);
@@ -161,5 +185,13 @@ public class BeanDefinition<T> {
      */
     public String[] conditionClasses() {
         return conditionClasses;
+    }
+
+    /**
+     * Returns the name of the custom scope handler for this bean.
+     * @return the scope name (empty string if not specified or scope is not CUSTOM)
+     */
+    public String scopeName() {
+        return scopeName;
     }
 }

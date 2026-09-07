@@ -1026,6 +1026,32 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
         compileTimeFactoryNames.add(beanName);
     }
 
+    /**
+     * Registers a custom scope handler with the given name.
+     * This allows beans with CUSTOM scope to use custom lifecycle semantics.
+     * 
+     * @param name the name of the scope
+     * @param handler the scope handler implementation
+     */
+    public void registerScope(String name, com.warmup.core.scope.ScopeHandler handler) {
+        if (registry instanceof BeanRegistryImpl) {
+            ((BeanRegistryImpl) registry).registerScope(name, handler);
+        }
+    }
+
+    /**
+     * Retrieves a registered scope handler by name.
+     * 
+     * @param name the name of the scope
+     * @return the scope handler, or null if not found
+     */
+    public com.warmup.core.scope.ScopeHandler getScopeHandler(String name) {
+        if (registry instanceof BeanRegistryImpl) {
+            return ((BeanRegistryImpl) registry).getScopeHandler(name);
+        }
+        return null;
+    }
+
     // Internal methods
 
     /**

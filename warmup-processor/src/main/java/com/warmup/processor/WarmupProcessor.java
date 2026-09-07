@@ -112,6 +112,7 @@ public class WarmupProcessor extends AbstractProcessor {
         final String beanName;
         final String factoryClassName;
         final String scope;
+        final String scopeName;
         final List<String> dependencyNames;
         final List<Boolean> isProviderDependency;
         final List<Boolean> isValueDependency;
@@ -121,7 +122,7 @@ public class WarmupProcessor extends AbstractProcessor {
         final List<String> profiles;
         final List<String> conditionClassNames;
 
-        BeanInfo(String packageName, String className, String beanName, String factoryClassName, String scope, 
+        BeanInfo(String packageName, String className, String beanName, String factoryClassName, String scope, String scopeName,
                 List<String> dependencyNames, List<Boolean> isProviderDependency, List<Boolean> isValueDependency, 
                 List<String> valueExpressions, boolean isPrimary, List<InjectMethodInfo> injectMethods,
                 List<String> profiles, List<String> conditionClassNames) {
@@ -130,6 +131,7 @@ public class WarmupProcessor extends AbstractProcessor {
             this.beanName = beanName;
             this.factoryClassName = factoryClassName;
             this.scope = scope;
+            this.scopeName = scopeName != null ? scopeName : "";
             this.dependencyNames = dependencyNames != null ? dependencyNames : new ArrayList<>();
             this.isProviderDependency = isProviderDependency != null ? isProviderDependency : new ArrayList<>();
             this.isValueDependency = isValueDependency != null ? isValueDependency : new ArrayList<>();
@@ -141,11 +143,11 @@ public class WarmupProcessor extends AbstractProcessor {
         }
         
         BeanInfo(String packageName, String className, String beanName, String factoryClassName, String scope) {
-            this(packageName, className, beanName, factoryClassName, scope, new ArrayList<>(), new ArrayList<>(), new ArrayList<>(), new ArrayList<>(), false, new ArrayList<>(), new ArrayList<>(), new ArrayList<>());
+            this(packageName, className, beanName, factoryClassName, scope, "", new ArrayList<>(), new ArrayList<>(), new ArrayList<>(), new ArrayList<>(), false, new ArrayList<>(), new ArrayList<>(), new ArrayList<>());
         }
         
         BeanInfo(String packageName, String className, String beanName, String factoryClassName, String scope, List<String> dependencyNames) {
-            this(packageName, className, beanName, factoryClassName, scope, dependencyNames, new ArrayList<>(), new ArrayList<>(), new ArrayList<>(), false, new ArrayList<>(), new ArrayList<>(), new ArrayList<>());
+            this(packageName, className, beanName, factoryClassName, scope, "", dependencyNames, new ArrayList<>(), new ArrayList<>(), new ArrayList<>(), false, new ArrayList<>(), new ArrayList<>(), new ArrayList<>());
         }
     }
 
@@ -376,6 +378,13 @@ public class WarmupProcessor extends AbstractProcessor {
         String className = getFullyQualifiedTypeName(typeElement);
         String beanName = explicitName.isEmpty() ? typeElement.getSimpleName().toString() : explicitName;
         
+        // Extract scope name from @Bean annotation if present (for CUSTOM scope)
+        String scopeName = "";
+        Bean beanAnnotation = typeElement.getAnnotation(Bean.class);
+        if (beanAnnotation != null && "CUSTOM".equals(beanAnnotation.scope().name())) {
+            scopeName = beanAnnotation.scopeName();
+        }
+        
         // Check if the bean is marked as @Primary
         boolean isPrimary = typeElement.getAnnotation(Primary.class) != null;
         
@@ -433,7 +442,7 @@ public class WarmupProcessor extends AbstractProcessor {
             }
         }
         
-        processedBeans.add(new BeanInfo(packageName, className, beanName, factoryClassName, scope, depNames, providerFlags, new ArrayList<>(), new ArrayList<>(), isPrimary, injectMethods, profiles, conditionClassNames));
+        processedBeans.add(new BeanInfo(packageName, className, beanName, factoryClassName, scope, scopeName, depNames, providerFlags, new ArrayList<>(), new ArrayList<>(), isPrimary, injectMethods, profiles, conditionClassNames));
     }
     
     /**
@@ -688,7 +697,7 @@ public class WarmupProcessor extends AbstractProcessor {
         // The BeanInfo.className will hold the FQN when the return type is from a different package
         String classNameForRegistration = returnTypeFqn;
         
-        processedBeans.add(new BeanInfo(packageName, classNameForRegistration, beanName, factoryClassName, scope, depNames, providerFlags, new ArrayList<>(), new ArrayList<>(), isPrimary, new ArrayList<>(), profiles, conditionClassNames));
+        processedBeans.add(new BeanInfo(packageName, classNameForRegistration, beanName, factoryClassName, scope, "", depNames, providerFlags, new ArrayList<>(), new ArrayList<>(), isPrimary, new ArrayList<>(), profiles, conditionClassNames));
     }
     
     /**

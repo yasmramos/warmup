@@ -44,6 +44,13 @@ public @interface Bean {
      */
     Scope scope() default Scope.SINGLETON;
 
+    /**
+     * The name of a custom scope handler when scope is set to CUSTOM.
+     * This must match a scope name registered via HybridContainer.registerScope().
+     * If empty or scope is not CUSTOM, this attribute is ignored.
+     */
+    String scopeName() default "";
+
     enum Scope {
         SINGLETON,
         PROTOTYPE,

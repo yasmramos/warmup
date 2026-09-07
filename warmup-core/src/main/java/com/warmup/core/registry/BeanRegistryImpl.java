@@ -4,6 +4,7 @@ import com.warmup.core.exception.AmbiguousBeanException;
 import com.warmup.core.jit.CompiledFactory;
 import com.warmup.core.lifecycle.LifecycleCallbacks;
 import com.warmup.core.scope.Scope;
+import com.warmup.core.scope.ScopeHandler;
 
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
@@ -65,6 +66,9 @@ public class BeanRegistryImpl implements BeanRegistry {
             throw new RuntimeException("Failed to initialize VarHandle", e);
         }
     }
+
+    // Registered scope handlers by name
+    private final ConcurrentMap<String, ScopeHandler> scopeHandlers = new ConcurrentHashMap<>();
 
     @Override
     public <T> void register(BeanDefinition<T> definition) {
@@ -261,12 +265,30 @@ public class BeanRegistryImpl implements BeanRegistry {
                 yield instance;
             }
             case CUSTOM -> {
-                // Custom scopes handled by extensions
-                T instance = factory.get();
-                // Only apply init callback if the bean has lifecycle callbacks defined
-                if (definition.lifecycle().onInit() != null) {
-                    definition.lifecycle().onInit().onInit(instance);
+                // Delegate to the registered ScopeHandler for custom scope semantics
+                String scopeName = definition.scopeName();
+                if (scopeName == null || scopeName.isEmpty()) {
+                    // Fallback to prototype behavior if no scope name is specified
+                    T instance = factory.get();
+                    if (definition.lifecycle().onInit() != null) {
+                        definition.lifecycle().onInit().onInit(instance);
+                    }
+                    yield instance;
                 }
+                
+                ScopeHandler handler = scopeHandlers.get(scopeName);
+                if (handler == null) {
+                    throw new IllegalStateException("No ScopeHandler registered for scope name: " + scopeName);
+                }
+                
+                T instance = handler.get(name, () -> {
+                    T newInstance = factory.get();
+                    // Apply init callback when creating a new instance in the custom scope
+                    if (definition.lifecycle().onInit() != null) {
+                        definition.lifecycle().onInit().onInit(newInstance);
+                    }
+                    return newInstance;
+                });
                 yield instance;
             }
         };
@@ -312,12 +334,30 @@ public class BeanRegistryImpl implements BeanRegistry {
                 yield instance;
             }
             case CUSTOM -> {
-                // Custom scopes handled by extensions
-                T instance = factory.get();
-                // Only apply init callback if the bean has lifecycle callbacks defined
-                if (definition.lifecycle().onInit() != null) {
-                    definition.lifecycle().onInit().onInit(instance);
+                // Delegate to the registered ScopeHandler for custom scope semantics
+                String scopeName = definition.scopeName();
+                if (scopeName == null || scopeName.isEmpty()) {
+                    // Fallback to prototype behavior if no scope name is specified
+                    T instance = factory.get();
+                    if (definition.lifecycle().onInit() != null) {
+                        definition.lifecycle().onInit().onInit(instance);
+                    }
+                    yield instance;
                 }
+                
+                ScopeHandler handler = scopeHandlers.get(scopeName);
+                if (handler == null) {
+                    throw new IllegalStateException("No ScopeHandler registered for scope name: " + scopeName);
+                }
+                
+                T instance = handler.get(name, () -> {
+                    T newInstance = factory.get();
+                    // Apply init callback when creating a new instance in the custom scope
+                    if (definition.lifecycle().onInit() != null) {
+                        definition.lifecycle().onInit().onInit(newInstance);
+                    }
+                    return newInstance;
+                });
                 yield instance;
             }
         };
@@ -442,6 +482,32 @@ public class BeanRegistryImpl implements BeanRegistry {
     @Override
     public Set<String> getBeanNames() {
         return definitionsByName.keySet();
+    }
+
+    /**
+     * Registers a custom scope handler with the given name.
+     * 
+     * @param name the name of the scope
+     * @param handler the scope handler implementation
+     */
+    public void registerScope(String name, ScopeHandler handler) {
+        if (name == null || name.isEmpty()) {
+            throw new IllegalArgumentException("Scope name cannot be null or empty");
+        }
+        if (handler == null) {
+            throw new IllegalArgumentException("Scope handler cannot be null");
+        }
+        scopeHandlers.put(name, handler);
+    }
+
+    /**
+     * Retrieves a registered scope handler by name.
+     * 
+     * @param name the name of the scope
+     * @return the scope handler, or null if not found
+     */
+    public ScopeHandler getScopeHandler(String name) {
+        return scopeHandlers.get(name);
     }
     
     @Override
