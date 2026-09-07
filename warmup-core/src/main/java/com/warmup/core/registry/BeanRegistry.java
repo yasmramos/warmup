@@ -239,4 +239,28 @@ public interface BeanRegistry {
      * @return list of all bean definitions for this type (may be empty)
      */
     <T> java.util.List<BeanDefinition<T>> getAllDefinitionsByType(Class<T> type);
+
+    /**
+     * Finalizes registration by resolving all pending dependency indices that were left as -1
+     * due to forward references during initial registration. This method should be called once
+     * after all beans have been registered to ensure all dependency indices are pre-computed.
+     * 
+     * After this call, the lazy resolution path in resolveDependencies() should rarely execute,
+     * serving only as a safeguard for dynamic forward references.
+     */
+    default void finalizeRegistration() {
+        // Default implementation does nothing - implementations with index-based resolution should override
+    }
+    
+    /**
+     * Sets a singleton instance directly in the indexed array by its bean index.
+     * This is used to populate the indexed array when a singleton is created,
+     * ensuring that indexed lookups are hits rather than falling back to name-based lookup.
+     * 
+     * @param index the bean index
+     * @param instance the singleton instance
+     */
+    default void setInstanceByIndex(int index, Object instance) {
+        // Default implementation does nothing - implementations with index-based storage should override
+    }
 }
