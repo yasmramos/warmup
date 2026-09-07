@@ -98,11 +98,11 @@ public class BeanDefinition<T> {
         this.scope = scope;
         this.lifecycle = lifecycle;
         this.isPrimary = isPrimary;
-        this.dependencies = dependencies;
+        this.dependencies = dependencies != null ? dependencies : new Object[0];
         this.profiles = profiles != null ? profiles : new String[0];
         this.conditionClasses = conditionClasses != null ? conditionClasses : new String[0];
         this.scopeName = scopeName != null ? scopeName : "";
-        this.dependencyIndices = new int[dependencies.length];
+        this.dependencyIndices = new int[this.dependencies.length];
         // Initialize all indices to -1 (not yet resolved)
         java.util.Arrays.fill(this.dependencyIndices, -1);
     }
