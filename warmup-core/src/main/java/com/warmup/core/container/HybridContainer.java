@@ -299,6 +299,12 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
         // Second pass: wire factories with their dependencies
         wireFactories();
         
+        // Finalize registration: resolve all pending dependency indices that were left as -1
+        // This ensures all dependency indices are pre-computed after all beans are registered
+        if (registry instanceof BeanRegistryImpl impl) {
+            impl.finalizeRegistration();
+        }
+        
         // Third pass: scan beans for @EventListener methods and register them
         registerEventListeners();
     }
@@ -644,6 +650,10 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
             }
             // Publish the created instance for fast-path on subsequent resolutions
             resolvedDef.setCachedInstance(instance);
+            // Also populate the indexed array for fast indexed resolution
+            if (registry instanceof BeanRegistryImpl impl) {
+                impl.setInstanceByIndex(resolvedDef.getIndex(), instance);
+            }
             recordMetrics(resolvedDef.getDefinition(), System.nanoTime() - startTime);
             return instance;
         } else {

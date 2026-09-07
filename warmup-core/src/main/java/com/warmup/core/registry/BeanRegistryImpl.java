@@ -533,6 +533,50 @@ public class BeanRegistryImpl implements BeanRegistry {
         Integer index = nameToIndex.get(name);
         return index != null ? index : -1;
     }
+    
+    /**
+     * Finalizes registration by resolving all pending dependency indices that were left as -1
+     * due to forward references during initial registration. This method should be called once
+     * after all beans have been registered to ensure all dependency indices are pre-computed.
+     * 
+     * After this call, the lazy resolution path in resolveDependencies() should rarely execute,
+     * serving only as a safeguard for dynamic forward references.
+     */
+    public void finalizeRegistration() {
+        // Iterate over all definitions and resolve any remaining -1 indices
+        for (BeanDefinition<?> definition : definitionsByName.values()) {
+            Object[] dependencies = definition.dependencies();
+            int[] depIndices = definition.dependencyIndices();
+            
+            for (int i = 0; i < dependencies.length; i++) {
+                if (depIndices[i] == -1) {
+                    Object dep = dependencies[i];
+                    if (dep instanceof String depName) {
+                        // Try to resolve the index now that all beans are registered
+                        Integer resolvedIdx = nameToIndex.get(depName);
+                        if (resolvedIdx != null) {
+                            depIndices[i] = resolvedIdx;
+                        }
+                        // Leave as -1 if still not found (dynamic/forward reference safeguard)
+                    }
+                }
+            }
+        }
+    }
+    
+    /**
+     * Sets a singleton instance directly in the indexed array by its bean index.
+     * This is used to populate the indexed array when a singleton is created,
+     * ensuring that indexed lookups are hits rather than falling back to name-based lookup.
+     * 
+     * @param index the bean index
+     * @param instance the singleton instance
+     */
+    public void setInstanceByIndex(int index, Object instance) {
+        if (index >= 0 && index < singletonInstancesByIndex.length) {
+            ARRAY_ELEMENT_HANDLE.setRelease(singletonInstancesByIndex, index, instance);
+        }
+    }
 
     @Override
     @SuppressWarnings("unchecked")
