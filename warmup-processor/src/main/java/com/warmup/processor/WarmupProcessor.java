@@ -164,13 +164,13 @@ public class WarmupProcessor extends AbstractProcessor {
         Filer filer = processingEnv.getFiler();
         Messager messager = processingEnv.getMessager();
         
-        // Initialize bytecode generator
+        // Initialize bytecode generator with Elements utility for binary name resolution
         bytecodeGenerator = new FactoryBytecodeGenerator(new FactoryBytecodeGenerator.MessagerAdapter() {
             @Override
             public void printError(String message, Element element) {
                 messager.printMessage(Diagnostic.Kind.ERROR, message, element);
             }
-        });
+        }, processingEnv.getElementUtils());
         
         // Process class-level stereotype annotations: @Singleton, @Prototype, @Component
         // These imply @Bean with a specific scope
@@ -244,6 +244,12 @@ public class WarmupProcessor extends AbstractProcessor {
                 continue;
             }
             TypeElement typeElement = (TypeElement) element;
+            
+            // Validate nested class: must be static
+            if (!validateNestedClass(typeElement, messager, "@Singleton")) {
+                continue;
+            }
+            
             Singleton singleton = typeElement.getAnnotation(Singleton.class);
             try {
                 String factoryClassName = generateFactoryForClassBytecode(typeElement, "SINGLETON", singleton.value(), filer);
@@ -262,6 +268,12 @@ public class WarmupProcessor extends AbstractProcessor {
                 continue;
             }
             TypeElement typeElement = (TypeElement) element;
+            
+            // Validate nested class: must be static
+            if (!validateNestedClass(typeElement, messager, "@Prototype")) {
+                continue;
+            }
+            
             Prototype prototype = typeElement.getAnnotation(Prototype.class);
             try {
                 String factoryClassName = generateFactoryForClassBytecode(typeElement, "PROTOTYPE", prototype.value(), filer);
@@ -280,6 +292,12 @@ public class WarmupProcessor extends AbstractProcessor {
                 continue;
             }
             TypeElement typeElement = (TypeElement) element;
+            
+            // Validate nested class: must be static
+            if (!validateNestedClass(typeElement, messager, "@Component")) {
+                continue;
+            }
+            
             Component component = typeElement.getAnnotation(Component.class);
             try {
                 String factoryClassName = generateFactoryForClassBytecode(typeElement, "SINGLETON", component.value(), filer);
@@ -289,6 +307,27 @@ public class WarmupProcessor extends AbstractProcessor {
                     "Failed to generate factory: " + e.getMessage(), element);
             }
         }
+    }
+    
+    /**
+     * Validates that a nested class is static. Non-static inner classes are not supported
+     * because they require an enclosing instance.
+     * 
+     * @return true if the class is valid (not nested, or nested and static), false otherwise
+     */
+    private boolean validateNestedClass(TypeElement typeElement, Messager messager, String annotationName) {
+        NestingKind nestingKind = typeElement.getNestingKind();
+        if (nestingKind.isNested()) {
+            // Check if the nested class is static
+            if (!typeElement.getModifiers().contains(Modifier.STATIC)) {
+                messager.printMessage(Diagnostic.Kind.ERROR,
+                    annotationName + " does not support non-static inner classes. " +
+                    "Declare the class as 'static' or use manual registration.",
+                    typeElement);
+                return false;
+            }
+        }
+        return true;
     }
     
     /**
@@ -315,6 +354,11 @@ public class WarmupProcessor extends AbstractProcessor {
             }
             
             TypeElement typeElement = (TypeElement) element;
+            
+            // Validate nested class: must be static
+            if (!validateNestedClass(typeElement, messager, "@WarmupFxController")) {
+                continue;
+            }
             
             // Extract scope from annotation mirror (since we can't import the annotation class)
             String scope = extractScopeFromAnnotationMirror(element, annotationTypeElement);

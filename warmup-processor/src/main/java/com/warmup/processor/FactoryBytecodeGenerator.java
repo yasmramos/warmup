@@ -7,6 +7,7 @@ import javax.lang.model.element.*;
 import javax.lang.model.type.DeclaredType;
 import javax.lang.model.type.TypeKind;
 import javax.lang.model.type.TypeMirror;
+import javax.lang.model.util.Elements;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -29,9 +30,16 @@ import java.util.List;
 public class FactoryBytecodeGenerator {
 
     private final MessagerAdapter messager;
+    private final Elements elements;
+
+    public FactoryBytecodeGenerator(MessagerAdapter messager, Elements elements) {
+        this.messager = messager;
+        this.elements = elements;
+    }
 
     public FactoryBytecodeGenerator(MessagerAdapter messager) {
         this.messager = messager;
+        this.elements = null;
     }
 
     /**
@@ -57,9 +65,19 @@ public class FactoryBytecodeGenerator {
 
         String packageName = getPackageName(beanClass);
         String className = beanClass.getSimpleName().toString();
-        String fullyQualifiedClassName = getFullyQualifiedTypeName(beanClass);
-        String factoryClassName = packageName.isEmpty() ? className + "$$WarmupFactory" : packageName.replace('.', '/') + "/" + className + "$$WarmupFactory";
-        String beanInternalName = fullyQualifiedClassName.replace('.', '/');
+        String binaryName = getBinaryName(beanClass);
+        String factoryClassName;
+        
+        // For nested classes, use the binary name (with $) to create a unique factory name
+        if (beanClass.getNestingKind().isNested()) {
+            // For nested classes, create factory name from binary name
+            String binaryNameForFactory = binaryName.replace('.', '/');
+            factoryClassName = binaryNameForFactory + "$$WarmupFactory";
+        } else {
+            factoryClassName = packageName.isEmpty() ? className + "$$WarmupFactory" : packageName.replace('.', '/') + "/" + className + "$$WarmupFactory";
+        }
+        
+        String beanInternalName = binaryName.replace('.', '/');
         String interfaceName = "com/warmup/core/jit/CompiledFactory";
 
         // Class signature: CompiledFactory<BeanType>
@@ -545,8 +563,8 @@ public class FactoryBytecodeGenerator {
         if (type.getKind() == TypeKind.DECLARED) {
             DeclaredType declaredType = (DeclaredType) type;
             Element element = declaredType.asElement();
-            String fqn = getFullyQualifiedTypeName((TypeElement) element);
-            return fqn.replace('.', '/');
+            String binaryName = getBinaryName((TypeElement) element);
+            return binaryName.replace('.', '/');
         } else if (type.getKind().isPrimitive()) {
             switch (type.getKind()) {
                 case INT: return "I";
@@ -609,8 +627,8 @@ public class FactoryBytecodeGenerator {
         } else if (type.getKind() == TypeKind.DECLARED) {
             DeclaredType declaredType = (DeclaredType) type;
             Element element = declaredType.asElement();
-            String fqn = getFullyQualifiedTypeName((TypeElement) element);
-            return "L" + fqn.replace('.', '/') + ";";
+            String binaryName = getBinaryName((TypeElement) element);
+            return "L" + binaryName.replace('.', '/') + ";";
         } else if (type.getKind() == TypeKind.ARRAY) {
             TypeMirror componentType = ((javax.lang.model.type.ArrayType) type).getComponentType();
             return "[" + getDescriptor(componentType);
@@ -643,12 +661,52 @@ public class FactoryBytecodeGenerator {
      * Gets the package name from a TypeElement.
      */
     private String getPackageName(TypeElement element) {
+        // Use Elements.getPackageOf() to correctly handle nested classes
+        if (elements != null) {
+            return elements.getPackageOf(element).getQualifiedName().toString();
+        }
+        // Fallback: traverse enclosing elements until we find the package
         Element enclosing = element.getEnclosingElement();
-        if (enclosing.getKind() == ElementKind.PACKAGE) {
+        while (enclosing != null && enclosing.getKind() != ElementKind.PACKAGE) {
+            enclosing = enclosing.getEnclosingElement();
+        }
+        if (enclosing != null && enclosing.getKind() == ElementKind.PACKAGE) {
             String pkgName = enclosing.toString();
             return pkgName.equals("") ? "" : pkgName;
         }
         return "";
+    }
+
+    /**
+     * Gets the binary name for a type (e.g., "com.pkg.Outer$Inner" for nested classes).
+     * Uses Elements.getBinaryName() when available, otherwise falls back to manual construction.
+     */
+    private String getBinaryName(TypeElement element) {
+        if (elements != null) {
+            return elements.getBinaryName(element).toString();
+        }
+        // Fallback: construct binary name manually by traversing enclosing elements
+        StringBuilder binaryName = new StringBuilder();
+        buildBinaryNameRecursive(element, binaryName);
+        return binaryName.toString();
+    }
+
+    /**
+     * Recursively builds the binary name for nested classes using $ as separator.
+     */
+    private void buildBinaryNameRecursive(TypeElement element, StringBuilder result) {
+        Element enclosing = element.getEnclosingElement();
+        if (enclosing instanceof TypeElement) {
+            // Recurse to build the outer class name first
+            buildBinaryNameRecursive((TypeElement) enclosing, result);
+            result.append('$');
+        }
+        // Append the simple name of this element
+        if (result.length() > 0 && result.charAt(result.length() - 1) != '$') {
+            // Add package separator if we have a package already
+            result.append('.');
+        }
+        result.append(element.getQualifiedName().toString());
     }
 
     /**
