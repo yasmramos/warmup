@@ -11,6 +11,7 @@ import com.warmup.annotations.Named;
 import com.warmup.annotations.Value;
 import com.warmup.annotations.Profile;
 import com.warmup.annotations.Conditional;
+import com.warmup.annotations.EventListener;
 
 import javax.annotation.processing.*;
 import javax.lang.model.SourceVersion;
@@ -70,6 +71,7 @@ import java.util.*;
     "com.warmup.annotations.Value",
     "com.warmup.annotations.Profile",
     "com.warmup.annotations.Conditional",
+    "com.warmup.annotations.EventListener",
     "com.warmup.javafx.WarmupFxController"
 })
 @SupportedSourceVersion(SourceVersion.RELEASE_17)
@@ -174,6 +176,9 @@ public class WarmupProcessor extends AbstractProcessor {
         // Process @Factory classes with @Bean methods
         processFactoryClasses(roundEnv, filer, messager);
         
+        // Process @EventListener methods for metadata generation
+        processEventListeners(roundEnv, filer, messager);
+        
         // Generate registrar when processing is complete
         if (roundEnv.processingOver() && !processingOver && !processedBeans.isEmpty()) {
             processingOver = true;
@@ -186,6 +191,38 @@ public class WarmupProcessor extends AbstractProcessor {
         }
         
         return true;
+    }
+    
+    /**
+     * Processes methods annotated with @EventListener to generate metadata.
+     * This enables compile-time validation and optional optimization of event listener registration.
+     */
+    private void processEventListeners(RoundEnvironment roundEnv, Filer filer, Messager messager) {
+        for (Element element : roundEnv.getElementsAnnotatedWith(EventListener.class)) {
+            if (element.getKind() != ElementKind.METHOD) {
+                messager.printMessage(Diagnostic.Kind.ERROR, 
+                    "@EventListener only applies to methods", element);
+                continue;
+            }
+            
+            ExecutableElement method = (ExecutableElement) element;
+            
+            // Validate method signature: must have exactly one parameter
+            List<? extends VariableElement> parameters = method.getParameters();
+            if (parameters.size() != 1) {
+                messager.printMessage(Diagnostic.Kind.ERROR, 
+                    "@EventListener method must have exactly one parameter", element);
+                continue;
+            }
+            
+            // The parameter type determines the event type this listener handles
+            TypeMirror eventType = parameters.get(0).asType();
+            
+            // Metadata is implicitly available at runtime via reflection
+            // This processing step primarily provides compile-time validation
+            messager.printMessage(Diagnostic.Kind.NOTE, 
+                "Registered @EventListener for event type: " + eventType, element);
+        }
     }
     
     /**

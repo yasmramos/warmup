@@ -1,8 +1,11 @@
 package com.warmup.core.container;
 
+import com.warmup.annotations.EventListener;
 import com.warmup.core.annotation.InternalApi;
 import com.warmup.core.condition.Condition;
 import com.warmup.core.condition.ConditionContext;
+import com.warmup.core.event.ApplicationEventPublisher;
+import com.warmup.core.event.SimpleApplicationEventPublisher;
 import com.warmup.core.graph.DependencyGraph;
 import com.warmup.core.jit.CompiledFactory;
 import com.warmup.core.jit.CompilationException;
@@ -28,6 +31,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.LongAdder;
 import java.util.function.BiConsumer;
+import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.ServiceLoader;
 
@@ -126,6 +130,12 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
     private final boolean autoDiscoverFactories;
     private final com.warmup.core.config.PropertyResolver propertyResolver;
     private final String[] activeProfiles;
+    
+    /**
+     * Event publisher for publish/subscribe event mechanism.
+     * Registered as a component available for @Inject in beans.
+     */
+    private final SimpleApplicationEventPublisher eventPublisher;
 
     /**
      * Creates a ConditionContext for evaluating conditional bean registration.
@@ -244,6 +254,8 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
         this.warmupSemaphore = new Semaphore(config.maxPendingCompilations());
         // Lazy initialization of warmupExecutor - created on first use
         this.warmupExecutor = null;
+        // Initialize event publisher
+        this.eventPublisher = new SimpleApplicationEventPublisher();
         
         // Auto-discover and register compile-time factories once at startup
         if (autoDiscoverFactories) {
@@ -277,8 +289,65 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
             });
         }
         
+        // Register event publisher as a bean available for @Inject
+        registerEventPublisherAsBean();
+        
         // Second pass: wire factories with their dependencies
         wireFactories();
+        
+        // Third pass: scan beans for @EventListener methods and register them
+        registerEventListeners();
+    }
+    
+    /**
+     * Registers the event publisher as a bean available for @Inject.
+     * This allows beans to inject ApplicationEventPublisher and publish events.
+     */
+    @SuppressWarnings("unchecked")
+    private void registerEventPublisherAsBean() {
+        // Create a bean definition for the event publisher
+        BeanDefinition<ApplicationEventPublisher> publisherDef = new BeanDefinition<>(
+            "applicationEventPublisher",
+            com.warmup.core.event.ApplicationEventPublisher.class,
+            com.warmup.core.event.ApplicationEventPublisher.class,
+            false, // singleton
+            new Object[0], // no dependencies
+            null, // profiles
+            null, // conditions
+            false, // primary
+            null, // factory method name
+            null  // factory bean name
+        );
+        
+        registry.register(publisherDef);
+        
+        // Create a simple factory that returns the eventPublisher instance
+        CompiledFactory<ApplicationEventPublisher> publisherFactory = new CompiledFactory<ApplicationEventPublisher>() {
+            @Override
+            public ApplicationEventPublisher get() {
+                return eventPublisher;
+            }
+            
+            @Override
+            public ApplicationEventPublisher create(Object... args) {
+                return eventPublisher;
+            }
+            
+            @Override
+            public void wire(CompiledFactory<?>[] dependencies) {
+                // No dependencies to wire
+            }
+        };
+        
+        factoryCache.put("applicationEventPublisher", publisherFactory);
+        compileTimeFactoryNames.add("applicationEventPublisher");
+        
+        // Mark as wired since it has no dependencies
+        ResolvedBeanDefinition<?> resolvedDef = registry.getResolvedOrNull("applicationEventPublisher");
+        if (resolvedDef != null) {
+            resolvedDef.setCompileTime(true);
+            resolvedDef.setWired(true);
+        }
     }
     
     /**
@@ -341,6 +410,69 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
                     // Ignore wiring errors - fallback to create(Object...) will still work
                     // Keep wired=false so hot-path uses create() instead of get()
                 }
+            }
+        }
+    }
+
+    /**
+     * Scans all registered beans for methods annotated with @EventListener and registers them
+     * with the event publisher.
+     * 
+     * <p>For each bean instance, this method:</p>
+     * <ol>
+     *   <li>Resolves the bean to get its instance</li>
+     *   <li>Scans all declared methods for @EventListener annotation</li>
+     *   <li>Validates that the method has exactly one parameter</li>
+     *   <li>Registers the method as a listener for the parameter type</li>
+     * </ol>
+     */
+    @SuppressWarnings("unchecked")
+    private void registerEventListeners() {
+        // Get all registered bean names
+        Set<String> beanNames = factoryCache.keySet();
+        
+        for (String beanName : beanNames) {
+            try {
+                // Resolve the bean instance
+                Object bean = resolve(beanName);
+                if (bean == null) {
+                    continue;
+                }
+                
+                // Scan for @EventListener methods
+                Class<?> beanClass = bean.getClass();
+                for (java.lang.reflect.Method method : beanClass.getDeclaredMethods()) {
+                    if (method.isAnnotationPresent(EventListener.class)) {
+                        // Validate method signature: must have exactly one parameter
+                        java.lang.reflect.Parameter[] parameters = method.getParameters();
+                        if (parameters.length != 1) {
+                            throw new IllegalStateException(
+                                "@EventListener method '" + method.getName() + "' in bean '" + 
+                                beanName + "' must have exactly one parameter"
+                            );
+                        }
+                        
+                        // Get the event type from the single parameter
+                        Class<?> eventType = parameters[0].getType();
+                        
+                        // Create a consumer that invokes the method on the bean instance
+                        Consumer<Object> listener = event -> {
+                            try {
+                                method.setAccessible(true);
+                                method.invoke(bean, event);
+                            } catch (Exception e) {
+                                System.err.println("Error invoking event listener: " + e.getMessage());
+                                e.printStackTrace();
+                            }
+                        };
+                        
+                        // Register the listener with the event publisher
+                        eventPublisher.addListener(eventType, listener);
+                    }
+                }
+            } catch (Exception e) {
+                // Log but don't fail container initialization for listener registration errors
+                System.err.println("Failed to register event listeners for bean '" + beanName + "': " + e.getMessage());
             }
         }
     }

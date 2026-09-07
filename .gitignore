@@ -4,20 +4,21 @@
 *.o
 *.obj
 *.out
-*.exe
-*.dll
-*.so
-*.a
+build/
+target/
 
 # Dependencies
-node_modules/
-venv/
-.venv/
-__pycache__/
+.gradle/
 .mypy_cache/
 .pytest_cache/
-target/
-.gradle/
+__pycache__/
+coverage/
+htmlcov/
+.node_modules/
+venv/
+.venv/
+julia-*/
+zig*/
 
 # Logs and temp files
 *.log
@@ -37,11 +38,6 @@ target/
 # System files
 .DS_Store
 Thumbs.db
-
-# Coverage
-coverage/
-htmlcov/
-.coverage
 
 # Compressed files
 *.zip
