@@ -1007,7 +1007,7 @@ class WarmupProcessorTest {
             "public class LazyFieldBean {",
             "    @Inject",
             "    @Lazy",
-            "    private DependencyBean dependency;",
+            "    DependencyBean dependency;",
             "",
             "    public DependencyBean getDependency() { return dependency; }",
             "}",
