@@ -57,8 +57,9 @@ public class FactoryBytecodeGenerator {
 
         String packageName = getPackageName(beanClass);
         String className = beanClass.getSimpleName().toString();
+        String fullyQualifiedClassName = getFullyQualifiedTypeName(beanClass);
         String factoryClassName = packageName.isEmpty() ? className + "$$WarmupFactory" : packageName.replace('.', '/') + "/" + className + "$$WarmupFactory";
-        String beanInternalName = packageName.isEmpty() ? className : packageName.replace('.', '/') + "/" + className;
+        String beanInternalName = fullyQualifiedClassName.replace('.', '/');
         String interfaceName = "com/warmup/core/jit/CompiledFactory";
 
         // Class signature: CompiledFactory<BeanType>
@@ -122,7 +123,7 @@ public class FactoryBytecodeGenerator {
         // get method: public Object get()
         MethodVisitor gv = cw.visitMethod(Opcodes.ACC_PUBLIC, "get",
                 "()Ljava/lang/Object;",
-                "()T" + (beanInternalName.contains("/") ? ";" + beanInternalName.substring(beanInternalName.lastIndexOf('/') + 1).replace('/', '.') + ";" : ";" + className + ";"), null);
+                "()T" + ";" + beanInternalName + ";", null);
         gv.visitCode();
 
         // Create new instance of bean
