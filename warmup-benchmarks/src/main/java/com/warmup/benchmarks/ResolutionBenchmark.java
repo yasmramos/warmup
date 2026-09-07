@@ -246,6 +246,19 @@ public class ResolutionBenchmark {
     public Object warmupPrototypeResolveWithFiveDependencies() {
         return warmup.resolve(PrototypeBeanWithFiveDependencies.class);
     }
+    
+    /**
+     * Measures repeated singleton resolution via BeanHandle API.
+     * This tests the handle-based fast path that avoids ClassValue lookup on each resolution.
+     * 
+     * <p>This benchmark demonstrates the performance benefit of using {@link com.warmup.core.container.BeanHandle}
+     * for scenarios where the same bean is resolved repeatedly in tight loops.</p>
+     */
+    @Benchmark
+    public Object warmupSingletonResolveViaHandle() {
+        com.warmup.core.container.BeanHandle<SimpleBean> handle = warmup.handle(SimpleBean.class);
+        return handle.get();
+    }
 
     /**
      * Measures direct compiled factory creation without container overhead.

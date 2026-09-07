@@ -122,6 +122,10 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
     // This ensures no compilation tasks write to jitCompiler after clear() is called
     private final Set<CompletableFuture<?>> pendingWarmupFutures = ConcurrentHashMap.newKeySet();
     
+    // Resolution version counter for detecting invalidation due to reload/re-registration
+    // Incremented on registerDynamic, reload, and other operations that invalidate cached resolutions
+    private volatile long resolutionVersion = 0L;
+    
     /**
      * Flag to enable/disable auto-discovery of FactoryRegistrar via ServiceLoader.
      * Enabled by default for convenience, but can be disabled for minimal startup
@@ -523,6 +527,9 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
         // Invalidate ClassValue cache for this type if it was previously computed
         // This ensures that new resolutions will pick up the updated definition
         resolvedDefinitionsByClassValue.remove(definition.type());
+        
+        // Increment resolution version to invalidate any cached BeanHandles
+        resolutionVersion++;
     }
 
     /**
@@ -867,6 +874,72 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
     public int indexOf(String name) {
         return registry.indexOf(name);
     }
+    
+    /**
+     * Returns a BeanHandle for the given type, capturing the resolution result once
+     * and allowing repeated resolutions without ClassValue lookup overhead.
+     * 
+     * <p>The handle will automatically detect invalidation when the bean is reloaded
+     * or dynamically re-registered, and will re-resolve transparently on next {@code get()}.</p>
+     * 
+     * @param <T> the bean type
+     * @param type the bean class
+     * @return a BeanHandle for repeated resolution
+     * @throws IllegalStateException if the bean is not found
+     */
+    public <T> BeanHandle<T> handle(Class<T> type) {
+        // Resolve once via ClassValue
+        @SuppressWarnings("unchecked")
+        ResolvedBeanDefinition<T> resolvedDef = (ResolvedBeanDefinition<T>) resolvedDefinitionsByClassValue.get(type);
+        
+        if (resolvedDef.isNotFound()) {
+            throw new IllegalStateException("Bean not found for type: " + type.getName());
+        }
+        
+        return new BeanHandle<>(resolvedDef, this);
+    }
+    
+    /**
+     * Internal method to get the current resolution version.
+     * Used by BeanHandle to detect invalidation.
+     * 
+     * @return the current resolution version counter
+     * @internal
+     */
+    long getResolutionVersion() {
+        return resolutionVersion;
+    }
+    
+    /**
+     * Internal method to resolve a bean using a pre-resolved definition.
+     * This is package-private for BeanHandle access.
+     * 
+     * @param <T> the bean type
+     * @param resolvedDef the resolved bean definition
+     * @return the bean instance
+     * @internal
+     */
+    <T> T resolveInternal(ResolvedBeanDefinition<T> resolvedDef) {
+        return resolve(resolvedDef);
+    }
+    
+    /**
+     * Internal method to resolve a bean by type, bypassing ClassValue caching.
+     * Used by BeanHandle for re-resolution after invalidation.
+     * 
+     * @param <T> the bean type
+     * @param type the bean class
+     * @return the resolved bean definition
+     * @internal
+     */
+    @SuppressWarnings("unchecked")
+    <T> ResolvedBeanDefinition<T> resolveByTypeInternal(Class<T> type) {
+        BeanDefinition<?> definition = registry.getDefinitionByTypeOrNull(type);
+        if (definition == null) {
+            return (ResolvedBeanDefinition<T>) NOT_FOUND;
+        }
+        return (ResolvedBeanDefinition<T>) wrapResolvedDefinition(definition);
+    }
 
     /**
      * Checks if a bean is registered.
@@ -1094,6 +1167,9 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
         
         // Invalidate ClassValue cache for this type to ensure new resolutions pick up the reloaded bean
         resolvedDefinitionsByClassValue.remove(definition.type());
+        
+        // Increment resolution version to invalidate any cached BeanHandles
+        resolutionVersion++;
         
         // Step 3: Unload the previous ASM factory to free ClassLoader and metaspace
         jitCompiler.unloadFactory(definition.type());
