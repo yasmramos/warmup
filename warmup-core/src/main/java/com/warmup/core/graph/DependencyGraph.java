@@ -25,6 +25,10 @@ public class DependencyGraph {
     
     // All registered nodes
     private final Set<String> nodes = ConcurrentHashMap.newKeySet();
+    
+    // Deferred edges: bean -> beans it depends on via deferrable injection (field/setter)
+    // These edges are NOT considered for cycle detection
+    private final Map<String, Set<String>> deferredDependencies = new ConcurrentHashMap<>();
 
     /**
      * Registers a bean and its dependencies in the graph.
@@ -35,24 +39,46 @@ public class DependencyGraph {
      * @throws CircularDependencyException if adding these dependencies creates a cycle
      */
     public void registerBean(String beanName, String... dependencies) {
+        registerBean(beanName, dependencies, new boolean[dependencies.length]);
+    }
+    
+    /**
+     * Registers a bean and its dependencies in the graph, with deferrable edge information.
+     * Dependencies marked as deferrable are excluded from cycle detection.
+     * 
+     * @param beanName the name of the bean being registered
+     * @param dependencies names of beans this bean depends on
+     * @param isDeferred array indicating which dependencies are deferrable (can be injected after construction)
+     * @throws CircularDependencyException if adding non-deferrable dependencies creates a cycle
+     */
+    public void registerBean(String beanName, String[] dependencies, boolean[] isDeferred) {
         nodes.add(beanName);
         
         // Initialize adjacency lists if not present
         adjacencyList.computeIfAbsent(beanName, k -> ConcurrentHashMap.newKeySet());
         reverseAdjacency.computeIfAbsent(beanName, k -> ConcurrentHashMap.newKeySet());
+        deferredDependencies.computeIfAbsent(beanName, k -> ConcurrentHashMap.newKeySet());
         
-        for (String dep : dependencies) {
+        for (int i = 0; i < dependencies.length; i++) {
+            String dep = dependencies[i];
+            boolean defer = isDeferred.length > i && isDeferred[i];
+            
             nodes.add(dep);
             
-            // Check for cycle before adding edge
-            if (wouldCreateCycle(beanName, dep)) {
-                List<String> cycle = findCycle(beanName, dep);
-                throw new CircularDependencyException(cycle);
+            // Only check for cycle if this is NOT a deferrable dependency
+            if (!defer) {
+                if (wouldCreateCycle(beanName, dep)) {
+                    List<String> cycle = findCycle(beanName, dep);
+                    throw new CircularDependencyException(cycle);
+                }
+                
+                // Add edge: dep -> beanName (beanName depends on dep)
+                adjacencyList.computeIfAbsent(dep, k -> ConcurrentHashMap.newKeySet()).add(beanName);
+                reverseAdjacency.get(beanName).add(dep);
+            } else {
+                // Store deferrable dependency separately - not used for cycle detection
+                deferredDependencies.get(beanName).add(dep);
             }
-            
-            // Add edge: dep -> beanName (beanName depends on dep)
-            adjacencyList.computeIfAbsent(dep, k -> ConcurrentHashMap.newKeySet()).add(beanName);
-            reverseAdjacency.get(beanName).add(dep);
         }
     }
     
@@ -67,31 +93,57 @@ public class DependencyGraph {
      * @throws CircularDependencyException if adding these dependencies creates a cycle
      */
     public void registerBean(String beanName, Object[] dependencies) {
+        registerBean(beanName, dependencies, new boolean[0]);
+    }
+    
+    /**
+     * Registers a bean and its dependencies in the graph, accepting an Object[] array with deferrable info.
+     * This overload avoids creating an intermediate String[] array when dependencies
+     * are already available as Object[] (e.g., from BeanDefinition.dependencies()).
+     * Only String elements are considered as dependencies; non-String objects are filtered out.
+     * Dependencies marked as deferrable are excluded from cycle detection.
+     * 
+     * @param beanName the name of the bean being registered
+     * @param dependencies Object array containing dependency names (String) and/or direct references
+     * @param isDeferred array indicating which dependencies are deferrable (can be injected after construction)
+     * @throws CircularDependencyException if adding non-deferrable dependencies creates a cycle
+     */
+    public void registerBean(String beanName, Object[] dependencies, boolean[] isDeferred) {
         nodes.add(beanName);
         
         // Initialize adjacency lists if not present
         adjacencyList.computeIfAbsent(beanName, k -> ConcurrentHashMap.newKeySet());
         reverseAdjacency.computeIfAbsent(beanName, k -> ConcurrentHashMap.newKeySet());
+        deferredDependencies.computeIfAbsent(beanName, k -> ConcurrentHashMap.newKeySet());
         
-        for (Object dep : dependencies) {
+        for (int i = 0; i < dependencies.length; i++) {
+            Object dep = dependencies[i];
             if (!(dep instanceof String depName)) {
                 // Skip non-String dependencies (direct object references)
                 continue;
             }
             
+            boolean defer = isDeferred.length > i && isDeferred[i];
+            
             nodes.add(depName);
             
-            // Check for cycle before adding edge
-            if (wouldCreateCycle(beanName, depName)) {
-                List<String> cycle = findCycle(beanName, depName);
-                throw new CircularDependencyException(cycle);
+            // Only check for cycle if this is NOT a deferrable dependency
+            if (!defer) {
+                if (wouldCreateCycle(beanName, depName)) {
+                    List<String> cycle = findCycle(beanName, depName);
+                    throw new CircularDependencyException(cycle);
+                }
+                
+                // Add edge: dep -> beanName (beanName depends on dep)
+                adjacencyList.computeIfAbsent(depName, k -> ConcurrentHashMap.newKeySet()).add(beanName);
+                reverseAdjacency.get(beanName).add(depName);
+            } else {
+                // Store deferrable dependency separately - not used for cycle detection
+                deferredDependencies.get(beanName).add(depName);
             }
-            
-            // Add edge: dep -> beanName (beanName depends on dep)
-            adjacencyList.computeIfAbsent(depName, k -> ConcurrentHashMap.newKeySet()).add(beanName);
-            reverseAdjacency.get(beanName).add(depName);
         }
     }
+
 
     /**
      * Returns beans in topologically sorted order (dependencies before dependents).

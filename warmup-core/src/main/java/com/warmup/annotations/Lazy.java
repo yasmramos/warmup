@@ -8,7 +8,7 @@ import java.lang.annotation.Target;
 /**
  * Marks a dependency injection point for lazy resolution.
  * 
- * <p>When applied to a field or parameter, the bean will not be instantiated
+ * <p>When applied to a field, method, or parameter, the bean will not be instantiated
  * until it is first accessed. This enables breaking circular dependencies
  * and deferring expensive bean creation.</p>
  * 
@@ -17,6 +17,6 @@ import java.lang.annotation.Target;
  * @see Provider
  */
 @Retention(RetentionPolicy.RUNTIME)
-@Target({ElementType.FIELD, ElementType.PARAMETER})
+@Target({ElementType.FIELD, ElementType.PARAMETER, ElementType.METHOD})
 public @interface Lazy {
 }

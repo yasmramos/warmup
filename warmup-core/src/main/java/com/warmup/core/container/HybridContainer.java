@@ -485,8 +485,12 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
             compileTimeFactoryNames.add(definition.name());
         }
         
-        // Register in dependency graph - use Object[] overload to avoid String[] allocation
-        dependencyGraph.registerBean(definition.name(), definition.dependencies());
+        // Register in dependency graph with deferrable dependency info
+        boolean[] isDeferred = new boolean[definition.dependencies().length];
+        for (int i = 0; i < isDeferred.length; i++) {
+            isDeferred[i] = definition.isDeferredDependency(i);
+        }
+        dependencyGraph.registerBean(definition.name(), definition.dependencies(), isDeferred);
     }
 
     /**
@@ -499,8 +503,12 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
     public <T> void registerDynamic(BeanDefinition<T> definition) {
         registry.register(definition);
         
-        // Register in dependency graph - use Object[] overload to avoid String[] allocation
-        dependencyGraph.registerBean(definition.name(), definition.dependencies());
+        // Register in dependency graph with deferrable dependency info
+        boolean[] isDeferred = new boolean[definition.dependencies().length];
+        for (int i = 0; i < isDeferred.length; i++) {
+            isDeferred[i] = definition.isDeferredDependency(i);
+        }
+        dependencyGraph.registerBean(definition.name(), definition.dependencies(), isDeferred);
         
         // Mark bean as pending warmup - actual compilation happens lazily on first resolve
         // This avoids allocating CompletableFuture and lambda per bean during mass registration

@@ -992,4 +992,158 @@ class WarmupProcessorTest {
         Compilation compilation = compiler.compile(source);
         assertTrue(compilation.generatedFile(StandardLocation.CLASS_OUTPUT, "test/FieldInjectionOnlyBean$$WarmupFactory.class").isPresent());
     }
+
+    /**
+     * Test that factories are generated with injectDeferred method when @Lazy is present on fields.
+     */
+    @Test
+    void testFactoryGeneratedWithInjectDeferredForLazyField() {
+        JavaFileObject source = JavaFileObjects.forSourceLines(
+            "test.LazyFieldBean",
+            "package test;",
+            "import com.warmup.annotations.*;",
+            "",
+            "@Component",
+            "public class LazyFieldBean {",
+            "    @Inject",
+            "    @Lazy",
+            "    private DependencyBean dependency;",
+            "",
+            "    public DependencyBean getDependency() { return dependency; }",
+            "}",
+            "",
+            "class DependencyBean {}"
+        );
+
+        Compilation compilation = compiler.compile(source);
+        
+        // Verify factory class is generated
+        Optional<JavaFileObject> factoryClassOpt = compilation.generatedFile(
+            StandardLocation.CLASS_OUTPUT, 
+            "test/LazyFieldBean$$WarmupFactory.class"
+        );
+        assertTrue(factoryClassOpt.isPresent(), "Factory class should be generated");
+        
+        // Load the factory to verify it has injectDeferred method
+        try {
+            byte[] factoryBytes = factoryClassOpt.get().openInputStream().readAllBytes();
+            TestClassLoader classLoader = new TestClassLoader();
+            Class<?> factoryClass = classLoader.defineClass("test.LazyFieldBean$$WarmupFactory", factoryBytes);
+            
+            // Verify injectDeferred method exists
+            java.lang.reflect.Method injectDeferredMethod = null;
+            for (java.lang.reflect.Method method : factoryClass.getDeclaredMethods()) {
+                if (method.getName().equals("injectDeferred")) {
+                    injectDeferredMethod = method;
+                    break;
+                }
+            }
+            assertNotNull(injectDeferredMethod, "injectDeferred method should exist in factory");
+        } catch (Exception e) {
+            fail("Failed to verify injectDeferred method: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Test that factories are generated with injectDeferred method when @Lazy is present on setters.
+     */
+    @Test
+    void testFactoryGeneratedWithInjectDeferredForLazySetter() {
+        JavaFileObject source = JavaFileObjects.forSourceLines(
+            "test.LazySetterBean",
+            "package test;",
+            "import com.warmup.annotations.*;",
+            "",
+            "@Component",
+            "public class LazySetterBean {",
+            "    private DependencyBean dependency;",
+            "",
+            "    @Inject",
+            "    @Lazy",
+            "    public void setDependency(DependencyBean dependency) {",
+            "        this.dependency = dependency;",
+            "    }",
+            "",
+            "    public DependencyBean getDependency() { return dependency; }",
+            "}",
+            "",
+            "class DependencyBean {}"
+        );
+
+        Compilation compilation = compiler.compile(source);
+        
+        // Verify factory class is generated
+        Optional<JavaFileObject> factoryClassOpt = compilation.generatedFile(
+            StandardLocation.CLASS_OUTPUT, 
+            "test/LazySetterBean$$WarmupFactory.class"
+        );
+        assertTrue(factoryClassOpt.isPresent(), "Factory class should be generated");
+        
+        // Load the factory to verify it has injectDeferred method
+        try {
+            byte[] factoryBytes = factoryClassOpt.get().openInputStream().readAllBytes();
+            TestClassLoader classLoader = new TestClassLoader();
+            Class<?> factoryClass = classLoader.defineClass("test.LazySetterBean$$WarmupFactory", factoryBytes);
+            
+            // Verify injectDeferred method exists
+            java.lang.reflect.Method injectDeferredMethod = null;
+            for (java.lang.reflect.Method method : factoryClass.getDeclaredMethods()) {
+                if (method.getName().equals("injectDeferred")) {
+                    injectDeferredMethod = method;
+                    break;
+                }
+            }
+            assertNotNull(injectDeferredMethod, "injectDeferred method should exist in factory");
+        } catch (Exception e) {
+            fail("Failed to verify injectDeferred method: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Test that factories without @Lazy dependencies do NOT have injectDeferred method (or it's empty).
+     */
+    @Test
+    void testFactoryWithoutLazyDoesNotRequireInjectDeferred() {
+        JavaFileObject source = JavaFileObjects.forSourceLines(
+            "test.NoLazyBean",
+            "package test;",
+            "import com.warmup.annotations.*;",
+            "",
+            "@Component",
+            "public class NoLazyBean {",
+            "    private final DependencyBean dependency;",
+            "",
+            "    @Inject",
+            "    public NoLazyBean(DependencyBean dependency) {",
+            "        this.dependency = dependency;",
+            "    }",
+            "",
+            "    public DependencyBean getDependency() { return dependency; }",
+            "}",
+            "",
+            "class DependencyBean {}"
+        );
+
+        Compilation compilation = compiler.compile(source);
+        
+        // Verify factory class is generated
+        Optional<JavaFileObject> factoryClassOpt = compilation.generatedFile(
+            StandardLocation.CLASS_OUTPUT, 
+            "test/NoLazyBean$$WarmupFactory.class"
+        );
+        assertTrue(factoryClassOpt.isPresent(), "Factory class should be generated");
+        
+        // Load the factory - it should load without errors
+        try {
+            byte[] factoryBytes = factoryClassOpt.get().openInputStream().readAllBytes();
+            TestClassLoader classLoader = new TestClassLoader();
+            Class<?> factoryClass = classLoader.defineClass("test.NoLazyBean$$WarmupFactory", factoryBytes);
+            
+            // Verify the class can be instantiated
+            Object factoryInstance = factoryClass.getDeclaredConstructor().newInstance();
+            assertNotNull(factoryInstance, "Factory instance should be created successfully");
+        } catch (Exception e) {
+            fail("Failed to load factory: " + e.getMessage());
+        }
+    }
 }

@@ -40,6 +40,20 @@ public class BeanDefinition<T> {
     private final String scopeName;
     
     /**
+     * Array indicating which dependencies are deferrable (can be injected after construction).
+     * Constructor dependencies are never deferrable; field and setter dependencies are deferrable.
+     * Null means no deferred dependency information is available (legacy behavior).
+     */
+    private final boolean[] deferredDependencies;
+    
+    /**
+     * Array indicating which dependencies are field or setter injections (as opposed to constructor).
+     * This is used to identify which edges in the dependency graph can be made deferrable.
+     * Null means no field/setter information is available (legacy behavior).
+     */
+    private final boolean[] fieldOrSetterDependencies;
+    
+    /**
      * Creates a bean definition with default values.
      */
     public BeanDefinition(Class<T> type, String name) {
@@ -79,7 +93,42 @@ public class BeanDefinition<T> {
     }
 
     /**
+     * Creates a bean definition with all parameters including custom scope name and deferred dependency info.
+     * 
+     * @param type the bean type
+     * @param name the bean name
+     * @param scope the bean scope
+     * @param lifecycle lifecycle callbacks
+     * @param isPrimary whether this is a primary bean
+     * @param dependencies array of dependencies (bean names or ValueDependency objects)
+     * @param profiles array of profile names for conditional registration
+     * @param conditionClasses array of fully qualified condition class names
+     * @param scopeName the name of a custom scope handler (used when scope is CUSTOM)
+     * @param deferredDependencies array indicating which dependencies are deferrable (may be null for legacy)
+     * @param fieldOrSetterDependencies array indicating which dependencies are field/setter injections (may be null for legacy)
+     */
+    public BeanDefinition(Class<T> type, String name, Scope scope, LifecycleCallbacks<T> lifecycle, 
+                          boolean isPrimary, Object[] dependencies, String[] profiles, String[] conditionClasses, String scopeName,
+                          boolean[] deferredDependencies, boolean[] fieldOrSetterDependencies) {
+        this.type = type;
+        this.name = name;
+        this.scope = scope;
+        this.lifecycle = lifecycle;
+        this.isPrimary = isPrimary;
+        this.dependencies = dependencies != null ? dependencies : new Object[0];
+        this.profiles = profiles != null ? profiles : new String[0];
+        this.conditionClasses = conditionClasses != null ? conditionClasses : new String[0];
+        this.scopeName = scopeName != null ? scopeName : "";
+        this.deferredDependencies = deferredDependencies;
+        this.fieldOrSetterDependencies = fieldOrSetterDependencies;
+        this.dependencyIndices = new int[this.dependencies.length];
+        // Initialize all indices to -1 (not yet resolved)
+        java.util.Arrays.fill(this.dependencyIndices, -1);
+    }
+
+    /**
      * Creates a bean definition with all parameters including custom scope name.
+     * Legacy constructor without deferred dependency support.
      * 
      * @param type the bean type
      * @param name the bean name
@@ -93,18 +142,7 @@ public class BeanDefinition<T> {
      */
     public BeanDefinition(Class<T> type, String name, Scope scope, LifecycleCallbacks<T> lifecycle, 
                           boolean isPrimary, Object[] dependencies, String[] profiles, String[] conditionClasses, String scopeName) {
-        this.type = type;
-        this.name = name;
-        this.scope = scope;
-        this.lifecycle = lifecycle;
-        this.isPrimary = isPrimary;
-        this.dependencies = dependencies != null ? dependencies : new Object[0];
-        this.profiles = profiles != null ? profiles : new String[0];
-        this.conditionClasses = conditionClasses != null ? conditionClasses : new String[0];
-        this.scopeName = scopeName != null ? scopeName : "";
-        this.dependencyIndices = new int[this.dependencies.length];
-        // Initialize all indices to -1 (not yet resolved)
-        java.util.Arrays.fill(this.dependencyIndices, -1);
+        this(type, name, scope, lifecycle, isPrimary, dependencies, profiles, conditionClasses, scopeName, null, null);
     }
     
     public Class<T> type() {
@@ -193,5 +231,26 @@ public class BeanDefinition<T> {
      */
     public String scopeName() {
         return scopeName;
+    }
+    
+    /**
+     * Checks if a dependency at the given index is deferrable (can be injected after construction).
+     * Constructor dependencies are never deferrable; field and setter dependencies are deferrable.
+     * @param depIndex the index in the dependencies array
+     * @return true if the dependency is deferrable, false otherwise
+     */
+    public boolean isDeferredDependency(int depIndex) {
+        return deferredDependencies != null && depIndex >= 0 && depIndex < deferredDependencies.length 
+               && deferredDependencies[depIndex];
+    }
+    
+    /**
+     * Checks if a dependency at the given index is a field or setter injection.
+     * @param depIndex the index in the dependencies array
+     * @return true if the dependency is from field/setter injection, false if from constructor
+     */
+    public boolean isFieldOrSetterDependency(int depIndex) {
+        return fieldOrSetterDependencies != null && depIndex >= 0 && depIndex < fieldOrSetterDependencies.length 
+               && fieldOrSetterDependencies[depIndex];
     }
 }
