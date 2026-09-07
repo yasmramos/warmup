@@ -182,6 +182,23 @@ public class Warmup implements AutoCloseable {
     }
 
     /**
+     * Resolves a bean by type and returns a BeanHandle for efficient repeated resolutions.
+     * 
+     * <p>The handle captures the resolution result once and allows subsequent resolutions
+     * without ClassValue lookup overhead. It automatically detects invalidation when
+     * the bean is reloaded or dynamically re-registered.</p>
+     * 
+     * @param <T> the bean type
+     * @param clazz the bean class
+     * @return a BeanHandle for repeated resolution
+     * @throws IllegalStateException if bean not found
+     * @see #get(Class)
+     */
+    public <T> com.warmup.core.container.BeanHandle<T> handle(Class<T> clazz) {
+        return container.handle(clazz);
+    }
+
+    /**
      * Resolves all beans of the given type as a List.
      * This is used for collection injection (List<T>, Set<T>).
      * 

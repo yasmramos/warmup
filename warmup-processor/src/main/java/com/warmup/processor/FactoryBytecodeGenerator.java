@@ -154,6 +154,10 @@ public class FactoryBytecodeGenerator {
             gv.visitVarInsn(Opcodes.ALOAD, 0);
             // Get field: this.dep{i}
             gv.visitFieldInsn(Opcodes.GETFIELD, factoryClassName, "dep" + i, "Ljava/lang/Object;");
+            // Cast to CompiledFactory
+            gv.visitTypeInsn(Opcodes.CHECKCAST, "com/warmup/core/jit/CompiledFactory");
+            // Invoke get() to resolve the instance
+            gv.visitMethodInsn(Opcodes.INVOKEINTERFACE, "com/warmup/core/jit/CompiledFactory", "get", "()Ljava/lang/Object;", true);
             // Cast to dependency type
             TypeMirror paramType = constructorParams.get(i).asType();
             String paramInternalName = getInternalName(paramType);
@@ -183,6 +187,10 @@ public class FactoryBytecodeGenerator {
             gv.visitVarInsn(Opcodes.ALOAD, 0);
             // Get field: this.dep{fieldIndex}
             gv.visitFieldInsn(Opcodes.GETFIELD, factoryClassName, "dep" + fieldIndex, "Ljava/lang/Object;");
+            // Cast to CompiledFactory
+            gv.visitTypeInsn(Opcodes.CHECKCAST, "com/warmup/core/jit/CompiledFactory");
+            // Invoke get() to resolve the instance
+            gv.visitMethodInsn(Opcodes.INVOKEINTERFACE, "com/warmup/core/jit/CompiledFactory", "get", "()Ljava/lang/Object;", true);
             // Cast to field type
             TypeMirror fieldType = field.asType();
             String fieldInternalName = getInternalName(fieldType);
@@ -216,6 +224,10 @@ public class FactoryBytecodeGenerator {
                 gv.visitVarInsn(Opcodes.ALOAD, 0);
                 // Get field: this.dep{currentParamIndex}
                 gv.visitFieldInsn(Opcodes.GETFIELD, factoryClassName, "dep" + currentParamIndex, "Ljava/lang/Object;");
+                // Cast to CompiledFactory
+                gv.visitTypeInsn(Opcodes.CHECKCAST, "com/warmup/core/jit/CompiledFactory");
+                // Invoke get() to resolve the instance
+                gv.visitMethodInsn(Opcodes.INVOKEINTERFACE, "com/warmup/core/jit/CompiledFactory", "get", "()Ljava/lang/Object;", true);
                 // Cast to parameter type
                 TypeMirror paramType = param.asType();
                 String paramInternalName = getInternalName(paramType);
@@ -460,6 +472,11 @@ public class FactoryBytecodeGenerator {
         for (int i = 0; i < parameters.size(); i++) {
             gv.visitVarInsn(Opcodes.ALOAD, 0);
             gv.visitFieldInsn(Opcodes.GETFIELD, generatedFactoryName, "dep" + i, "Ljava/lang/Object;");
+            // Cast to CompiledFactory
+            gv.visitTypeInsn(Opcodes.CHECKCAST, "com/warmup/core/jit/CompiledFactory");
+            // Invoke get() to resolve the instance
+            gv.visitMethodInsn(Opcodes.INVOKEINTERFACE, "com/warmup/core/jit/CompiledFactory", "get", "()Ljava/lang/Object;", true);
+            // Cast to parameter type
             TypeMirror paramType = parameters.get(i).asType();
             String paramInternalName = getInternalName(paramType);
             gv.visitTypeInsn(Opcodes.CHECKCAST, paramInternalName);
