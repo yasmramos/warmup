@@ -1146,4 +1146,74 @@ class WarmupProcessorTest {
             fail("Failed to load factory: " + e.getMessage());
         }
     }
+    
+    @Test
+    void testStaticNestedClassWithComponent() {
+        JavaFileObject source = JavaFileObjects.forSourceLines(
+            "test.OuterClass",
+            "package test;",
+            "import com.warmup.annotations.Component;",
+            "",
+            "public class OuterClass {",
+            "    ",
+            "    @Component",
+            "    public static class InnerBean {",
+            "        public InnerBean() {}",
+            "    }",
+            "}"
+        );
+
+        Compilation compilation = compiler.compile(source);
+        
+        // Should generate factory for nested class with $ in name
+        assertTrue(compilation.generatedFile(StandardLocation.CLASS_OUTPUT, "test/OuterClass$InnerBean$$WarmupFactory.class").isPresent(),
+            "Should generate factory for static nested class");
+    }
+    
+    @Test
+    void testNonStaticInnerClassShouldFailCompilation() {
+        JavaFileObject source = JavaFileObjects.forSourceLines(
+            "test.OuterWithInner",
+            "package test;",
+            "import com.warmup.annotations.Component;",
+            "",
+            "public class OuterWithInner {",
+            "    ",
+            "    @Component",
+            "    public class NonStaticInner {",
+            "        public NonStaticInner() {}",
+            "    }",
+            "}"
+        );
+
+        Compilation compilation = compiler.compile(source);
+        
+        // Should fail with error about non-static inner class
+        assertThat(compilation).failed();
+        assertThat(compilation).hadErrorContaining("@Component does not support non-static inner classes")
+            .inFile(source);
+    }
+    
+    @Test
+    void testStaticNestedClassWithSingleton() {
+        JavaFileObject source = JavaFileObjects.forSourceLines(
+            "test.ContainerClass",
+            "package test;",
+            "import com.warmup.annotations.Singleton;",
+            "",
+            "public class ContainerClass {",
+            "    ",
+            "    @Singleton",
+            "    public static class NestedService {",
+            "        public NestedService() {}",
+            "    }",
+            "}"
+        );
+
+        Compilation compilation = compiler.compile(source);
+        
+        // Should generate factory for nested class with $ in name
+        assertTrue(compilation.generatedFile(StandardLocation.CLASS_OUTPUT, "test/ContainerClass$NestedService$$WarmupFactory.class").isPresent(),
+            "Should generate factory for static nested class with @Singleton");
+    }
 }
