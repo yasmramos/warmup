@@ -11,6 +11,8 @@ import com.warmup.annotations.Named;
 import com.warmup.annotations.Value;
 import com.warmup.annotations.Profile;
 import com.warmup.annotations.Conditional;
+import com.warmup.annotations.EventListener;
+import com.warmup.annotations.Lazy;
 
 import javax.annotation.processing.*;
 import javax.lang.model.SourceVersion;
@@ -70,6 +72,7 @@ import java.util.*;
     "com.warmup.annotations.Value",
     "com.warmup.annotations.Profile",
     "com.warmup.annotations.Conditional",
+    "com.warmup.annotations.EventListener",
     "com.warmup.javafx.WarmupFxController"
 })
 @SupportedSourceVersion(SourceVersion.RELEASE_17)
@@ -121,11 +124,14 @@ public class WarmupProcessor extends AbstractProcessor {
         final List<InjectMethodInfo> injectMethods;
         final List<String> profiles;
         final List<String> conditionClassNames;
+        final List<Boolean> isDeferredDependency;
+        final List<Boolean> isFieldOrSetterDependency;
 
         BeanInfo(String packageName, String className, String beanName, String factoryClassName, String scope, String scopeName,
                 List<String> dependencyNames, List<Boolean> isProviderDependency, List<Boolean> isValueDependency, 
                 List<String> valueExpressions, boolean isPrimary, List<InjectMethodInfo> injectMethods,
-                List<String> profiles, List<String> conditionClassNames) {
+                List<String> profiles, List<String> conditionClassNames, List<Boolean> isDeferredDependency,
+                List<Boolean> isFieldOrSetterDependency) {
             this.packageName = packageName;
             this.className = className;
             this.beanName = beanName;
@@ -140,14 +146,16 @@ public class WarmupProcessor extends AbstractProcessor {
             this.injectMethods = injectMethods != null ? injectMethods : new ArrayList<>();
             this.profiles = profiles != null ? profiles : new ArrayList<>();
             this.conditionClassNames = conditionClassNames != null ? conditionClassNames : new ArrayList<>();
+            this.isDeferredDependency = isDeferredDependency != null ? isDeferredDependency : new ArrayList<>();
+            this.isFieldOrSetterDependency = isFieldOrSetterDependency != null ? isFieldOrSetterDependency : new ArrayList<>();
         }
         
         BeanInfo(String packageName, String className, String beanName, String factoryClassName, String scope) {
-            this(packageName, className, beanName, factoryClassName, scope, "", new ArrayList<>(), new ArrayList<>(), new ArrayList<>(), new ArrayList<>(), false, new ArrayList<>(), new ArrayList<>(), new ArrayList<>());
+            this(packageName, className, beanName, factoryClassName, scope, "", new ArrayList<>(), new ArrayList<>(), new ArrayList<>(), new ArrayList<>(), false, new ArrayList<>(), new ArrayList<>(), new ArrayList<>(), new ArrayList<>(), new ArrayList<>());
         }
         
         BeanInfo(String packageName, String className, String beanName, String factoryClassName, String scope, List<String> dependencyNames) {
-            this(packageName, className, beanName, factoryClassName, scope, "", dependencyNames, new ArrayList<>(), new ArrayList<>(), new ArrayList<>(), false, new ArrayList<>(), new ArrayList<>(), new ArrayList<>());
+            this(packageName, className, beanName, factoryClassName, scope, "", dependencyNames, new ArrayList<>(), new ArrayList<>(), new ArrayList<>(), false, new ArrayList<>(), new ArrayList<>(), new ArrayList<>(), new ArrayList<>(), new ArrayList<>());
         }
     }
 
@@ -174,6 +182,9 @@ public class WarmupProcessor extends AbstractProcessor {
         // Process @Factory classes with @Bean methods
         processFactoryClasses(roundEnv, filer, messager);
         
+        // Process @EventListener methods for metadata generation
+        processEventListeners(roundEnv, filer, messager);
+        
         // Generate registrar when processing is complete
         if (roundEnv.processingOver() && !processingOver && !processedBeans.isEmpty()) {
             processingOver = true;
@@ -186,6 +197,38 @@ public class WarmupProcessor extends AbstractProcessor {
         }
         
         return true;
+    }
+    
+    /**
+     * Processes methods annotated with @EventListener to generate metadata.
+     * This enables compile-time validation and optional optimization of event listener registration.
+     */
+    private void processEventListeners(RoundEnvironment roundEnv, Filer filer, Messager messager) {
+        for (Element element : roundEnv.getElementsAnnotatedWith(EventListener.class)) {
+            if (element.getKind() != ElementKind.METHOD) {
+                messager.printMessage(Diagnostic.Kind.ERROR, 
+                    "@EventListener only applies to methods", element);
+                continue;
+            }
+            
+            ExecutableElement method = (ExecutableElement) element;
+            
+            // Validate method signature: must have exactly one parameter
+            List<? extends VariableElement> parameters = method.getParameters();
+            if (parameters.size() != 1) {
+                messager.printMessage(Diagnostic.Kind.ERROR, 
+                    "@EventListener method must have exactly one parameter", element);
+                continue;
+            }
+            
+            // The parameter type determines the event type this listener handles
+            TypeMirror eventType = parameters.get(0).asType();
+            
+            // Metadata is implicitly available at runtime via reflection
+            // This processing step primarily provides compile-time validation
+            messager.printMessage(Diagnostic.Kind.NOTE, 
+                "Registered @EventListener for event type: " + eventType, element);
+        }
     }
     
     /**
@@ -409,32 +452,36 @@ public class WarmupProcessor extends AbstractProcessor {
         // Extract dependency names from constructor, @Inject fields, and @Inject methods
         List<String> depNames = new ArrayList<>();
         List<Boolean> providerFlags = new ArrayList<>();
+        List<Boolean> isDeferred = new ArrayList<>();
+        List<Boolean> isFieldOrSetter = new ArrayList<>();
         List<InjectMethodInfo> injectMethods = new ArrayList<>();
         
-        // Constructor dependencies
+        // Constructor dependencies (NOT deferrable - must be available at construction time)
         ExecutableElement constructor = findInjectableConstructor(typeElement);
         if (constructor != null) {
             for (VariableElement param : constructor.getParameters()) {
                 extractDependencyInfo(param, depNames, providerFlags);
+                isDeferred.add(false); // Constructor deps are never deferrable
+                isFieldOrSetter.add(false);
             }
         }
         
-        // @Inject field dependencies
+        // @Inject field dependencies (deferrable)
         for (Element enclosed : typeElement.getEnclosedElements()) {
             if (enclosed.getKind() == ElementKind.FIELD) {
                 VariableElement field = (VariableElement) enclosed;
                 if (field.getAnnotation(Inject.class) != null) {
-                    extractFieldDependencyInfo(field, depNames, providerFlags);
+                    extractFieldDependencyInfo(field, depNames, providerFlags, isDeferred, isFieldOrSetter);
                 }
             }
         }
         
-        // @Inject method dependencies
+        // @Inject method dependencies (deferrable)
         for (Element enclosed : typeElement.getEnclosedElements()) {
             if (enclosed.getKind() == ElementKind.METHOD) {
                 ExecutableElement method = (ExecutableElement) enclosed;
                 if (method.getAnnotation(Inject.class) != null) {
-                    InjectMethodInfo methodInfo = extractMethodDependencyInfo(method, depNames, providerFlags);
+                    InjectMethodInfo methodInfo = extractMethodDependencyInfo(method, depNames, providerFlags, isDeferred, isFieldOrSetter);
                     if (methodInfo != null) {
                         injectMethods.add(methodInfo);
                     }
@@ -442,7 +489,7 @@ public class WarmupProcessor extends AbstractProcessor {
             }
         }
         
-        processedBeans.add(new BeanInfo(packageName, className, beanName, factoryClassName, scope, scopeName, depNames, providerFlags, new ArrayList<>(), new ArrayList<>(), isPrimary, injectMethods, profiles, conditionClassNames));
+        processedBeans.add(new BeanInfo(packageName, className, beanName, factoryClassName, scope, scopeName, depNames, providerFlags, new ArrayList<>(), new ArrayList<>(), isPrimary, injectMethods, profiles, conditionClassNames, isDeferred, isFieldOrSetter));
     }
     
     /**
@@ -486,8 +533,11 @@ public class WarmupProcessor extends AbstractProcessor {
     
     /**
      * Extracts dependency info from a field element.
+     * Field dependencies are always considered deferrable (can be injected after construction).
+     * If marked with @Lazy, they are prioritized for deferred injection.
      */
-    private void extractFieldDependencyInfo(VariableElement field, List<String> depNames, List<Boolean> providerFlags) {
+    private void extractFieldDependencyInfo(VariableElement field, List<String> depNames, List<Boolean> providerFlags, 
+                                            List<Boolean> isDeferred, List<Boolean> isFieldOrSetter) {
         String fieldType = field.asType().toString();
         int lastDot = fieldType.lastIndexOf('.');
         String simpleName = lastDot > 0 ? fieldType.substring(lastDot + 1) : fieldType;
@@ -495,11 +545,16 @@ public class WarmupProcessor extends AbstractProcessor {
         // Check if field is a Provider<T>
         boolean isProvider = isProviderType(field.asType());
         
+        // Check for @Lazy annotation - field dependencies are always deferrable
+        boolean isLazy = field.getAnnotation(Lazy.class) != null;
+        
         // Check for @Value annotation on field (configuration value, not bean reference)
         Value value = field.getAnnotation(Value.class);
         if (value != null) {
             depNames.add(value.value()); // Store the expression as the "name"
             providerFlags.add(false);
+            isDeferred.add(false); // Value dependencies are not deferrable in the same way
+            isFieldOrSetter.add(true);
             return;
         }
         
@@ -521,13 +576,17 @@ public class WarmupProcessor extends AbstractProcessor {
             }
         }
         providerFlags.add(isProvider);
+        isDeferred.add(true); // Field injections are always deferrable
+        isFieldOrSetter.add(true);
     }
     
     /**
      * Extracts dependency info from an @Inject method and returns method info.
      * Returns null if the method has no parameters.
+     * Setter/method dependencies are always considered deferrable (can be injected after construction).
      */
-    private InjectMethodInfo extractMethodDependencyInfo(ExecutableElement method, List<String> depNames, List<Boolean> providerFlags) {
+    private InjectMethodInfo extractMethodDependencyInfo(ExecutableElement method, List<String> depNames, List<Boolean> providerFlags,
+                                                         List<Boolean> isDeferred, List<Boolean> isFieldOrSetter) {
         String methodName = method.getSimpleName().toString();
         int paramCount = method.getParameters().size();
         
@@ -540,6 +599,8 @@ public class WarmupProcessor extends AbstractProcessor {
         List<Boolean> methodProviderFlags = new ArrayList<>();
         List<Boolean> methodValueFlags = new ArrayList<>();
         List<String> methodValueExpressions = new ArrayList<>();
+        List<Boolean> methodIsDeferred = new ArrayList<>();
+        List<Boolean> methodIsFieldOrSetter = new ArrayList<>();
         
         for (VariableElement param : method.getParameters()) {
             String paramType = param.asType().toString();
@@ -550,6 +611,9 @@ public class WarmupProcessor extends AbstractProcessor {
             // Check if parameter is a Provider<T>
             boolean isProvider = isProviderType(param.asType());
             
+            // Check for @Lazy annotation on parameter
+            boolean isLazy = param.getAnnotation(Lazy.class) != null;
+            
             // Check for @Value annotation on parameter (configuration value, not bean reference)
             Value value = param.getAnnotation(Value.class);
             if (value != null) {
@@ -559,6 +623,10 @@ public class WarmupProcessor extends AbstractProcessor {
                 providerFlags.add(false);
                 methodValueFlags.add(true);
                 methodValueExpressions.add(value.value());
+                methodIsDeferred.add(false); // Value dependencies are not deferrable
+                methodIsFieldOrSetter.add(true);
+                isDeferred.add(false);
+                isFieldOrSetter.add(true);
                 continue;
             }
             
@@ -588,6 +656,10 @@ public class WarmupProcessor extends AbstractProcessor {
             }
             methodProviderFlags.add(isProvider);
             providerFlags.add(isProvider);
+            methodIsDeferred.add(true); // Setter injections are always deferrable
+            methodIsFieldOrSetter.add(true);
+            isDeferred.add(true);
+            isFieldOrSetter.add(true);
         }
         
         return new InjectMethodInfo(methodName, paramCount, paramTypes, methodDepNames, methodProviderFlags, methodValueFlags, methodValueExpressions);
@@ -697,7 +769,15 @@ public class WarmupProcessor extends AbstractProcessor {
         // The BeanInfo.className will hold the FQN when the return type is from a different package
         String classNameForRegistration = returnTypeFqn;
         
-        processedBeans.add(new BeanInfo(packageName, classNameForRegistration, beanName, factoryClassName, scope, "", depNames, providerFlags, new ArrayList<>(), new ArrayList<>(), isPrimary, new ArrayList<>(), profiles, conditionClassNames));
+        // For @Bean methods, dependencies are from method parameters (constructor-like, not deferrable)
+        List<Boolean> isDeferred = new ArrayList<>();
+        List<Boolean> isFieldOrSetter = new ArrayList<>();
+        for (int i = 0; i < depNames.size(); i++) {
+            isDeferred.add(false); // Method parameter dependencies are not deferrable
+            isFieldOrSetter.add(false);
+        }
+        
+        processedBeans.add(new BeanInfo(packageName, classNameForRegistration, beanName, factoryClassName, scope, "", depNames, providerFlags, new ArrayList<>(), new ArrayList<>(), isPrimary, new ArrayList<>(), profiles, conditionClassNames, isDeferred, isFieldOrSetter));
     }
     
     /**
