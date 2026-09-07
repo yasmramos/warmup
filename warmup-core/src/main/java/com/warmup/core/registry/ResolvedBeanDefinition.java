@@ -69,6 +69,13 @@ public class ResolvedBeanDefinition<T> {
     }
     
     /**
+     * Gets the cached index. Returns -1 if not yet resolved.
+     */
+    public int getIndex() {
+        return resolvedIndex;
+    }
+    
+    /**
      * Gets or computes the cached index using CAS for thread-safe lazy initialization.
      */
     public int getOrComputeIndex(BeanRegistry registry) {

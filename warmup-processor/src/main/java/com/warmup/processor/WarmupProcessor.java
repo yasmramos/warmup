@@ -1283,9 +1283,10 @@ public class WarmupProcessor extends AbstractProcessor {
     
     /**
      * Gets the fully qualified name of a type element, handling nested classes correctly.
+     * Uses binary name (with $ for nested classes) for correct bytecode generation.
      */
     private String getFullyQualifiedTypeName(TypeElement type) {
-        return type.getQualifiedName().toString();
+        return processingEnv.getElementUtils().getBinaryName(type).toString();
     }
 
     /**
@@ -1379,6 +1380,24 @@ public class WarmupProcessor extends AbstractProcessor {
     }
     
     /**
+     * Converts a binary name (with $ for nested classes) to JVM internal name format.
+     * E.g., "com.pkg.Outer$Inner" -> "com/pkg/Outer$Inner"
+     */
+    private String binaryNameToInternalName(String binaryName) {
+        // Only replace dots that separate package segments, not the $ in nested classes
+        int lastDollarIndex = binaryName.lastIndexOf('$');
+        if (lastDollarIndex < 0) {
+            // No nested class, just replace all dots with slashes
+            return binaryName.replace('.', '/');
+        } else {
+            // Has nested class: replace dots in package part, keep $ and simple name intact
+            String packagePart = binaryName.substring(0, lastDollarIndex);
+            String classPart = binaryName.substring(lastDollarIndex); // includes the $
+            return packagePart.replace('.', '/') + classPart;
+        }
+    }
+    
+    /**
      * Generates bytecode for the GeneratedFactoryRegistrar class.
      * 
      * @param packageName the package name for the registrar
@@ -1421,7 +1440,8 @@ public class WarmupProcessor extends AbstractProcessor {
             mv.visitTypeInsn(org.objectweb.asm.Opcodes.NEW, beanDefInternal);
             mv.visitInsn(org.objectweb.asm.Opcodes.DUP);
             
-            String beanTypeInternal = beanInfo.className.replace('.', '/');
+            // Convert binary name to internal name correctly (preserving $ for nested classes)
+            String beanTypeInternal = binaryNameToInternalName(beanInfo.className);
             String beanTypeFqn = beanInfo.className;
             
             // Push beanType.class onto stack
@@ -1489,8 +1509,8 @@ public class WarmupProcessor extends AbstractProcessor {
             StringBuilder beanDefCtorDesc = new StringBuilder("(Ljava/lang/Class;Ljava/lang/String;Lcom/warmup/core/scope/Scope;Lcom/warmup/core/lifecycle/LifecycleCallbacks;Z[Ljava/lang/Object;[Ljava/lang/String;[Ljava/lang/String;)V");
             mv.visitMethodInsn(org.objectweb.asm.Opcodes.INVOKESPECIAL, beanDefInternal, "<init>", beanDefCtorDesc.toString(), false);
             
-            // Create new factory instance
-            String factoryInternal = beanInfo.factoryClassName.replace('.', '/');
+            // Create new factory instance - factory class names use dots, convert to internal name
+            String factoryInternal = binaryNameToInternalName(beanInfo.factoryClassName);
             mv.visitTypeInsn(org.objectweb.asm.Opcodes.NEW, factoryInternal);
             mv.visitInsn(org.objectweb.asm.Opcodes.DUP);
             mv.visitMethodInsn(org.objectweb.asm.Opcodes.INVOKESPECIAL, factoryInternal, "<init>", "()V", false);
