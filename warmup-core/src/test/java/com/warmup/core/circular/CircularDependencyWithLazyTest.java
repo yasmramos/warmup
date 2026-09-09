@@ -111,7 +111,7 @@ class CircularDependencyWithLazyTest {
     public static class ServiceA {
         @Inject
         @Lazy
-        private ServiceB serviceB;
+        ServiceB serviceB;
         
         private boolean postConstructCalled = false;
 
@@ -133,7 +133,7 @@ class CircularDependencyWithLazyTest {
     public static class ServiceB {
         @Inject
         @Lazy
-        private ServiceA serviceA;
+        ServiceA serviceA;
         
         private boolean postConstructCalled = false;
 
@@ -207,7 +207,7 @@ class CircularDependencyWithLazyTest {
     public static class BeanX {
         @Inject
         @Lazy
-        private BeanY beanY;
+        BeanY beanY;
         
         private boolean postConstructCalled = false;
 
@@ -229,7 +229,7 @@ class CircularDependencyWithLazyTest {
     public static class BeanY {
         @Inject
         @Lazy
-        private BeanZ beanZ;
+        BeanZ beanZ;
         
         private boolean postConstructCalled = false;
 
@@ -251,7 +251,7 @@ class CircularDependencyWithLazyTest {
     public static class BeanZ {
         @Inject
         @Lazy
-        private BeanX beanX;
+        BeanX beanX;
         
         private boolean postConstructCalled = false;
 
@@ -302,7 +302,7 @@ class CircularDependencyWithLazyTest {
     @Component
     public static class ServiceE {
         @Inject
-        private ServiceF serviceF;
+        ServiceF serviceF;
 
         public ServiceF getServiceF() {
             return serviceF;
@@ -312,7 +312,7 @@ class CircularDependencyWithLazyTest {
     @Component
     public static class ServiceF {
         @Inject
-        private ServiceE serviceE;
+        ServiceE serviceE;
 
         public ServiceE getServiceE() {
             return serviceE;

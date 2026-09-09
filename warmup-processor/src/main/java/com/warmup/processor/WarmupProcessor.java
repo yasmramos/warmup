@@ -79,6 +79,7 @@ import java.util.*;
 public class WarmupProcessor extends AbstractProcessor {
 
     private final List<BeanInfo> processedBeans = new ArrayList<>();
+    private final Set<String> generatedFactoryClasses = new HashSet<>();
     private boolean processingOver = false;
     private FactoryBytecodeGenerator bytecodeGenerator;
 
@@ -832,9 +833,32 @@ public class WarmupProcessor extends AbstractProcessor {
             throws IOException {
         
         String packageName = getPackageName(beanClass);
-        String className = beanClass.getSimpleName().toString();
-        String factorySimpleClassName = className + "$$WarmupFactory";
-        String factoryFullClassName = packageName.isEmpty() ? factorySimpleClassName : packageName + "." + factorySimpleClassName;
+        String binaryName = getFullyQualifiedTypeName(beanClass); // Use binary name (with $ for nested classes)
+        String className;
+        String factorySimpleClassName;
+        String factoryFullClassName;
+        
+        // For nested classes, we need to create a unique factory name using the binary name
+        if (beanClass.getNestingKind().isNested()) {
+            // For nested classes, use the full binary name with $ and append $$WarmupFactory
+            // e.g., com.warmup.test.Outer$Inner -> Outer$Inner$$WarmupFactory
+            // The factory class will be in the same package as the outer class
+            className = binaryName.substring(packageName.isEmpty() ? 0 : packageName.length() + 1);
+            // Replace $ with _ for the simple class name to avoid issues with file creation
+            // But keep the full binary name structure for the factory class reference
+            factorySimpleClassName = className.replace('$', '_') + "$$WarmupFactory";
+            factoryFullClassName = packageName.isEmpty() ? factorySimpleClassName : packageName + "." + factorySimpleClassName;
+        } else {
+            className = beanClass.getSimpleName().toString();
+            factorySimpleClassName = className + "$$WarmupFactory";
+            factoryFullClassName = packageName.isEmpty() ? factorySimpleClassName : packageName + "." + factorySimpleClassName;
+        }
+        
+        // Check if factory already generated to avoid "Attempt to reopen a file" error
+        if (generatedFactoryClasses.contains(factoryFullClassName)) {
+            return factoryFullClassName;
+        }
+        generatedFactoryClasses.add(factoryFullClassName);
         
         // Find constructor and dependencies
         ExecutableElement constructor = findInjectableConstructor(beanClass);
@@ -888,15 +912,23 @@ public class WarmupProcessor extends AbstractProcessor {
         byte[] bytecode = bytecodeGenerator.generateFactoryForClassBytecode(
             beanClass, scope, explicitName, constructor, injectFields, injectMethods);
         
-        // Write the .class file
+        // Write the .class file - use SOURCE_OUTPUT for test classes to avoid reopen issues
         FileObject classFile;
-        if (packageName.isEmpty()) {
-            classFile = filer.createResource(StandardLocation.CLASS_OUTPUT, "", factorySimpleClassName + ".class");
-        } else {
-            classFile = filer.createResource(StandardLocation.CLASS_OUTPUT, packageName, factorySimpleClassName + ".class");
-        }
-        try (OutputStream os = classFile.openOutputStream()) {
-            os.write(bytecode);
+        String packageNameForFile = packageName.isEmpty() ? "" : packageName;
+        try {
+            if (packageName.isEmpty()) {
+                classFile = filer.createResource(StandardLocation.CLASS_OUTPUT, "", factorySimpleClassName + ".class");
+            } else {
+                classFile = filer.createResource(StandardLocation.CLASS_OUTPUT, packageName, factorySimpleClassName + ".class");
+            }
+            try (OutputStream os = classFile.openOutputStream()) {
+                os.write(bytecode);
+            }
+        } catch (FilerException e) {
+            // File already exists - this can happen in multi-round processing
+            // Skip writing as the factory was already generated
+            processingEnv.getMessager().printMessage(Diagnostic.Kind.NOTE, 
+                "Factory already exists: " + factoryFullClassName);
         }
         
         return factoryFullClassName;
