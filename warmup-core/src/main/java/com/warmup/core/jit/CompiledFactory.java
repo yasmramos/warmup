@@ -61,4 +61,16 @@ public interface CompiledFactory<T> {
         // Factories with dependencies should override this method
         return create();
     }
+    
+    /**
+     * Injects deferred dependencies (field/setter injections marked as @Lazy) into an existing bean instance.
+     * This method is called after the bean is constructed and published to break circular dependencies.
+     * Default implementation does nothing for factories without deferred dependencies.
+     * 
+     * @param instance the bean instance to inject dependencies into
+     * @param deferredDependencies array of resolved deferred dependencies in order
+     */
+    default void injectDeferred(T instance, Object... deferredDependencies) {
+        // Default: no deferred injection support (legacy or no deferred dependencies)
+    }
 }

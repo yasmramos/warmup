@@ -770,11 +770,97 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
             instance = registry.getInstance(resolvedDef.getDefinition(), factory);
         } else {
             // Non-wired or no factory: fall back to createBean lambda
-            instance = registry.getInstance(resolvedDef.getDefinition(), () -> createBean(resolvedDef));
+            // NOTE: createBean now only creates the instance WITHOUT injecting deferred deps
+            // Deferred injection happens AFTER getInstance returns to avoid Recursive update
+            instance = registry.getInstance(resolvedDef.getDefinition(), () -> createBeanWithoutDeferredInjection(resolvedDef));
         }
         // Publish the created instance for fast-path on subsequent resolutions
         resolvedDef.setCachedInstance(instance);
+        
+        // PHASE 2: Inject deferred dependencies (@Lazy field/setter injections) AFTER the bean is published
+        // This breaks circular dependencies by ensuring the instance is visible in singletonInstances
+        // before we try to resolve its lazy dependencies (which may be beans in a cycle with this one)
+        injectDeferredDependencies(instance, resolvedDef.getDefinition());
+        
         return instance;
+    }
+    
+    /**
+     * Creates a bean instance WITHOUT injecting deferred dependencies.
+     * Deferred injection must be called separately AFTER the instance is published to singletonInstances.
+     */
+    @SuppressWarnings("unchecked")
+    private <T> T createBeanWithoutDeferredInjection(ResolvedBeanDefinition<T> resolvedDef) {
+        BeanDefinition<T> definition = resolvedDef.getDefinition();
+        String name = definition.name();
+        CompiledFactory<T> factory = resolvedDef.getOrComputeFactory(factoryCache);
+        
+        long compileTimeNs = 0L;
+        ResolutionDiagnostic.ResolutionPath path;
+        
+        if (resolvedDef.isCompileTime()) {
+            path = ResolutionDiagnostic.ResolutionPath.COMPILE_TIME;
+            compileTimeHits.add(1);
+        } else if (!IS_NATIVE_IMAGE) {
+            // Try JIT compilation
+            try {
+                factory = jitCompiler.compile(definition.type(), getNonDeferredDependencyClasses(definition));
+                if (factory != null) {
+                    factoryCache.put(name, factory);
+                    resolvedDef.setResolvedFactory(factory);
+                    path = ResolutionDiagnostic.ResolutionPath.JIT;
+                    jitHits.add(1);
+                } else {
+                    path = ResolutionDiagnostic.ResolutionPath.REFLECTION_FALLBACK;
+                    fallbackCount.add(1);
+                    return createViaReflectionWithoutDeferredInjection(resolvedDef);
+                }
+            } catch (CompilationException e) {
+                path = ResolutionDiagnostic.ResolutionPath.REFLECTION_FALLBACK;
+                fallbackCount.add(1);
+                return createViaReflectionWithoutDeferredInjection(resolvedDef);
+            }
+        } else {
+            path = ResolutionDiagnostic.ResolutionPath.REFLECTION_FALLBACK;
+            fallbackCount.add(1);
+            return createViaReflectionWithoutDeferredInjection(resolvedDef);
+        }
+        
+        // Create instance using factory - use wired path when available (no Object[] allocation)
+        // PHASE 1: Resolve only non-deferred dependencies and create the bean
+        T instance;
+        if (resolvedDef.isCompileTime() && resolvedDef.isWired()) {
+            // Wired compile-time factory: call get() directly without Object[] allocation
+            // Wiring was verified at startup, so get() is guaranteed safe
+            instance = factory.get();
+        } else if (resolvedDef.isCompileTime()) {
+            // Compile-time but not wired (e.g., forward reference): fallback to create()
+            Object[] deps = resolveNonDeferredDependencies(definition);
+            instance = factory.create(deps);
+        } else {
+            // JIT or other factory: use traditional path with non-deferred deps only
+            Object[] deps = resolveNonDeferredDependencies(definition);
+            instance = factory.create(deps);
+        }
+        
+        // Record diagnostic if enabled
+        if (diagnosticMode) {
+            diagnostics.add(new ResolutionDiagnostic(name, definition.type(), path, compileTimeNs));
+        }
+        
+        // NOTE: Do NOT inject deferred dependencies here - that happens AFTER getInstance returns
+        return instance;
+    }
+    
+    /**
+     * Creates a bean via reflection WITHOUT injecting deferred dependencies.
+     * Fallback path for when JIT compilation fails.
+     */
+    @SuppressWarnings("unchecked")
+    private <T> T createViaReflectionWithoutDeferredInjection(ResolvedBeanDefinition<T> resolvedDef) {
+        BeanDefinition<T> definition = resolvedDef.getDefinition();
+        Object[] deps = resolveNonDeferredDependencies(definition);
+        return (T) createViaReflection(definition, deps);
     }
 
     /**
@@ -1496,16 +1582,39 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
         return instance;
     }
 
-    private Class<?>[] getDependencyClasses(BeanDefinition<?> definition) {
-        // Extract classes from dependencies by resolving each dependency name
-        // and getting its type from the registry
+    /**
+     * Gets the classes of non-deferred (constructor) dependencies for JIT compilation.
+     * Deferred dependencies (field/setter with @Lazy) are excluded as they will be injected via injectDeferred.
+     * 
+     * @param definition the bean definition
+     * @return array of resolved non-deferred dependency classes (only constructor args)
+     */
+    private Class<?>[] getNonDeferredDependencyClasses(BeanDefinition<?> definition) {
         Object[] deps = definition.dependencies();
-        Class<?>[] depClasses = new Class<?>[deps.length];
+        
+        // Count non-deferred dependencies first
+        int nonDeferredCount = 0;
+        for (int i = 0; i < deps.length; i++) {
+            if (!definition.isDeferredDependency(i)) {
+                nonDeferredCount++;
+            }
+        }
+        
+        if (nonDeferredCount == 0) {
+            return new Class<?>[0];
+        }
+        
+        Class<?>[] depClasses = new Class<?>[nonDeferredCount];
+        int depIndex = 0;
         
         for (int i = 0; i < deps.length; i++) {
+            // Skip deferred dependencies
+            if (definition.isDeferredDependency(i)) {
+                continue;
+            }
+            
             Object dep = deps[i];
             if (dep instanceof String depName) {
-                // Resolve dependency name to get its type - use getDefinitionOrNull to avoid Optional allocation
                 BeanDefinition<?> d = registry.getDefinitionOrNull(depName);
                 if (d == null) {
                     throw new IllegalStateException(
@@ -1513,11 +1622,9 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
                         "'. All dependencies must be registered before the dependent bean."
                     );
                 }
-                depClasses[i] = d.type();
+                depClasses[depIndex++] = d.type();
             } else if (dep != null) {
-                // Direct object reference - derive type from constructor parameter signature, not runtime class
-                // This ensures the bytecode descriptor matches the actual constructor signature when interface/superType is used
-                depClasses[i] = findConstructorParameterType(definition.type(), i, dep.getClass());
+                depClasses[depIndex++] = findConstructorParameterType(definition.type(), i, dep.getClass());
             } else {
                 throw new IllegalStateException(
                     "Null dependency at index " + i + " in bean '" + definition.name() + "'"
@@ -1526,6 +1633,15 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
         }
         
         return depClasses;
+    }
+    
+    /**
+     * Gets all dependency classes including deferred ones (legacy method for backward compatibility).
+     * @deprecated Use {@link #getNonDeferredDependencyClasses(BeanDefinition)} for JIT compilation.
+     */
+    @Deprecated
+    private Class<?>[] getDependencyClasses(BeanDefinition<?> definition) {
+        return getNonDeferredDependencyClasses(definition);
     }
 
     /**
@@ -1556,7 +1672,7 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
      * Deferred dependencies (field/setter with @Lazy) are omitted and will be injected later.
      * 
      * @param definition the bean definition
-     * @return array of resolved non-deferred dependencies
+     * @return array of resolved non-deferred dependencies (only constructor args, no null placeholders)
      */
     private Object[] resolveNonDeferredDependencies(BeanDefinition<?> definition) {
         // Cache dependencies() accessor to avoid multiple invocations (record/class accessor call is not free)
@@ -1567,14 +1683,27 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
             return EMPTY_ARGS;
         }
         
-        Object[] deps = new Object[dependencies.length];
+        // Count non-deferred dependencies first to size the array correctly
+        int nonDeferredCount = 0;
+        for (int i = 0; i < dependencies.length; i++) {
+            if (!definition.isDeferredDependency(i)) {
+                nonDeferredCount++;
+            }
+        }
+        
+        // Return empty array if all dependencies are deferred
+        if (nonDeferredCount == 0) {
+            return EMPTY_ARGS;
+        }
+        
+        Object[] deps = new Object[nonDeferredCount];
+        int depIndex = 0;
         int[] depIndices = definition.dependencyIndices();
         
         for (int i = 0; i < dependencies.length; i++) {
             // Skip deferred dependencies (marked as @Lazy on field/setter)
             // These will be injected after the bean is constructed and published
             if (definition.isDeferredDependency(i)) {
-                deps[i] = null; // Placeholder, will be filled later
                 continue;
             }
             
@@ -1594,13 +1723,13 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
                 if (cachedIdx >= 0) {
                     Object indexedInstance = registry.getIfPresent(cachedIdx);
                     if (indexedInstance != null) {
-                        deps[i] = indexedInstance;
+                        deps[depIndex++] = indexedInstance;
                         continue;
                     }
                 }
                 
                 // Fallback: resolve by name (handles prototypes, not-yet-cached, or forward references)
-                deps[i] = resolveByName(depName);
+                deps[depIndex++] = resolveByName(depName);
             } else if (dep instanceof ValueDependency valueDep) {
                 // Resolve configuration value via PropertyResolver
                 if (propertyResolver == null) {
@@ -1609,10 +1738,10 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
                         definition.name() + "'. Use Warmup.builder().propertySource(...) to configure."
                     );
                 }
-                deps[i] = resolveValueDependency(valueDep);
+                deps[depIndex++] = resolveValueDependency(valueDep);
             } else {
                 // Direct object reference (not a bean name)
-                deps[i] = dep;
+                deps[depIndex++] = dep;
             }
         }
         return deps;
@@ -1760,11 +1889,14 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
 
     @SuppressWarnings("unchecked")
     private <T> T createViaReflection(BeanDefinition<T> definition) {
+        return createViaReflection(definition, resolveDependencies(definition));
+    }
+    
+    @SuppressWarnings("unchecked")
+    private <T> T createViaReflection(BeanDefinition<T> definition, Object[] args) {
         // Fallback implementation for native image or when JIT is unavailable
         // Resolves dependencies and invokes the appropriate constructor
         try {
-            Object[] args = resolveDependencies(definition);
-            
             // Validate no null dependencies before proceeding
             for (int i = 0; i < args.length; i++) {
                 if (args[i] == null) {
