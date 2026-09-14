@@ -22,8 +22,11 @@ jobs:
         distribution: 'temurin'
         cache: maven
 
-    - name: Build project and benchmarks JAR
-      run: mvn -B package -DskipTests -pl warmup-benchmarks -am
+    - name: Install base modules to local Maven repository
+      run: mvn -B -DskipTests install -pl warmup-core,warmup-processor -am
+
+    - name: Build benchmarks JAR
+      run: mvn -B -DskipTests package -pl warmup-benchmarks
 
     - name: Run All Benchmarks
       run: |
