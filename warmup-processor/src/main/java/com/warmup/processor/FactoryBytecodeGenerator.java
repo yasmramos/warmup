@@ -1,6 +1,7 @@
 package com.warmup.processor;
 
 import com.warmup.annotations.Inject;
+import com.warmup.annotations.Lazy;
 import org.objectweb.asm.*;
 
 import javax.lang.model.element.*;
@@ -90,13 +91,41 @@ public class FactoryBytecodeGenerator {
         // Collect all dependencies: constructor params + @Inject fields + @Inject method params
         List<? extends VariableElement> constructorParams = constructor != null ? constructor.getParameters() : new ArrayList<>();
         
-        // Count total method parameters for dependency counting
-        int methodParamCount = 0;
-        for (ExecutableElement method : injectMethods) {
-            methodParamCount += method.getParameters().size();
+        // Separate lazy and non-lazy field injections
+        List<VariableElement> nonLazyFields = new ArrayList<>();
+        List<VariableElement> lazyFields = new ArrayList<>();
+        for (VariableElement field : injectFields) {
+            if (field.getAnnotation(Lazy.class) != null) {
+                lazyFields.add(field);
+            } else {
+                nonLazyFields.add(field);
+            }
         }
         
-        int totalDeps = constructorParams.size() + injectFields.size() + methodParamCount;
+        // Separate lazy and non-lazy method injections
+        List<ExecutableElement> nonLazyMethods = new ArrayList<>();
+        List<ExecutableElement> lazyMethods = new ArrayList<>();
+        for (ExecutableElement method : injectMethods) {
+            if (method.getAnnotation(Lazy.class) != null) {
+                lazyMethods.add(method);
+            } else {
+                nonLazyMethods.add(method);
+            }
+        }
+        
+        // Count total method parameters for dependency counting (all deps, including lazy)
+        int nonLazyMethodParamCount = 0;
+        for (ExecutableElement method : nonLazyMethods) {
+            nonLazyMethodParamCount += method.getParameters().size();
+        }
+        int lazyMethodParamCount = 0;
+        for (ExecutableElement method : lazyMethods) {
+            lazyMethodParamCount += method.getParameters().size();
+        }
+        
+        int totalDeps = constructorParams.size() + nonLazyFields.size() + nonLazyMethodParamCount + lazyFields.size() + lazyMethodParamCount;
+        int nonLazyDeps = constructorParams.size() + nonLazyFields.size() + nonLazyMethodParamCount;
+        int lazyDeps = lazyFields.size() + lazyMethodParamCount;
 
         // Declare fields for wired dependencies (dep0, dep1, ...)
         for (int i = 0; i < totalDeps; i++) {
@@ -175,11 +204,12 @@ public class FactoryBytecodeGenerator {
         // Invoke constructor
         gv.visitMethodInsn(Opcodes.INVOKESPECIAL, beanInternalName, "<init>", constructorDescriptor, false);
 
-        // Inject @Inject fields from remaining wired dependencies
-        for (int i = 0; i < injectFields.size(); i++) {
-            VariableElement field = injectFields.get(i);
+        // Inject @Inject fields from non-lazy wired dependencies only
+        int currentFieldIndex = constructorParams.size();
+        for (int i = 0; i < nonLazyFields.size(); i++) {
+            VariableElement field = nonLazyFields.get(i);
             String fieldName = field.getSimpleName().toString();
-            int fieldIndex = constructorParams.size() + i;
+            int fieldIndex = currentFieldIndex + i;
 
             // Load instance (already on stack after constructor call)
             gv.visitInsn(Opcodes.DUP);
@@ -200,9 +230,9 @@ public class FactoryBytecodeGenerator {
             gv.visitFieldInsn(Opcodes.PUTFIELD, beanInternalName, fieldName, fieldDescriptor);
         }
 
-        // Invoke @Inject methods after field injection
-        int methodParamStartIndex = constructorParams.size() + injectFields.size();
-        for (ExecutableElement method : injectMethods) {
+        // Invoke @Inject methods (non-lazy only) after field injection
+        int methodParamStartIndex = constructorParams.size() + nonLazyFields.size();
+        for (ExecutableElement method : nonLazyMethods) {
             String methodName = method.getSimpleName().toString();
             List<? extends VariableElement> methodParams = method.getParameters();
             
@@ -341,6 +371,88 @@ public class FactoryBytecodeGenerator {
         mv.visitInsn(Opcodes.ARETURN);
         mv.visitMaxs(2 + constructorParams.size(), 2);
         mv.visitEnd();
+
+        // injectDeferred method: public void injectDeferred(Object instance, Object... deferredDependencies)
+        // Only generate this method if there are lazy dependencies
+        if (lazyDeps > 0) {
+            MethodVisitor idv = cw.visitMethod(Opcodes.ACC_PUBLIC, "injectDeferred",
+                    "(Ljava/lang/Object;[Ljava/lang/Object;)V",
+                    null, null);
+            idv.visitCode();
+            
+            // Cast instance to bean type
+            idv.visitVarInsn(Opcodes.ALOAD, 1);
+            idv.visitTypeInsn(Opcodes.CHECKCAST, beanInternalName);
+            
+            // Inject lazy fields from deferred dependencies array
+            int lazyFieldIndex = 0;
+            for (int i = 0; i < lazyFields.size(); i++) {
+                VariableElement field = lazyFields.get(i);
+                String fieldName = field.getSimpleName().toString();
+                
+                // Load instance (already on stack after cast)
+                idv.visitInsn(Opcodes.DUP);
+                // Load deferredDependencies array
+                idv.visitVarInsn(Opcodes.ALOAD, 2);
+                // Push index
+                idv.visitLdcInsn(lazyFieldIndex);
+                // Load element: deferredDependencies[lazyFieldIndex]
+                idv.visitInsn(Opcodes.AALOAD);
+                // Cast to field type
+                TypeMirror fieldType = field.asType();
+                String fieldInternalName = getInternalName(fieldType);
+                idv.visitTypeInsn(Opcodes.CHECKCAST, fieldInternalName);
+                // Put field: instance.fieldName = value
+                String fieldDescriptor = getDescriptor(fieldType);
+                idv.visitFieldInsn(Opcodes.PUTFIELD, beanInternalName, fieldName, fieldDescriptor);
+                
+                lazyFieldIndex++;
+            }
+            
+            // Invoke lazy @Inject methods after field injection
+            int lazyMethodParamStartIndex = lazyFields.size();
+            for (ExecutableElement method : lazyMethods) {
+                String methodName = method.getSimpleName().toString();
+                List<? extends VariableElement> methodParams = method.getParameters();
+                
+                // Build method descriptor
+                StringBuilder methodDescBuilder = new StringBuilder("(");
+                for (VariableElement param : methodParams) {
+                    methodDescBuilder.append(getDescriptor(param.asType()));
+                }
+                methodDescBuilder.append(")V");
+                String methodDescriptor = methodDescBuilder.toString();
+                
+                // Load instance (already on stack)
+                idv.visitInsn(Opcodes.DUP);
+                
+                // Push method arguments from deferred dependencies array
+                int currentParamIndex = lazyMethodParamStartIndex;
+                for (VariableElement param : methodParams) {
+                    // Load deferredDependencies array
+                    idv.visitVarInsn(Opcodes.ALOAD, 2);
+                    // Push index
+                    idv.visitLdcInsn(currentParamIndex);
+                    // Load element: deferredDependencies[currentParamIndex]
+                    idv.visitInsn(Opcodes.AALOAD);
+                    // Cast to parameter type
+                    TypeMirror paramType = param.asType();
+                    String paramInternalName = getInternalName(paramType);
+                    idv.visitTypeInsn(Opcodes.CHECKCAST, paramInternalName);
+                    currentParamIndex++;
+                }
+                
+                // Invoke the inject method
+                idv.visitMethodInsn(Opcodes.INVOKEVIRTUAL, beanInternalName, methodName, methodDescriptor, false);
+                
+                // Update start index for next method
+                lazyMethodParamStartIndex += methodParams.size();
+            }
+            
+            idv.visitInsn(Opcodes.RETURN);
+            idv.visitMaxs(3, 3);
+            idv.visitEnd();
+        }
 
         // getBeanType method
         mv = cw.visitMethod(Opcodes.ACC_PUBLIC, "getBeanType",

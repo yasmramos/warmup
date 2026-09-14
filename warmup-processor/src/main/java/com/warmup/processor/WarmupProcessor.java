@@ -844,9 +844,8 @@ public class WarmupProcessor extends AbstractProcessor {
             // e.g., com.warmup.test.Outer$Inner -> Outer$Inner$$WarmupFactory
             // The factory class will be in the same package as the outer class
             className = binaryName.substring(packageName.isEmpty() ? 0 : packageName.length() + 1);
-            // Replace $ with _ for the simple class name to avoid issues with file creation
-            // But keep the full binary name structure for the factory class reference
-            factorySimpleClassName = className.replace('$', '_') + "$$WarmupFactory";
+            // Keep $ in the simple class name - Filer accepts $ in resource names
+            factorySimpleClassName = className + "$$WarmupFactory";
             factoryFullClassName = packageName.isEmpty() ? factorySimpleClassName : packageName + "." + factorySimpleClassName;
         } else {
             className = beanClass.getSimpleName().toString();
