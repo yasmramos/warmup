@@ -499,6 +499,11 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
         if (factory != null) {
             factoryCache.put(definition.name(), factory);
             compileTimeFactoryNames.add(definition.name());
+            // Mark as compile-time so the container uses the factory instead of JIT/reflection
+            ResolvedBeanDefinition<?> resolvedDef = registry.getResolvedOrNull(definition.name());
+            if (resolvedDef != null) {
+                resolvedDef.setCompileTime(true);
+            }
         }
         
         // Register in dependency graph with deferrable dependency info
@@ -1242,6 +1247,11 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
         
         factoryCache.put(name, factory);
         compileTimeFactoryNames.add(name);
+        // Mark as compile-time so the container uses the factory instead of JIT/reflection
+        ResolvedBeanDefinition<?> resolvedDef = registry.getResolvedOrNull(name);
+        if (resolvedDef != null) {
+            resolvedDef.setCompileTime(true);
+        }
     }
 
     /**
@@ -1275,6 +1285,11 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
         
         factoryCache.put(beanName, factory);
         compileTimeFactoryNames.add(beanName);
+        // Mark as compile-time so the container uses the factory instead of JIT/reflection
+        ResolvedBeanDefinition<?> resolvedDef = registry.getResolvedOrNull(beanName);
+        if (resolvedDef != null) {
+            resolvedDef.setCompileTime(true);
+        }
     }
 
     /**
