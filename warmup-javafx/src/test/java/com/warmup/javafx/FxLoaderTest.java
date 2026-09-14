@@ -23,7 +23,7 @@ class FxLoaderTest {
 
     @BeforeEach
     void setUp() {
-        warmup = Warmup.create();
+        warmup = Warmup.builder().build();
         fxLoader = new FxLoader(warmup, false);
     }
 

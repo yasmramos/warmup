@@ -108,6 +108,9 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
      */
     private final boolean metricsEnabled;
     
+    // Flag to track if container is still initializing (used to skip metrics during internal resolutions)
+    private volatile boolean initializing = true;
+    
     // Background warmup executor with semaphore for backpressure
     // Lazily initialized to avoid allocation when not using dynamic registration
     private volatile ExecutorService warmupExecutor;
@@ -307,6 +310,9 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
         
         // Third pass: scan beans for @EventListener methods and register them
         registerEventListeners();
+        
+        // Initialization complete: reset flag so metrics start counting user resolutions
+        initializing = false;
     }
     
     /**
@@ -569,45 +575,24 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
         // OPTIMIZATION 1: For PROTOTYPE beans, skip singleton cache lookup entirely
         // since prototypes are never cached. This avoids unnecessary ConcurrentHashMap.get()
         if (resolvedDef.scope() == Scope.PROTOTYPE) {
-            if (metricsEnabled) {
-                long startTime = System.nanoTime();
-                CompiledFactory<T> factory = resolvedDef.getOrComputeFactory(factoryCache);
-                T instance;
-                if (factory != null) {
-                    // Use optimized path for prototypes: skip diagnostic overhead in hot path
-                    instance = createPrototypeBeanWithFactory(resolvedDef, factory);
-                } else {
-                    instance = createViaReflection(resolvedDef);
-                }
-                if (resolvedDef.lifecycle().onInit() != null) {
-                    resolvedDef.lifecycle().onInit().onInit(instance);
-                }
-                recordMetrics(resolvedDef.getDefinition(), System.nanoTime() - startTime);
-                return instance;
+            CompiledFactory<T> factory = resolvedDef.getOrComputeFactory(factoryCache);
+            T instance;
+            if (factory != null) {
+                // Use optimized path for prototypes: skip diagnostic overhead in hot path
+                instance = createPrototypeBeanWithFactory(resolvedDef, factory);
             } else {
-                CompiledFactory<T> factory = resolvedDef.getOrComputeFactory(factoryCache);
-                T instance;
-                if (factory != null) {
-                    // Use optimized path for prototypes: skip all overhead
-                    instance = createPrototypeBeanWithFactory(resolvedDef, factory);
-                } else {
-                    instance = createViaReflection(resolvedDef);
-                }
-                if (resolvedDef.lifecycle().onInit() != null) {
-                    resolvedDef.lifecycle().onInit().onInit(instance);
-                }
-                return instance;
+                instance = createViaReflection(resolvedDef);
             }
+            if (resolvedDef.lifecycle().onInit() != null) {
+                resolvedDef.lifecycle().onInit().onInit(instance);
+            }
+            return instance;
         }
         
         // OPTIMIZATION 2: Fast-path for SINGLETON/CUSTOM with cached instance
         // Skip index lookup and Map.get() if instance is already cached in ResolvedBeanDefinition
         T cachedInstance = resolvedDef.getCachedInstance();
         if (cachedInstance != null) {
-            if (metricsEnabled) {
-                long startTime = System.nanoTime();
-                recordMetrics(resolvedDef.getDefinition(), System.nanoTime() - startTime);
-            }
             return cachedInstance;
         }
         
@@ -617,10 +602,6 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
             // Try fast indexed resolution first (avoids String hashing)
             T indexedInstance = (T) registry.getIfPresent(index);
             if (indexedInstance != null) {
-                if (metricsEnabled) {
-                    long startTime = System.nanoTime();
-                    recordMetrics(resolvedDef.getDefinition(), System.nanoTime() - startTime);
-                }
                 return indexedInstance;
             }
         }
@@ -628,49 +609,27 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
         // Fall back to name-based lookup for singletons not yet cached
         T nameBasedInstance = registry.getIfPresent(name);
         if (nameBasedInstance != null) {
-            if (metricsEnabled) {
-                long startTime = System.nanoTime();
-                recordMetrics(resolvedDef.getDefinition(), System.nanoTime() - startTime);
-            }
             return nameBasedInstance;
         }
         
         // Singleton not yet created, use registry.getInstance for thread-safe lazy init
-        if (metricsEnabled) {
-            long startTime = System.nanoTime();
-            // Use CompiledFactory directly to avoid Supplier lambda allocation
-            CompiledFactory<T> factory = resolvedDef.getOrComputeFactory(factoryCache);
-            T instance;
-            if (factory != null && resolvedDef.isWired()) {
-                // Wired factory: use factory.get() path without Object[] allocation
-                instance = registry.getInstance(resolvedDef.getDefinition(), factory);
-            } else {
-                // Non-wired or no factory: fall back to createBean lambda
-                instance = registry.getInstance(resolvedDef.getDefinition(), () -> createBean(resolvedDef));
-            }
-            // Publish the created instance for fast-path on subsequent resolutions
-            resolvedDef.setCachedInstance(instance);
-            // Also populate the indexed array for fast indexed resolution
-            if (registry instanceof BeanRegistryImpl impl) {
-                impl.setInstanceByIndex(resolvedDef.getIndex(), instance);
-            }
-            recordMetrics(resolvedDef.getDefinition(), System.nanoTime() - startTime);
-            return instance;
+        // Use CompiledFactory directly to avoid Supplier lambda allocation
+        CompiledFactory<T> factory = resolvedDef.getOrComputeFactory(factoryCache);
+        T instance;
+        if (factory != null && resolvedDef.isWired()) {
+            // Wired factory: use factory.get() path without Object[] allocation
+            instance = registry.getInstance(resolvedDef.getDefinition(), factory);
         } else {
-            // Use CompiledFactory directly to avoid Supplier lambda allocation
-            CompiledFactory<T> factory = resolvedDef.getOrComputeFactory(factoryCache);
-            T instance;
-            if (factory != null && resolvedDef.isWired()) {
-                // Wired factory: use factory.get() path without Object[] allocation
-                instance = registry.getInstance(resolvedDef.getDefinition(), factory);
-            } else {
-                // Non-wired or no factory: fall back to createBean lambda
-                instance = registry.getInstance(resolvedDef.getDefinition(), () -> createBean(resolvedDef));
-            }
-            // Publish the created instance for fast-path on subsequent resolutions
-            resolvedDef.setCachedInstance(instance);
-            return instance;
+            // Non-wired or no factory: fall back to createBean lambda
+            instance = registry.getInstance(resolvedDef.getDefinition(), () -> createBean(resolvedDef));
         }
+        // Publish the created instance for fast-path on subsequent resolutions
+        resolvedDef.setCachedInstance(instance);
+        // Also populate the indexed array for fast indexed resolution
+        if (registry instanceof BeanRegistryImpl impl) {
+            impl.setInstanceByIndex(resolvedDef.getIndex(), instance);
+        }
+        return instance;
     }
 
     /**
@@ -684,7 +643,18 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
      */
     @SuppressWarnings("unchecked")
     public <T> T resolve(String name) {
-        return resolveByName(name);
+        long startTime = 0L;
+        if (metricsEnabled) {
+            startTime = System.nanoTime();
+        }
+        T result = resolveByName(name);
+        if (metricsEnabled) {
+            ResolvedBeanDefinition<T> resolvedDef = registry.getResolvedOrNull(name);
+            if (resolvedDef != null) {
+                recordMetrics(resolvedDef.getDefinition(), System.nanoTime() - startTime);
+            }
+        }
+        return result;
     }
 
     /**
@@ -697,6 +667,11 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
      * @return the resolved bean instance
      */
     public <T> T resolve(Class<T> type) {
+        long startTime = 0L;
+        if (metricsEnabled) {
+            startTime = System.nanoTime();
+        }
+        
         // Fast path: use ClassValue.get() which retrieves cached result from JVM class metadata
         // This executes computeValue only once per type, then provides O(1) access
         @SuppressWarnings("unchecked")
@@ -724,7 +699,6 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
         T cachedInstance = resolvedDef.getCachedInstance();
         if (cachedInstance != null && !resolvedDef.isPrototype()) {
             if (metricsEnabled) {
-                long startTime = System.nanoTime();
                 recordMetrics(resolvedDef.getDefinition(), System.nanoTime() - startTime);
             }
             return cachedInstance;
@@ -732,57 +706,41 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
         
         // Use the cached resolved definition to resolve the bean
         // (delegation still needed for prototypes and first creation)
-        return resolve(resolvedDef);
+        T result = resolve(resolvedDef);
+        if (metricsEnabled) {
+            recordMetrics(resolvedDef.getDefinition(), System.nanoTime() - startTime);
+        }
+        return result;
     }
 
     /**
      * Internal method to resolve a bean using a pre-resolved definition.
      * This avoids double lookup and is used by resolve(Class) after caching.
+     * Note: This method does NOT record metrics; callers are responsible for metrics.
      */
     @SuppressWarnings("unchecked")
     private <T> T resolve(ResolvedBeanDefinition<T> resolvedDef) {
         // OPTIMIZATION 1: For PROTOTYPE beans, skip singleton cache lookup entirely
         // since prototypes are never cached. This avoids unnecessary ConcurrentHashMap.get()
         if (resolvedDef.isPrototype()) {
-            if (metricsEnabled) {
-                long startTime = System.nanoTime();
-                CompiledFactory<T> factory = resolvedDef.getOrComputeFactory(factoryCache);
-                T instance;
-                if (factory != null) {
-                    // Use optimized path for prototypes: skip diagnostic overhead in hot path
-                    instance = createPrototypeBeanWithFactory(resolvedDef, factory);
-                } else {
-                    instance = createViaReflection(resolvedDef);
-                }
-                if (resolvedDef.lifecycle().onInit() != null) {
-                    resolvedDef.lifecycle().onInit().onInit(instance);
-                }
-                recordMetrics(resolvedDef.getDefinition(), System.nanoTime() - startTime);
-                return instance;
+            CompiledFactory<T> factory = resolvedDef.getOrComputeFactory(factoryCache);
+            T instance;
+            if (factory != null) {
+                // Use optimized path for prototypes: skip diagnostic overhead in hot path
+                instance = createPrototypeBeanWithFactory(resolvedDef, factory);
             } else {
-                CompiledFactory<T> factory = resolvedDef.getOrComputeFactory(factoryCache);
-                T instance;
-                if (factory != null) {
-                    // Use optimized path for prototypes: skip all overhead
-                    instance = createPrototypeBeanWithFactory(resolvedDef, factory);
-                } else {
-                    instance = createViaReflection(resolvedDef);
-                }
-                if (resolvedDef.lifecycle().onInit() != null) {
-                    resolvedDef.lifecycle().onInit().onInit(instance);
-                }
-                return instance;
+                instance = createViaReflection(resolvedDef);
             }
+            if (resolvedDef.lifecycle().onInit() != null) {
+                resolvedDef.lifecycle().onInit().onInit(instance);
+            }
+            return instance;
         }
         
         // OPTIMIZATION 2: Fast-path for SINGLETON/CUSTOM with cached instance
         // Skip index lookup and Map.get() if instance is already cached in ResolvedBeanDefinition
         T cachedInstance = resolvedDef.getCachedInstance();
         if (cachedInstance != null) {
-            if (metricsEnabled) {
-                long startTime = System.nanoTime();
-                recordMetrics(resolvedDef.getDefinition(), System.nanoTime() - startTime);
-            }
             return cachedInstance;
         }
         
@@ -792,10 +750,6 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
             // Try fast indexed resolution first (avoids String hashing)
             T indexedInstance = (T) registry.getIfPresent(index);
             if (indexedInstance != null) {
-                if (metricsEnabled) {
-                    long startTime = System.nanoTime();
-                    recordMetrics(resolvedDef.getDefinition(), System.nanoTime() - startTime);
-                }
                 return indexedInstance;
             }
         }
@@ -804,45 +758,23 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
         String name = resolvedDef.name();
         T nameBasedInstance = registry.getIfPresent(name);
         if (nameBasedInstance != null) {
-            if (metricsEnabled) {
-                long startTime = System.nanoTime();
-                recordMetrics(resolvedDef.getDefinition(), System.nanoTime() - startTime);
-            }
             return nameBasedInstance;
         }
         
         // Singleton not yet created, use registry.getInstance for thread-safe lazy init
-        if (metricsEnabled) {
-            long startTime = System.nanoTime();
-            // Use CompiledFactory directly to avoid Supplier lambda allocation
-            CompiledFactory<T> factory = resolvedDef.getOrComputeFactory(factoryCache);
-            T instance;
-            if (factory != null && resolvedDef.isWired()) {
-                // Wired factory: use factory.get() path without Object[] allocation
-                instance = registry.getInstance(resolvedDef.getDefinition(), factory);
-            } else {
-                // Non-wired or no factory: fall back to createBean lambda
-                instance = registry.getInstance(resolvedDef.getDefinition(), () -> createBean(resolvedDef));
-            }
-            // Publish the created instance for fast-path on subsequent resolutions
-            resolvedDef.setCachedInstance(instance);
-            recordMetrics(resolvedDef.getDefinition(), System.nanoTime() - startTime);
-            return instance;
+        // Use CompiledFactory directly to avoid Supplier lambda allocation
+        CompiledFactory<T> factory = resolvedDef.getOrComputeFactory(factoryCache);
+        T instance;
+        if (factory != null && resolvedDef.isWired()) {
+            // Wired factory: use factory.get() path without Object[] allocation
+            instance = registry.getInstance(resolvedDef.getDefinition(), factory);
         } else {
-            // Use CompiledFactory directly to avoid Supplier lambda allocation
-            CompiledFactory<T> factory = resolvedDef.getOrComputeFactory(factoryCache);
-            T instance;
-            if (factory != null && resolvedDef.isWired()) {
-                // Wired factory: use factory.get() path without Object[] allocation
-                instance = registry.getInstance(resolvedDef.getDefinition(), factory);
-            } else {
-                // Non-wired or no factory: fall back to createBean lambda
-                instance = registry.getInstance(resolvedDef.getDefinition(), () -> createBean(resolvedDef));
-            }
-            // Publish the created instance for fast-path on subsequent resolutions
-            resolvedDef.setCachedInstance(instance);
-            return instance;
+            // Non-wired or no factory: fall back to createBean lambda
+            instance = registry.getInstance(resolvedDef.getDefinition(), () -> createBean(resolvedDef));
         }
+        // Publish the created instance for fast-path on subsequent resolutions
+        resolvedDef.setCachedInstance(instance);
+        return instance;
     }
 
     /**
@@ -1841,6 +1773,10 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
     }
 
     private void recordMetrics(BeanDefinition<?> definition, long resolutionTimeNs) {
+        // Skip metrics recording during container initialization to avoid counting internal resolutions
+        if (initializing) {
+            return;
+        }
         totalResolutions.add(1);
         resolutionTimeAccumulator.add(resolutionTimeNs);
     }

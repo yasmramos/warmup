@@ -32,7 +32,7 @@ import java.util.concurrent.TimeUnit;
  * <p>Scenarios: 10, 100, 1000 beans</p>
  * 
  * <p>Note: This benchmark uses explicit HybridContainer construction to measure
- * raw startup performance. For production usage, prefer Warmup.create().</p>
+ * raw startup performance. For production usage, prefer Warmup.builder().build().</p>
  * 
  * @see AvajeStartupBenchmark for Avaje Inject startup comparison
  */
@@ -72,7 +72,7 @@ public class StartupBenchmark {
     @Benchmark
     public HybridContainer startupWithBeansDynamic(Blackhole blackhole) {
         // Using explicit constructor for benchmark measurement
-        // In production, use: com.warmup.core.Warmup warmup = com.warmup.core.Warmup.create();
+        // In production, use: com.warmup.core.Warmup warmup = com.warmup.core.Warmup.builder().build();
         AsmJITCompiler jitCompiler = new AsmJITCompiler();
         HybridContainerConfig config = new HybridContainerConfig.Builder().build();
         HybridContainer container = new HybridContainer(config, jitCompiler);
