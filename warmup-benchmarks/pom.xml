@@ -92,6 +92,11 @@
                         </path>
                         <path>
                             <groupId>com.warmup</groupId>
+                            <artifactId>warmup-core</artifactId>
+                            <version>${project.version}</version>
+                        </path>
+                        <path>
+                            <groupId>com.warmup</groupId>
                             <artifactId>warmup-processor</artifactId>
                             <version>${project.version}</version>
                         </path>
