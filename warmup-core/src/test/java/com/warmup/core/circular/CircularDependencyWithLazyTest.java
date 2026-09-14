@@ -24,6 +24,7 @@ class CircularDependencyWithLazyTest {
      * Registers beans with proper deferred dependency metadata to allow cycle breaking.
      * Uses reflection to detect @Lazy fields and setters to mark dependencies as deferrable.
      * Also detects @Inject constructors for constructor dependencies.
+     * Detects @PostConstruct methods and creates appropriate LifecycleCallbacks.
      */
     private void registerBeansForCircularTest(Warmup warmup, Class<?>... beanClasses) {
         for (Class<?> beanClass : beanClasses) {
@@ -116,11 +117,31 @@ class CircularDependencyWithLazyTest {
                 }
             }
             
-            BeanDefinition<?> definition = new BeanDefinition<>(
-                beanClass,
+            // Detect @PostConstruct method and create appropriate LifecycleCallbacks
+            @SuppressWarnings("unchecked")
+            LifecycleCallbacks<Object> lifecycleCallbacks = (LifecycleCallbacks<Object>) (Object) LifecycleCallbacks.empty();
+            
+            for (java.lang.reflect.Method method : methods) {
+                if (method.isAnnotationPresent(com.warmup.annotations.PostConstruct.class) && 
+                    method.getParameterCount() == 0) {
+                    lifecycleCallbacks = LifecycleCallbacks.initOnly((Object instance) -> {
+                        try {
+                            method.setAccessible(true);
+                            method.invoke(instance);
+                        } catch (Exception e) {
+                            throw new RuntimeException("Failed to invoke @PostConstruct method", e);
+                        }
+                    });
+                    break;
+                }
+            }
+            
+            @SuppressWarnings("unchecked")
+            BeanDefinition<Object> definition = new BeanDefinition<>(
+                (Class<Object>) beanClass,
                 beanClass.getName(), // Use fully qualified name as bean name
                 Scope.SINGLETON,
-                com.warmup.core.lifecycle.LifecycleCallbacks.empty(),
+                lifecycleCallbacks,
                 false,
                 dependencies,
                 new String[0], // profiles
@@ -207,12 +228,9 @@ class CircularDependencyWithLazyTest {
     void testConstructorOnlyCircularDependencyFails() {
         Warmup warmup = Warmup.builder().build();
         
-        // Register beans manually since container doesn't scan classpath
-        registerBeansForCircularTest(warmup, ConstructorA.class, ConstructorB.class);
-        
-        // This should fail because both dependencies are via constructor
-        assertThrows(RuntimeException.class, () -> {
-            warmup.resolve(ConstructorA.class);
+        // This should fail during registration because both dependencies are via constructor
+        assertThrows(com.warmup.core.graph.CircularDependencyException.class, () -> {
+            registerBeansForCircularTest(warmup, ConstructorA.class, ConstructorB.class);
         });
     }
 
