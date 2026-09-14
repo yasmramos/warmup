@@ -23,7 +23,7 @@ import javafx.stage.Stage;
  * }
  * </pre>
  * 
- * Note: The default implementation uses Warmup.create() for simple setup.
+ * Note: The default implementation uses Warmup.builder().build() for simple setup.
  * Override createWarmup() for custom configuration using Warmup.builder().
  */
 public abstract class WarmupApplication extends Application {
@@ -82,9 +82,9 @@ public abstract class WarmupApplication extends Application {
      * @return configured Warmup instance
      */
     protected Warmup createWarmup() {
-        // Default: use Warmup.create() for simple setup
+        // Default: use Warmup.builder().build() for simple setup
         // ASM is now embedded in core, so no explicit JIT compiler construction needed
-        return Warmup.create();
+        return Warmup.builder().build();
     }
 
     /**

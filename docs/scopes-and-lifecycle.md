@@ -38,7 +38,7 @@ public class DatabaseConnection {
 **Example:**
 
 ```java
-Warmup warmup = Warmup.create();
+Warmup warmup = Warmup.builder().build();
 
 DatabaseConnection conn1 = warmup.resolve(DatabaseConnection.class);
 DatabaseConnection conn2 = warmup.resolve(DatabaseConnection.class);
@@ -78,7 +78,7 @@ public class RequestHandler {
 **Example:**
 
 ```java
-Warmup warmup = Warmup.create();
+Warmup warmup = Warmup.builder().build();
 
 RequestHandler handler1 = warmup.resolve(RequestHandler.class);
 RequestHandler handler2 = warmup.resolve(RequestHandler.class);
@@ -196,12 +196,12 @@ public class DatabaseConnection {
 
 ```java
 // Explicit shutdown
-Warmup warmup = Warmup.create();
+Warmup warmup = Warmup.builder().build();
 // ... use container
 warmup.shutdown();  // @PreDestroy called here
 
 // Or try-with-resources
-try (Warmup warmup = Warmup.create()) {
+try (Warmup warmup = Warmup.builder().build()) {
     // ... use container
 }  // @PreDestroy called automatically
 ```
@@ -432,7 +432,7 @@ public class RequestHandler {
 ```java
 @Test
 void testPostConstructCalled() {
-    Warmup warmup = Warmup.create();
+    Warmup warmup = Warmup.builder().build();
     
     TestBean bean = warmup.resolve(TestBean.class);
     
@@ -442,7 +442,7 @@ void testPostConstructCalled() {
 
 @Test
 void testPreDestroyCalled() {
-    Warmup warmup = Warmup.create();
+    Warmup warmup = Warmup.builder().build();
     
     TestBean bean = warmup.resolve(TestBean.class);
     warmup.shutdown();
@@ -452,7 +452,7 @@ void testPreDestroyCalled() {
 
 @Test
 void testPrototypeNotDestroyed() {
-    Warmup warmup = Warmup.create();
+    Warmup warmup = Warmup.builder().build();
     
     PrototypeBean bean = warmup.resolve(PrototypeBean.class);
     warmup.shutdown();

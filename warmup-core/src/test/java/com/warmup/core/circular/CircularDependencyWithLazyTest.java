@@ -4,9 +4,10 @@ import com.warmup.annotations.Component;
 import com.warmup.annotations.Inject;
 import com.warmup.annotations.Lazy;
 import com.warmup.annotations.PostConstruct;
-import com.warmup.asm.AsmJITCompiler;
 import com.warmup.core.Warmup;
-import com.warmup.core.jit.JITCompiler;
+import com.warmup.core.lifecycle.LifecycleCallbacks;
+import com.warmup.core.registry.BeanDefinition;
+import com.warmup.core.scope.Scope;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -18,11 +19,113 @@ import static org.junit.jupiter.api.Assertions.*;
  */
 class CircularDependencyWithLazyTest {
 
-    private JITCompiler jitCompiler = new AsmJITCompiler();
+    /**
+     * Helper method to register all beans needed for circular dependency tests.
+     * Registers beans with proper deferred dependency metadata to allow cycle breaking.
+     * Uses reflection to detect @Lazy fields and setters to mark dependencies as deferrable.
+     * Also detects @Inject constructors for constructor dependencies.
+     */
+    private void registerBeansForCircularTest(Warmup warmup, Class<?>... beanClasses) {
+        for (Class<?> beanClass : beanClasses) {
+            // Use reflection to detect @Lazy fields, setters, and constructor injection
+            java.lang.reflect.Field[] fields = beanClass.getDeclaredFields();
+            java.lang.reflect.Method[] methods = beanClass.getDeclaredMethods();
+            java.lang.reflect.Constructor<?>[] constructors = beanClass.getDeclaredConstructors();
+            
+            int fieldCount = 0;
+            int setterCount = 0;
+            int constructorParamCount = 0;
+            
+            // Count @Inject fields
+            for (java.lang.reflect.Field field : fields) {
+                if (field.isAnnotationPresent(com.warmup.annotations.Inject.class)) {
+                    fieldCount++;
+                }
+            }
+            
+            // Count @Inject setter methods
+            for (java.lang.reflect.Method method : methods) {
+                if (method.isAnnotationPresent(com.warmup.annotations.Inject.class) && 
+                    method.getName().startsWith("set") && method.getParameterCount() == 1) {
+                    setterCount++;
+                }
+            }
+            
+            // Find @Inject constructor and count params
+            java.lang.reflect.Constructor<?> injectConstructor = null;
+            for (java.lang.reflect.Constructor<?> constructor : constructors) {
+                if (constructor.isAnnotationPresent(com.warmup.annotations.Inject.class)) {
+                    injectConstructor = constructor;
+                    constructorParamCount = constructor.getParameterCount();
+                    break;
+                }
+            }
+            
+            // Total dependencies = constructor params + field injections + setter injections
+            int totalDeps = constructorParamCount + fieldCount + setterCount;
+            boolean[] deferredDeps = new boolean[totalDeps];
+            boolean[] fieldOrSetterDeps = new boolean[totalDeps];
+            Object[] dependencies = new Object[totalDeps];
+            
+            int idx = 0;
+            
+            // Process constructor dependencies first (NOT deferrable, NOT field/setter)
+            if (injectConstructor != null) {
+                Class<?>[] paramTypes = injectConstructor.getParameterTypes();
+                for (int i = 0; i < paramTypes.length; i++) {
+                    deferredDeps[idx] = false; // Constructor deps are never lazy
+                    fieldOrSetterDeps[idx] = false; // Constructor dep
+                    dependencies[idx] = paramTypes[i].getSimpleName();
+                    idx++;
+                }
+            }
+            
+            // Process fields
+            for (java.lang.reflect.Field field : fields) {
+                if (field.isAnnotationPresent(com.warmup.annotations.Inject.class)) {
+                    boolean isLazy = field.isAnnotationPresent(com.warmup.annotations.Lazy.class);
+                    deferredDeps[idx] = isLazy;
+                    fieldOrSetterDeps[idx] = true;
+                    dependencies[idx] = field.getType().getSimpleName();
+                    idx++;
+                }
+            }
+            
+            // Process setter methods
+            for (java.lang.reflect.Method method : methods) {
+                if (method.isAnnotationPresent(com.warmup.annotations.Inject.class) && 
+                    method.getName().startsWith("set") && method.getParameterCount() == 1) {
+                    boolean isLazy = method.isAnnotationPresent(com.warmup.annotations.Lazy.class);
+                    deferredDeps[idx] = isLazy;
+                    fieldOrSetterDeps[idx] = true;
+                    dependencies[idx] = method.getParameterTypes()[0].getSimpleName();
+                    idx++;
+                }
+            }
+            
+            BeanDefinition<?> definition = new BeanDefinition<>(
+                beanClass,
+                beanClass.getSimpleName(),
+                Scope.SINGLETON,
+                com.warmup.core.lifecycle.LifecycleCallbacks.empty(),
+                false,
+                dependencies,
+                new String[0], // profiles
+                new String[0], // conditionClasses
+                "", // scopeName
+                deferredDeps,
+                fieldOrSetterDeps
+            );
+            warmup.registerDynamic(definition);
+        }
+    }
 
     @Test
     void testCircularDependencyWithLazyFieldInjection() {
-        Warmup warmup = Warmup.create(jitCompiler);
+        Warmup warmup = Warmup.builder().build();
+        
+        // Register beans manually since container doesn't scan classpath
+        registerBeansForCircularTest(warmup, ServiceA.class, ServiceB.class);
         
         ServiceA serviceA = warmup.resolve(ServiceA.class);
         ServiceB serviceB = warmup.resolve(ServiceB.class);
@@ -41,7 +144,10 @@ class CircularDependencyWithLazyTest {
 
     @Test
     void testCircularDependencyWithLazySetterInjection() {
-        Warmup warmup = Warmup.create(jitCompiler);
+        Warmup warmup = Warmup.builder().build();
+        
+        // Register beans manually since container doesn't scan classpath
+        registerBeansForCircularTest(warmup, ServiceC.class, ServiceD.class);
         
         ServiceC serviceC = warmup.resolve(ServiceC.class);
         ServiceD serviceD = warmup.resolve(ServiceD.class);
@@ -60,7 +166,10 @@ class CircularDependencyWithLazyTest {
 
     @Test
     void testMultipleBeansInCircularDependency() {
-        Warmup warmup = Warmup.create(jitCompiler);
+        Warmup warmup = Warmup.builder().build();
+        
+        // Register beans manually since container doesn't scan classpath
+        registerBeansForCircularTest(warmup, BeanX.class, BeanY.class, BeanZ.class);
         
         BeanX beanX = warmup.resolve(BeanX.class);
         BeanY beanY = warmup.resolve(BeanY.class);
@@ -83,7 +192,10 @@ class CircularDependencyWithLazyTest {
 
     @Test
     void testConstructorOnlyCircularDependencyFails() {
-        Warmup warmup = Warmup.create(jitCompiler);
+        Warmup warmup = Warmup.builder().build();
+        
+        // Register beans manually since container doesn't scan classpath
+        registerBeansForCircularTest(warmup, ConstructorA.class, ConstructorB.class);
         
         // This should fail because both dependencies are via constructor
         assertThrows(RuntimeException.class, () -> {
@@ -93,7 +205,10 @@ class CircularDependencyWithLazyTest {
 
     @Test
     void testLazyFieldNotAnnotatedStillWorks() {
-        Warmup warmup = Warmup.create(jitCompiler);
+        Warmup warmup = Warmup.builder().build();
+        
+        // Register beans manually since container doesn't scan classpath
+        registerBeansForCircularTest(warmup, ServiceE.class, ServiceF.class);
         
         ServiceE serviceE = warmup.resolve(ServiceE.class);
         ServiceF serviceF = warmup.resolve(ServiceF.class);

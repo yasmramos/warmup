@@ -128,4 +128,4 @@ Benchmarks run with uniform settings defined in `BenchmarkRunner`:
 ## Notes
 
 - Metrics are disabled (`metricsEnabled=false`) in `ResolutionBenchmark` to measure bare fast-path overhead without instrumentation.
-- For production usage, prefer `Warmup.create()` over explicit `HybridContainer` construction used in benchmarks.
+- For production usage, prefer `Warmup.builder().build()` over explicit `HybridContainer` construction used in benchmarks.

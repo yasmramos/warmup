@@ -6,7 +6,6 @@ import com.warmup.core.container.HotReloadCapable;
 import com.warmup.core.container.HybridContainer;
 import com.warmup.core.container.HybridContainerConfig;
 import com.warmup.core.jit.JITCompiler;
-import com.warmup.core.jit.NoOpJITCompiler;
 import com.warmup.core.registry.BeanDefinition;
 
 import java.util.Set;
@@ -22,11 +21,11 @@ import java.util.function.Function;
  * Usage:
  * <pre>{@code
  * // Simple usage with defaults
- * Warmup warmup = Warmup.create();
- * UserService service = warmup.get(UserService.class);
+ * Warmup warmup = Warmup.builder().build();
+ * UserService service = warmup.resolve(UserService.class);
  * 
- * // Alternative using resolve (same behavior)
- * UserService service2 = warmup.resolve(UserService.class);
+ * // Alternative using get (same behavior)
+ * UserService service2 = warmup.get(UserService.class);
  * 
  * // Advanced usage with builder
  * Warmup warmup = Warmup.builder()
@@ -47,53 +46,12 @@ public class Warmup implements AutoCloseable {
     private final HybridContainer container;
 
     /**
-     * Creates a new Warmup instance with default settings.
-     * 
-     * Uses AsmJITCompiler directly for bytecode generation.
-     * Falls back to NoOpJITCompiler only if explicitly configured for environments
-     * where ASM should not be used (e.g., GraalVM native images).
-     * 
-     * @return new Warmup instance
-     */
-    public static Warmup create() {
-        return builder().build();
-    }
-
-    /**
      * Returns a builder for advanced configuration.
      * 
      * @return new Builder instance
      */
     public static Builder builder() {
         return new Builder();
-    }
-
-    /**
-     * Creates a Warmup instance with explicit JITCompiler.
-     * Useful for testing or custom configurations.
-     * 
-     * @param jitCompiler the JIT compiler to use
-     * @return new Warmup instance
-     */
-    public static Warmup create(JITCompiler jitCompiler) {
-        HybridContainerConfig config = new HybridContainerConfig.Builder().build();
-        return new Warmup(new HybridContainer(config, jitCompiler));
-    }
-
-    /**
-     * Creates a Warmup instance with custom settings.
-     * 
-     * @param jitCompiler the JIT compiler to use
-     * @param diagnostic enable diagnostic mode
-     * @param maxPendingCompilations maximum concurrent background compilations
-     * @return new Warmup instance
-     */
-    public static Warmup create(JITCompiler jitCompiler, boolean diagnostic, int maxPendingCompilations) {
-        HybridContainerConfig config = new HybridContainerConfig.Builder()
-            .diagnosticMode(diagnostic)
-            .maxPendingCompilations(maxPendingCompilations)
-            .build();
-        return new Warmup(new HybridContainer(config, jitCompiler));
     }
 
     /**
@@ -512,7 +470,6 @@ public class Warmup implements AutoCloseable {
          * Builds the Warmup instance.
          * 
          * Uses AsmJITCompiler by default for bytecode generation.
-         * Falls back to NoOpJITCompiler only if explicitly set via jitCompiler().
          * 
          * @return new Warmup instance
          */

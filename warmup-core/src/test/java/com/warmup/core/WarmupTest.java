@@ -15,7 +15,7 @@ public class WarmupTest {
     @Test
     public void testCreateWithDefaultSettings() {
         // Should work with default AsmJITCompiler (instantiated directly)
-        try (Warmup warmup = Warmup.create()) {
+        try (Warmup warmup = Warmup.builder().build()) {
             assertNotNull(warmup);
             // Use hotReload capability instead of deprecated container() method
             assertNotNull(warmup.hotReload());
@@ -51,7 +51,7 @@ public class WarmupTest {
     public void testCreateWithExplicitJITCompiler() {
         JITCompiler compiler = new NoOpJITCompiler();
         
-        try (Warmup warmup = Warmup.create(compiler)) {
+        try (Warmup warmup = Warmup.builder().jitCompiler(compiler).build()) {
             assertNotNull(warmup);
         }
     }
@@ -60,7 +60,7 @@ public class WarmupTest {
     public void testCreateWithFullConfiguration() {
         JITCompiler compiler = new NoOpJITCompiler();
         
-        try (Warmup warmup = Warmup.create(compiler, true, 15)) {
+        try (Warmup warmup = Warmup.builder().jitCompiler(compiler).diagnostic(true).maxPendingCompilations(15).build()) {
             assertNotNull(warmup);
             assertNotNull(warmup.getMetrics());
         }
@@ -79,7 +79,7 @@ public class WarmupTest {
 
     @Test
     public void testWarmupRegisterWithFactory() {
-        try (Warmup warmup = Warmup.create()) {
+        try (Warmup warmup = Warmup.builder().build()) {
             var definition = new com.warmup.core.registry.BeanDefinition<>(String.class, "testBean");
             warmup.register(definition, deps -> "test");
             assertTrue(warmup.contains("testBean"));
@@ -88,7 +88,7 @@ public class WarmupTest {
 
     @Test
     public void testWarmupRegisterDynamic() {
-        try (Warmup warmup = Warmup.create()) {
+        try (Warmup warmup = Warmup.builder().build()) {
             var definition = new com.warmup.core.registry.BeanDefinition<>(String.class, "dynamicBean");
             warmup.registerDynamic(definition);
             assertTrue(warmup.contains("dynamicBean"));
@@ -97,7 +97,7 @@ public class WarmupTest {
 
     @Test
     public void testWarmupResolveByName() {
-        try (Warmup warmup = Warmup.create()) {
+        try (Warmup warmup = Warmup.builder().build()) {
             var definition = new com.warmup.core.registry.BeanDefinition<>(String.class, "resolveBean");
             warmup.register(definition, deps -> "resolved");
             String result = warmup.resolve(String.class);
@@ -107,7 +107,7 @@ public class WarmupTest {
 
     @Test
     public void testWarmupResolveByType() {
-        try (Warmup warmup = Warmup.create()) {
+        try (Warmup warmup = Warmup.builder().build()) {
             var definition = new com.warmup.core.registry.BeanDefinition<>(String.class, "typeBean");
             warmup.register(definition, deps -> "byType");
             String result = warmup.resolve(String.class);
@@ -117,7 +117,7 @@ public class WarmupTest {
 
     @Test
     public void testWarmupContainsByName() {
-        try (Warmup warmup = Warmup.create()) {
+        try (Warmup warmup = Warmup.builder().build()) {
             var definition = new com.warmup.core.registry.BeanDefinition<>(String.class, "containsBean");
             warmup.register(definition, deps -> "test");
             assertTrue(warmup.contains("containsBean"));
@@ -127,7 +127,7 @@ public class WarmupTest {
 
     @Test
     public void testWarmupContainsByType() {
-        try (Warmup warmup = Warmup.create()) {
+        try (Warmup warmup = Warmup.builder().build()) {
             var definition = new com.warmup.core.registry.BeanDefinition<>(String.class, "containsTypeBean");
             warmup.register(definition, deps -> "test");
             assertTrue(warmup.contains(String.class));
@@ -137,7 +137,7 @@ public class WarmupTest {
 
     @Test
     public void testWarmupGetBeanNames() {
-        try (Warmup warmup = Warmup.create()) {
+        try (Warmup warmup = Warmup.builder().build()) {
             var def1 = new com.warmup.core.registry.BeanDefinition<>(String.class, "bean1");
             var def2 = new com.warmup.core.registry.BeanDefinition<>(Integer.class, "bean2");
             warmup.register(def1, deps -> "test1");
@@ -162,7 +162,7 @@ public class WarmupTest {
 
     @Test
     public void testWarmupGetCompilationStats() {
-        try (Warmup warmup = Warmup.create()) {
+        try (Warmup warmup = Warmup.builder().build()) {
             var stats = warmup.getCompilationStats();
             assertNotNull(stats);
         }
@@ -170,7 +170,7 @@ public class WarmupTest {
 
     @Test
     public void testWarmupRegisterFactory() {
-        try (Warmup warmup = Warmup.create()) {
+        try (Warmup warmup = Warmup.builder().build()) {
             var definition = new com.warmup.core.registry.BeanDefinition<>(String.class, "factoryBean");
             warmup.register(definition, null);
             warmup.registerFactory("factoryBean", String.class, deps -> "fromFactory");
@@ -181,7 +181,7 @@ public class WarmupTest {
 
     @Test
     public void testWarmupClose() {
-        Warmup warmup = Warmup.create();
+        Warmup warmup = Warmup.builder().build();
         warmup.close();
         // Should not throw after close
         assertDoesNotThrow(() -> warmup.shutdown());
@@ -294,7 +294,7 @@ public class WarmupTest {
 
     @Test
     public void testResolveAll() {
-        try (Warmup warmup = Warmup.create()) {
+        try (Warmup warmup = Warmup.builder().build()) {
             var def1 = new com.warmup.core.registry.BeanDefinition<>(String.class, "bean1");
             var def2 = new com.warmup.core.registry.BeanDefinition<>(String.class, "bean2");
             warmup.register(def1, deps -> "test1");
@@ -308,7 +308,7 @@ public class WarmupTest {
 
     @Test
     public void testResolveAllAsMap() {
-        try (Warmup warmup = Warmup.create()) {
+        try (Warmup warmup = Warmup.builder().build()) {
             var def1 = new com.warmup.core.registry.BeanDefinition<>(String.class, "bean1");
             var def2 = new com.warmup.core.registry.BeanDefinition<>(String.class, "bean2");
             warmup.register(def1, deps -> "test1");
@@ -324,7 +324,7 @@ public class WarmupTest {
 
     @Test
     public void testResolveAllEmpty() {
-        try (Warmup warmup = Warmup.create()) {
+        try (Warmup warmup = Warmup.builder().build()) {
             var results = warmup.resolveAll(Integer.class);
             assertNotNull(results);
             assertTrue(results.isEmpty());
@@ -337,7 +337,7 @@ public class WarmupTest {
 
     @Test
     public void testRegisterWithScope() {
-        try (Warmup warmup = Warmup.create()) {
+        try (Warmup warmup = Warmup.builder().build()) {
             warmup.register("scopedBean", String.class, () -> "scoped", com.warmup.core.scope.Scope.PROTOTYPE);
             assertTrue(warmup.contains("scopedBean"));
         }

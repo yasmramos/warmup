@@ -232,7 +232,7 @@ public class ResolutionBenchmark {
     
     @Setup
     public void setup() {
-        warmup = Warmup.create();
+        warmup = Warmup.builder().build();
         // Register beanCount beans...
         beanNames = ...;
     }
@@ -268,7 +268,7 @@ public class AvajeInjectBenchmark {
     public void setup() throws Exception {
         // Initialize both containers
         avajeScope = io.avaje.inject.BeanScope.builder().build();
-        warmup = Warmup.create();
+        warmup = Warmup.builder().build();
     }
     
     @Benchmark

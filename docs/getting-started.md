@@ -82,7 +82,7 @@ public class UserRepository {
 public class Main {
     public static void main(String[] args) {
         // Simple usage with defaults
-        Warmup warmup = Warmup.create();
+        Warmup warmup = Warmup.builder().build();
         
         // Resolve beans (automatically uses compile-time factories if available)
         UserService service = warmup.resolve(UserService.class);
@@ -121,7 +121,7 @@ import com.warmup.core.Warmup;
 import com.warmup.core.registry.BeanDefinition;
 import com.warmup.core.scope.Scope;
 
-Warmup warmup = Warmup.create();
+Warmup warmup = Warmup.builder().build();
 
 // Register a bean programmatically
 BeanDefinition<MyService> definition = new BeanDefinition<>(
@@ -143,15 +143,11 @@ MyService service = warmup.resolve(MyService.class);
 
 ```java
 // Default configuration
-Warmup warmup = Warmup.create();
+Warmup warmup = Warmup.builder().build();
 
-// With custom JIT compiler
-Warmup warmup = Warmup.create(myJitCompiler);
-
-// Using builder
+// Using builder for advanced settings
 Warmup warmup = Warmup.builder()
     .diagnostic(true)
-    .jitCompiler(myJitCompiler)
     .maxPendingCompilations(20)
     .build();
 ```
@@ -178,7 +174,7 @@ if (warmup.contains(MyService.class)) {
 warmup.shutdown();
 
 // Or use try-with-resources
-try (Warmup warmup = Warmup.create()) {
+try (Warmup warmup = Warmup.builder().build()) {
     // Use container
 } // Automatically calls shutdown()
 ```

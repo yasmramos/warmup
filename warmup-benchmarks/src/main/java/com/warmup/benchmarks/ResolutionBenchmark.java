@@ -70,7 +70,7 @@ import java.util.concurrent.TimeUnit;
  * - Resolution time (single bean resolution)
  * - Throughput (resolutions per second)
  * 
- * Note: Public API benchmarks use {@code Warmup.create()} and {@code resolve()}.
+ * Note: Public API benchmarks use {@code Warmup.builder().build()} and {@code resolve()}.
  * Internal benchmarks access {@code HybridContainer} directly for maximum performance measurement.
  */
 @State(org.openjdk.jmh.annotations.Scope.Benchmark)

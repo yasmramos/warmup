@@ -95,8 +95,8 @@ public class AppConfig {
 // Create container and resolve beans
 public class Main {
     public static void main(String[] args) {
-        // Simple usage with Warmup.create()
-        Warmup warmup = Warmup.create();
+        // Simple usage with Warmup.builder().build()
+        Warmup warmup = Warmup.builder().build();
         
         // Resolve beans (automatically uses compile-time factories if available)
         UserService service = warmup.get(UserService.class);
@@ -292,13 +292,11 @@ See [JIT Compilation](docs/jit-compilation.md) for implementation details.
 ```java
 public class Warmup implements AutoCloseable {
     
-    // Simple usage
-    public static Warmup create();
-    public static Warmup create(JITCompiler jitCompiler);
-    public static Warmup create(JITCompiler jitCompiler, boolean diagnostic, int maxPendingCompilations);
-    
-    // Advanced configuration
+    // Simple usage with builder pattern
     public static Builder builder();
+    
+    // Advanced configuration via Builder
+    // Warmup.builder().diagnostic(true).maxPendingCompilations(20).build();
     
     // Resolve beans by type
     public <T> T resolve(Class<T> clazz);
@@ -604,8 +602,8 @@ native-image -cp target/warmup-core-1.0.0-SNAPSHOT.jar \
 ```java
 @Test
 void testMockInjection() {
-    // Use Warmup.create() for simple testing
-    Warmup warmup = Warmup.create();
+    // Use Warmup.builder().build() for simple testing
+    Warmup warmup = Warmup.builder().build();
     
     // Register mock without annotation processing
     MyService mock = Mockito.mock(MyService.class);
@@ -619,7 +617,7 @@ void testMockInjection() {
 
 @Test
 void testContainerReset() {
-    Warmup warmup = Warmup.create();
+    Warmup warmup = Warmup.builder().build();
     // ... use container
     warmup.shutdown(); // Clears all caches
 }
