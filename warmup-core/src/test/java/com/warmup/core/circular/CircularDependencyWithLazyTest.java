@@ -61,8 +61,19 @@ class CircularDependencyWithLazyTest {
                 }
             }
             
+            // If no @Inject constructor found, the class uses the default no-arg constructor
+            // Default constructors are NOT @Inject annotated, so we treat them as having 0 constructor dependencies
+            if (injectConstructor == null) {
+                constructorParamCount = 0;
+                // The class will use its implicit or explicit no-arg constructor
+            }
+            
             // Total dependencies = constructor params + field injections + setter injections
             int totalDeps = constructorParamCount + fieldCount + setterCount;
+            
+            // If there are NO constructor dependencies (only field/setter deps), 
+            // all dependencies are deferred by nature since they'll be injected after construction
+            // In this case, we need to mark ALL field/setter deps as deferred
             boolean[] deferredDeps = new boolean[totalDeps];
             boolean[] fieldOrSetterDeps = new boolean[totalDeps];
             Object[] dependencies = new Object[totalDeps];
@@ -70,7 +81,7 @@ class CircularDependencyWithLazyTest {
             int idx = 0;
             
             // Process constructor dependencies first (NOT deferrable, NOT field/setter)
-            if (injectConstructor != null) {
+            if (injectConstructor != null && constructorParamCount > 0) {
                 Class<?>[] paramTypes = injectConstructor.getParameterTypes();
                 for (int i = 0; i < paramTypes.length; i++) {
                     deferredDeps[idx] = false; // Constructor deps are never lazy
@@ -84,7 +95,8 @@ class CircularDependencyWithLazyTest {
             for (java.lang.reflect.Field field : fields) {
                 if (field.isAnnotationPresent(com.warmup.annotations.Inject.class)) {
                     boolean isLazy = field.isAnnotationPresent(com.warmup.annotations.Lazy.class);
-                    deferredDeps[idx] = isLazy;
+                    // If no constructor injection, ALL field deps are effectively deferred
+                    deferredDeps[idx] = isLazy || (injectConstructor == null);
                     fieldOrSetterDeps[idx] = true;
                     dependencies[idx] = field.getType().getName(); // Use fully qualified name
                     idx++;
@@ -96,7 +108,8 @@ class CircularDependencyWithLazyTest {
                 if (method.isAnnotationPresent(com.warmup.annotations.Inject.class) && 
                     method.getName().startsWith("set") && method.getParameterCount() == 1) {
                     boolean isLazy = method.isAnnotationPresent(com.warmup.annotations.Lazy.class);
-                    deferredDeps[idx] = isLazy;
+                    // If no constructor injection, ALL setter deps are effectively deferred
+                    deferredDeps[idx] = isLazy || (injectConstructor == null);
                     fieldOrSetterDeps[idx] = true;
                     dependencies[idx] = method.getParameterTypes()[0].getName(); // Use fully qualified name
                     idx++;
