@@ -9,6 +9,7 @@ import com.warmup.core.jit.JITCompiler;
 import com.warmup.core.registry.BeanDefinition;
 
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Function;
 
 /**
@@ -44,6 +45,8 @@ import java.util.function.Function;
 public class Warmup implements AutoCloseable {
 
     private final HybridContainer container;
+    private final AtomicBoolean shutdownComplete = new AtomicBoolean(false);
+    private Thread shutdownHook;
 
     /**
      * Returns a builder for advanced configuration.
@@ -294,8 +297,27 @@ public class Warmup implements AutoCloseable {
 
     /**
      * Shuts down the container, releasing resources.
+     * This method is idempotent: calling it multiple times has no additional effect.
+     * It ensures that destruction callbacks (@PreDestroy/onDestroy) are applied,
+     * the warmupExecutor is shut down, and JIT compiler resources are released.
+     * 
+     * <p>If a shutdown hook was registered during construction, it will be unregistered
+     * to prevent it from running after manual shutdown (unless the JVM is already shutting down).</p>
      */
     public void shutdown() {
+        if (!shutdownComplete.compareAndSet(false, true)) {
+            return;
+        }
+        
+        // Attempt to unregister the shutdown hook if it exists and we're not in the hook itself
+        if (shutdownHook != null && Thread.currentThread() != shutdownHook) {
+            try {
+                Runtime.getRuntime().removeShutdownHook(shutdownHook);
+            } catch (IllegalStateException e) {
+                // JVM is already shutting down, ignore
+            }
+        }
+        
         container.shutdown();
     }
 
@@ -315,6 +337,7 @@ public class Warmup implements AutoCloseable {
         private boolean metricsEnabled = false;
         private com.warmup.core.config.PropertyResolver propertyResolver = null;
         private String[] activeProfiles = new String[0];
+        private boolean registerShutdownHook = true;
 
         /**
          * Sets the active profiles for conditional bean registration (@Profile).
@@ -467,9 +490,40 @@ public class Warmup implements AutoCloseable {
         }
 
         /**
+         * Configures whether to register a JVM shutdown hook that calls {@link Warmup#shutdown()}
+         * when the JVM terminates.
+         * 
+         * <p>When enabled (default), a shutdown hook is registered during {@link #build()} that
+         * ensures proper cleanup of container resources, including:
+         * <ul>
+         *   <li>Execution of @PreDestroy/onDestroy callbacks</li>
+         *   <li>Shutdown of the warmupExecutor thread pool</li>
+         *   <li>Release of JIT compiler resources</li>
+         * </ul>
+         * </p>
+         * 
+         * <p>The shutdown hook is automatically unregistered when {@link Warmup#shutdown()} is
+         * called manually, preventing duplicate cleanup. The hook runs only if the JVM terminates
+         * without explicit shutdown.</p>
+         * 
+         * <p><strong>Recommended usage:</strong> Keep enabled for application-level containers.
+         * Disable for tests or environments where multiple Warmup instances are created and
+         * destroyed frequently to avoid accumulating shutdown hooks.</p>
+         * 
+         * @param value true to register shutdown hook (default: true)
+         * @return this builder
+         */
+        public Builder registerShutdownHook(boolean value) {
+            this.registerShutdownHook = value;
+            return this;
+        }
+
+        /**
          * Builds the Warmup instance.
          * 
          * Uses AsmJITCompiler by default for bytecode generation.
+         * If {@link #registerShutdownHook} is true (default), registers a JVM shutdown hook
+         * that calls {@link Warmup#shutdown()} on termination.
          * 
          * @return new Warmup instance
          */
@@ -494,7 +548,15 @@ public class Warmup implements AutoCloseable {
                 .propertyResolver(propertyResolver)
                 .activeProfiles(activeProfiles)
                 .build();
-            return new Warmup(new HybridContainer(config, compiler));
+            Warmup warmup = new Warmup(new HybridContainer(config, compiler));
+            
+            // Register shutdown hook if enabled
+            if (registerShutdownHook) {
+                warmup.shutdownHook = new Thread(warmup::shutdown, "warmup-shutdown-hook");
+                Runtime.getRuntime().addShutdownHook(warmup.shutdownHook);
+            }
+            
+            return warmup;
         }
     }
 }

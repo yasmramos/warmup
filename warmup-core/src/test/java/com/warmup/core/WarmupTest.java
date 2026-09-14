@@ -342,4 +342,45 @@ public class WarmupTest {
             assertTrue(warmup.contains("scopedBean"));
         }
     }
+
+    @Test
+    public void testShutdownHookDisabled() {
+        // Test that shutdown hook can be disabled
+        Warmup warmup = Warmup.builder()
+                .registerShutdownHook(false)
+                .build();
+        
+        assertNotNull(warmup);
+        // Should be able to shutdown without issues
+        assertDoesNotThrow(() -> warmup.shutdown());
+    }
+
+    @Test
+    public void testShutdownIdempotency() {
+        // Test that shutdown can be called multiple times without error
+        Warmup warmup = Warmup.builder()
+                .registerShutdownHook(false)
+                .build();
+        
+        // First shutdown
+        assertDoesNotThrow(() -> warmup.shutdown());
+        // Second shutdown should not throw
+        assertDoesNotThrow(() -> warmup.shutdown());
+        // Third shutdown should not throw
+        assertDoesNotThrow(() -> warmup.shutdown());
+    }
+
+    @Test
+    public void testCloseAndShutdownIdempotency() {
+        // Test that close followed by shutdown is idempotent (existing test enhanced)
+        Warmup warmup = Warmup.builder()
+                .registerShutdownHook(false)
+                .build();
+        
+        warmup.close();
+        // Should not throw after close
+        assertDoesNotThrow(() -> warmup.shutdown());
+        // And again
+        assertDoesNotThrow(() -> warmup.shutdown());
+    }
 }

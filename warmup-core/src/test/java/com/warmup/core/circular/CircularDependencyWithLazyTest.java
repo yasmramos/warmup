@@ -75,7 +75,7 @@ class CircularDependencyWithLazyTest {
                 for (int i = 0; i < paramTypes.length; i++) {
                     deferredDeps[idx] = false; // Constructor deps are never lazy
                     fieldOrSetterDeps[idx] = false; // Constructor dep
-                    dependencies[idx] = paramTypes[i].getSimpleName();
+                    dependencies[idx] = paramTypes[i].getName(); // Use fully qualified name
                     idx++;
                 }
             }
@@ -86,7 +86,7 @@ class CircularDependencyWithLazyTest {
                     boolean isLazy = field.isAnnotationPresent(com.warmup.annotations.Lazy.class);
                     deferredDeps[idx] = isLazy;
                     fieldOrSetterDeps[idx] = true;
-                    dependencies[idx] = field.getType().getSimpleName();
+                    dependencies[idx] = field.getType().getName(); // Use fully qualified name
                     idx++;
                 }
             }
@@ -98,14 +98,14 @@ class CircularDependencyWithLazyTest {
                     boolean isLazy = method.isAnnotationPresent(com.warmup.annotations.Lazy.class);
                     deferredDeps[idx] = isLazy;
                     fieldOrSetterDeps[idx] = true;
-                    dependencies[idx] = method.getParameterTypes()[0].getSimpleName();
+                    dependencies[idx] = method.getParameterTypes()[0].getName(); // Use fully qualified name
                     idx++;
                 }
             }
             
             BeanDefinition<?> definition = new BeanDefinition<>(
                 beanClass,
-                beanClass.getSimpleName(),
+                beanClass.getName(), // Use fully qualified name as bean name
                 Scope.SINGLETON,
                 com.warmup.core.lifecycle.LifecycleCallbacks.empty(),
                 false,

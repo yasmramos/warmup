@@ -1279,20 +1279,25 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
         }
         
         // Create instance using factory - use wired path when available (no Object[] allocation)
+        // PHASE 1: Resolve only non-deferred dependencies and create the bean
         T instance;
         if (resolvedDef.isCompileTime() && resolvedDef.isWired()) {
-            // Wired compile-time factory: call get() directly without try/catch
+            // Wired compile-time factory: call get() directly without Object[] allocation
             // Wiring was verified at startup, so get() is guaranteed safe
             instance = factory.get();
         } else if (resolvedDef.isCompileTime()) {
             // Compile-time but not wired (e.g., forward reference): fallback to create()
-            Object[] deps = resolveDependencies(definition);
+            Object[] deps = resolveNonDeferredDependencies(definition);
             instance = factory.create(deps);
         } else {
-            // JIT or other factory: use traditional path
-            Object[] deps = resolveDependencies(definition);
+            // JIT or other factory: use traditional path with non-deferred deps only
+            Object[] deps = resolveNonDeferredDependencies(definition);
             instance = factory.create(deps);
         }
+        
+        // PHASE 2: Inject deferred dependencies (@Lazy field/setter injections) after bean is created
+        // This breaks circular dependencies by deferring these injections until the bean exists
+        injectDeferredDependencies(instance, definition);
         
         // Record diagnostic if enabled
         if (diagnosticMode) {
@@ -1546,7 +1551,14 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
         return runtimeClass;
     }
 
-    private Object[] resolveDependencies(BeanDefinition<?> definition) {
+    /**
+     * Resolves only non-deferred (constructor) dependencies for a bean definition.
+     * Deferred dependencies (field/setter with @Lazy) are omitted and will be injected later.
+     * 
+     * @param definition the bean definition
+     * @return array of resolved non-deferred dependencies
+     */
+    private Object[] resolveNonDeferredDependencies(BeanDefinition<?> definition) {
         // Cache dependencies() accessor to avoid multiple invocations (record/class accessor call is not free)
         Object[] dependencies = definition.dependencies();
         
@@ -1559,6 +1571,13 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
         int[] depIndices = definition.dependencyIndices();
         
         for (int i = 0; i < dependencies.length; i++) {
+            // Skip deferred dependencies (marked as @Lazy on field/setter)
+            // These will be injected after the bean is constructed and published
+            if (definition.isDeferredDependency(i)) {
+                deps[i] = null; // Placeholder, will be filled later
+                continue;
+            }
+            
             Object dep = dependencies[i];
             if (dep instanceof String depName) {
                 // Check if we have a cached index for this dependency
@@ -1597,6 +1616,117 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
             }
         }
         return deps;
+    }
+    
+    /**
+     * Resolves and injects deferred dependencies (field/setter with @Lazy) into an existing bean instance.
+     * This method is called after the bean is constructed and published, breaking circular dependencies.
+     * 
+     * @param instance the bean instance to inject deferred dependencies into
+     * @param definition the bean definition containing dependency metadata
+     */
+    @SuppressWarnings("unchecked")
+    private <T> void injectDeferredDependencies(T instance, BeanDefinition<T> definition) {
+        Object[] dependencies = definition.dependencies();
+        int[] depIndices = definition.dependencyIndices();
+        
+        for (int i = 0; i < dependencies.length; i++) {
+            // Only process deferred dependencies
+            if (!definition.isDeferredDependency(i)) {
+                continue;
+            }
+            
+            Object dep = dependencies[i];
+            if (dep instanceof String depName) {
+                // Resolve the deferred dependency now that the bean is published
+                Object resolvedDep = resolveByName(depName);
+                
+                // Inject via field or setter based on metadata
+                if (definition.isFieldOrSetterDependency(i)) {
+                    // This is a field or setter injection - use reflection to inject
+                    injectDependencyViaReflection(instance, definition.type(), depName, resolvedDep, i);
+                }
+            } else if (dep instanceof ValueDependency valueDep) {
+                // Resolve and inject value dependency
+                if (propertyResolver == null) {
+                    throw new IllegalStateException(
+                        "PropertyResolver not configured but @Value dependency found in bean '" + 
+                        definition.name() + "'. Use Warmup.builder().propertySource(...) to configure."
+                    );
+                }
+                Object resolvedValue = resolveValueDependency(valueDep);
+                if (definition.isFieldOrSetterDependency(i)) {
+                    injectDependencyViaReflection(instance, definition.type(), valueDep.expression(), resolvedValue, i);
+                }
+            }
+        }
+    }
+    
+    /**
+     * Injects a dependency into a bean instance via field or setter using reflection.
+     * Uses cached injection metadata from BeanDefinition when available.
+     * 
+     * @param instance the bean instance
+     * @param beanType the bean class
+     * @param depName the dependency name (for diagnostics)
+     * @param dependency the resolved dependency to inject
+     * @param depIndex the index of the dependency in the dependencies array
+     */
+    private void injectDependencyViaReflection(Object instance, Class<?> beanType, String depName, 
+                                                Object dependency, int depIndex) {
+        // Try to find the field or setter method to inject into
+        // For field injection: find @Inject field of the dependency type
+        // For setter injection: find @Inject setter method with the dependency type parameter
+        
+        // First, try field injection
+        java.lang.reflect.Field[] fields = beanType.getDeclaredFields();
+        int fieldCount = 0;
+        for (java.lang.reflect.Field field : fields) {
+            if (field.isAnnotationPresent(com.warmup.annotations.Inject.class)) {
+                if (fieldCount == depIndex) {
+                    // This is the field to inject
+                    try {
+                        field.setAccessible(true);
+                        field.set(instance, dependency);
+                        return;
+                    } catch (Exception e) {
+                        throw new RuntimeException("Failed to inject field dependency: " + field.getName(), e);
+                    }
+                }
+                fieldCount++;
+            }
+        }
+        
+        // If not a field, try setter injection
+        // Calculate setter index by subtracting field count from depIndex
+        int setterIndex = depIndex - fieldCount;
+        if (setterIndex >= 0) {
+            java.lang.reflect.Method[] methods = beanType.getDeclaredMethods();
+            int currentSetterIndex = 0;
+            for (java.lang.reflect.Method method : methods) {
+                if (method.isAnnotationPresent(com.warmup.annotations.Inject.class) && 
+                    method.getName().startsWith("set") && method.getParameterCount() == 1) {
+                    if (currentSetterIndex == setterIndex) {
+                        // This is the setter to invoke
+                        try {
+                            method.setAccessible(true);
+                            method.invoke(instance, dependency);
+                            return;
+                        } catch (Exception e) {
+                            throw new RuntimeException("Failed to invoke setter: " + method.getName(), e);
+                        }
+                    }
+                    currentSetterIndex++;
+                }
+            }
+        }
+    }
+
+    private Object[] resolveDependencies(BeanDefinition<?> definition) {
+        // Delegate to resolveNonDeferredDependencies for backward compatibility
+        // This method now resolves ALL dependencies (including deferred) for legacy code paths
+        // New code should use resolveNonDeferredDependencies followed by injectDeferredDependencies
+        return resolveNonDeferredDependencies(definition);
     }
     
     /**
