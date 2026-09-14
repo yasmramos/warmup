@@ -433,7 +433,7 @@ public class GreetingService {
 
 public class Main {
     public static void main(String[] args) {
-        try (Warmup warmup = Warmup.create()) {
+        try (Warmup warmup = Warmup.builder().build()) {
             GreetingService service = warmup.resolve(GreetingService.class);
             System.out.println(service.greet("World"));
         }

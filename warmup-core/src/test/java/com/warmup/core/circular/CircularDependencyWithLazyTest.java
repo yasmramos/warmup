@@ -23,15 +23,18 @@ class CircularDependencyWithLazyTest {
      * Helper method to register all beans needed for circular dependency tests.
      * Registers beans with proper deferred dependency metadata to allow cycle breaking.
      * Uses reflection to detect @Lazy fields and setters to mark dependencies as deferrable.
+     * Also detects @Inject constructors for constructor dependencies.
      */
     private void registerBeansForCircularTest(Warmup warmup, Class<?>... beanClasses) {
         for (Class<?> beanClass : beanClasses) {
-            // Use reflection to detect @Lazy fields and setters
+            // Use reflection to detect @Lazy fields, setters, and constructor injection
             java.lang.reflect.Field[] fields = beanClass.getDeclaredFields();
             java.lang.reflect.Method[] methods = beanClass.getDeclaredMethods();
+            java.lang.reflect.Constructor<?>[] constructors = beanClass.getDeclaredConstructors();
             
             int fieldCount = 0;
             int setterCount = 0;
+            int constructorParamCount = 0;
             
             // Count @Inject fields
             for (java.lang.reflect.Field field : fields) {
@@ -48,14 +51,36 @@ class CircularDependencyWithLazyTest {
                 }
             }
             
-            int totalDeps = fieldCount + setterCount;
+            // Find @Inject constructor and count params
+            java.lang.reflect.Constructor<?> injectConstructor = null;
+            for (java.lang.reflect.Constructor<?> constructor : constructors) {
+                if (constructor.isAnnotationPresent(com.warmup.annotations.Inject.class)) {
+                    injectConstructor = constructor;
+                    constructorParamCount = constructor.getParameterCount();
+                    break;
+                }
+            }
+            
+            // Total dependencies = constructor params + field injections + setter injections
+            int totalDeps = constructorParamCount + fieldCount + setterCount;
             boolean[] deferredDeps = new boolean[totalDeps];
             boolean[] fieldOrSetterDeps = new boolean[totalDeps];
             Object[] dependencies = new Object[totalDeps];
             
             int idx = 0;
             
-            // Process fields first
+            // Process constructor dependencies first (NOT deferrable, NOT field/setter)
+            if (injectConstructor != null) {
+                Class<?>[] paramTypes = injectConstructor.getParameterTypes();
+                for (int i = 0; i < paramTypes.length; i++) {
+                    deferredDeps[idx] = false; // Constructor deps are never lazy
+                    fieldOrSetterDeps[idx] = false; // Constructor dep
+                    dependencies[idx] = paramTypes[i].getSimpleName();
+                    idx++;
+                }
+            }
+            
+            // Process fields
             for (java.lang.reflect.Field field : fields) {
                 if (field.isAnnotationPresent(com.warmup.annotations.Inject.class)) {
                     boolean isLazy = field.isAnnotationPresent(com.warmup.annotations.Lazy.class);

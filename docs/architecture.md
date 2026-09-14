@@ -113,7 +113,7 @@ Main entry point providing ergonomic API:
 
 ```java
 // Simple usage
-Warmup warmup = Warmup.create();
+Warmup warmup = Warmup.builder().build();
 MyService service = warmup.resolve(MyService.class);
 
 // Advanced configuration

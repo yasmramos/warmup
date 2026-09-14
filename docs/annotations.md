@@ -319,14 +319,14 @@ public class DatabaseConnection {
 ### Container Shutdown
 
 ```java
-try (Warmup warmup = Warmup.create()) {
+try (Warmup warmup = Warmup.builder().build()) {
     // Use container
     DatabaseConnection db = warmup.resolve(DatabaseConnection.class);
     // ... use db
 } // @PreDestroy methods called automatically here
 
 // Or explicit shutdown
-Warmup warmup = Warmup.create();
+Warmup warmup = Warmup.builder().build();
 // ... use container
 warmup.shutdown(); // @PreDestroy methods called here
 ```
@@ -459,7 +459,7 @@ public class MainController implements Initializable {
 The `FxLoader` class uses the container to resolve controllers:
 
 ```java
-Warmup warmup = Warmup.create();
+Warmup warmup = Warmup.builder().build();
 FxLoader fxLoader = new FxLoader(warmup);
 
 // Load FXML - controller is created and injected by the container
