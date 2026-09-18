@@ -151,12 +151,35 @@ public abstract class WarmupApplication extends Application {
 
     /**
      * Enable hot-reload mode for development.
-     * Call this during development to enable controller cache clearing.
+     * This method:
+     * 1. Sets the warmup.dev.mode system property
+     * 2. Updates the FxLoader's developmentMode flag at runtime via setter
+     * 3. Clears the controller cache to force fresh controller creation
+     * 
+     * Call this during development to enable full hot-reload functionality.
      */
     protected void enableHotReload() {
         System.setProperty("warmup.dev.mode", "true");
         if (fxLoader != null) {
+            fxLoader.setDevelopmentMode(true);
             fxLoader.clearCache();
+        }
+    }
+    
+    /**
+     * Register the current scene root for hot-reload support.
+     * This allows the FxLoader to replace the scene root when FXML is reloaded.
+     * 
+     * @param stage the primary stage containing the scene
+     * @param root the current root node of the scene
+     */
+    protected void registerSceneForHotReload(javafx.stage.Stage stage, javafx.scene.Parent root) {
+        if (fxLoader != null) {
+            fxLoader.setSceneRootReplacer(newRoot -> {
+                javafx.application.Platform.runLater(() -> {
+                    stage.getScene().setRoot(newRoot);
+                });
+            });
         }
     }
 }

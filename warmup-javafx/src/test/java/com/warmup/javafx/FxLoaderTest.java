@@ -2,17 +2,20 @@ package com.warmup.javafx;
 
 import com.warmup.annotations.Inject;
 import com.warmup.core.Warmup;
+import com.warmup.core.container.HybridContainer;
 import com.warmup.core.jit.CompiledFactory;
 import com.warmup.core.jit.CompilationException;
 import com.warmup.core.jit.JITCompiler;
 import com.warmup.core.registry.BeanDefinition;
 import com.warmup.core.scope.Scope;
 import javafx.fxml.FXMLLoader;
+import javafx.scene.Parent;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -125,6 +128,171 @@ class FxLoaderTest {
         // Create a new FxLoader and immediately clear cache - should not throw
         assertDoesNotThrow(() -> fxLoader.clearCache());
     }
+    
+    @Test
+    void testDevelopmentModeCanBeChangedAtRuntime() {
+        // Initially development mode is false
+        assertFalse(fxLoader.isDevelopmentMode());
+        
+        // Enable development mode at runtime
+        fxLoader.setDevelopmentMode(true);
+        assertTrue(fxLoader.isDevelopmentMode());
+        
+        // Disable development mode at runtime
+        fxLoader.setDevelopmentMode(false);
+        assertFalse(fxLoader.isDevelopmentMode());
+    }
+    
+    @Test
+    void testHotReloadReturnsNewControllerInstance() throws Exception {
+        // Register TestService
+        warmup.register("testService", TestService.class, TestService::new, Scope.SINGLETON);
+        
+        // Use an atomic counter to track controller creations
+        AtomicInteger creationCount = new AtomicInteger(0);
+        
+        // Register TestController with a factory that tracks creations
+        warmup.register("testController", TestController.class, () -> {
+            TestController controller = new TestController();
+            controller.service = warmup.resolve(TestService.class);
+            controller.instanceId = creationCount.incrementAndGet();
+            return controller;
+        }, Scope.PROTOTYPE);
+        
+        // Enable development mode
+        fxLoader.setDevelopmentMode(true);
+        
+        // First resolution
+        TestController first = fxLoader.createController(TestController.class);
+        assertNotNull(first);
+        int firstId = first.instanceId;
+        
+        // Second resolution in dev mode should get a new instance (cache cleared)
+        TestController second = fxLoader.createController(TestController.class);
+        assertNotNull(second);
+        int secondId = second.instanceId;
+        
+        // In development mode, each call should get a new instance due to cache clearing
+        assertNotEquals(firstId, secondId, "In development mode, controllers should be recreated");
+    }
+    
+    @Test
+    void testHotReloadIntegrationWithContainer() throws Exception {
+        // Register TestService
+        warmup.register("testService", TestService.class, TestService::new, Scope.SINGLETON);
+        
+        AtomicInteger creationCount = new AtomicInteger(0);
+        
+        // Register TestControllerWithFxml with tracking
+        warmup.register("testControllerWithFxml", TestControllerWithFxml.class, () -> {
+            TestControllerWithFxml controller = new TestControllerWithFxml();
+            controller.service = warmup.resolve(TestService.class);
+            controller.instanceId = creationCount.incrementAndGet();
+            return controller;
+        }, Scope.PROTOTYPE);
+        
+        // Enable development mode
+        fxLoader.setDevelopmentMode(true);
+        
+        // Load FXML first time
+        Parent firstRoot = fxLoader.loadController(TestControllerWithFxml.class);
+        assertNotNull(firstRoot);
+        
+        // Get the container to verify reload capability
+        HybridContainer container = warmup.unsafeContainer();
+        assertNotNull(container);
+        
+        // Trigger reload on the controller bean
+        boolean reloaded = container.reload("testControllerWithFxml");
+        assertTrue(reloaded, "Container should reload the bean");
+        
+        // Clear cache and load again - should get new controller
+        fxLoader.clearCache();
+        Parent secondRoot = fxLoader.loadController(TestControllerWithFxml.class);
+        assertNotNull(secondRoot);
+        
+        // Roots should be different instances (new FXML load)
+        assertNotSame(firstRoot, secondRoot, "Reloaded FXML should produce a new root");
+    }
+    
+    @Test
+    void testSceneRootReplacerCallback() throws Exception {
+        // Register TestService
+        warmup.register("testService", TestService.class, TestService::new, Scope.SINGLETON);
+        
+        // Register TestControllerWithFxml
+        warmup.register("testControllerWithFxml", TestControllerWithFxml.class, () -> {
+            TestControllerWithFxml controller = new TestControllerWithFxml();
+            controller.service = warmup.resolve(TestService.class);
+            return controller;
+        }, Scope.PROTOTYPE);
+        
+        // Track callback invocations
+        final Parent[] capturedRoots = new Parent[1];
+        fxLoader.setSceneRootReplacer(root -> capturedRoots[0] = root);
+        
+        // Load FXML
+        Parent root = fxLoader.loadController(TestControllerWithFxml.class);
+        assertNotNull(root);
+        
+        // The callback is invoked during reload, not initial load
+        // So capturedRoots[0] should be null after initial load
+        assertNull(capturedRoots[0]);
+        
+        // Now trigger reload
+        Parent reloadedRoot = fxLoader.reloadController(TestControllerWithFxml.class);
+        assertNotNull(reloadedRoot);
+        
+        // Callback should have been invoked with the reloaded root
+        assertNotNull(capturedRoots[0]);
+        assertSame(reloadedRoot, capturedRoots[0], "Callback should receive the reloaded root");
+    }
+    
+    @Test
+    void testReloadFxmlTracksAndReloads() throws Exception {
+        // Register TestService
+        warmup.register("testService", TestService.class, TestService::new, Scope.SINGLETON);
+        
+        // Register TestControllerWithFxml
+        warmup.register("testControllerWithFxml", TestControllerWithFxml.class, () -> {
+            TestControllerWithFxml controller = new TestControllerWithFxml();
+            controller.service = warmup.resolve(TestService.class);
+            return controller;
+        }, Scope.PROTOTYPE);
+        
+        // Initial load
+        Parent firstRoot = fxLoader.loadController(TestControllerWithFxml.class);
+        assertNotNull(firstRoot);
+        
+        // Reload the controller
+        Parent secondRoot = fxLoader.reloadController(TestControllerWithFxml.class);
+        assertNotNull(secondRoot);
+        
+        // Should get a different root instance
+        assertNotSame(firstRoot, secondRoot, "Reloaded FXML should produce a new root instance");
+    }
+    
+    @Test
+    void testCssLoadAndTracking() {
+        // Load a CSS file (using a non-existent path to test tracking)
+        String cssUrl = fxLoader.loadCss("/com/warmup/javafx/test.css");
+        
+        // Since the CSS doesn't exist, it should return null
+        assertNull(cssUrl);
+    }
+    
+    @Test
+    void testStylesheetReplacerCallback() throws Exception {
+        // Track callback invocations
+        final java.util.List<String>[] capturedUrls = new java.util.List[1];
+        fxLoader.setStylesheetReplacer(urls -> capturedUrls[0] = new java.util.ArrayList<>(urls));
+        
+        // Load a CSS file (will return null since it doesn't exist)
+        fxLoader.loadCss("/nonexistent.css");
+        
+        // Callback should not be invoked for non-existent CSS
+        assertNull(capturedUrls[0]);
+    }
 
     public static class TestService {
         public String getName() {
@@ -135,6 +303,7 @@ class FxLoaderTest {
     public static class TestController {
         @Inject
         private TestService service;
+        public int instanceId = 0;
 
         public TestService getService() {
             return service;
@@ -151,6 +320,7 @@ class FxLoaderTest {
     public static class TestControllerWithFxml {
         @Inject
         private TestService service;
+        public int instanceId = 0;
 
         public TestService getService() {
             return service;
