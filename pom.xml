@@ -4,7 +4,7 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
 
-    <groupId>com.warmup</groupId>
+    <groupId>io.github.yasmramos</groupId>
     <artifactId>warmup-parent</artifactId>
     <version>1.0.0-SNAPSHOT</version>
     <packaging>pom</packaging>
@@ -27,7 +27,7 @@
         <junit.version>5.10.1</junit.version>
         <jmh.version>1.37</jmh.version>
         <javafx.version>21</javafx.version>
-        <jacoco.version>0.8.11</jacoco.version>
+        <jacoco.version>0.8.15</jacoco.version>
         <jacoco.min.coverage>0.30</jacoco.min.coverage>
     </properties>
 
@@ -35,12 +35,12 @@
         <dependencies>
             <!-- Core modules -->
             <dependency>
-                <groupId>com.warmup</groupId>
+                <groupId>${project.groupId}</groupId>
                 <artifactId>warmup-core</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
-                <groupId>com.warmup</groupId>
+                <groupId>${project.groupId}</groupId>
                 <artifactId>warmup-processor</artifactId>
                 <version>${project.version}</version>
             </dependency>

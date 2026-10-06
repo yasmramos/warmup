@@ -12,7 +12,7 @@ java -jar warmup-benchmarks/target/benchmarks.jar
 Or via the benchmark runner:
 
 ```bash
-java -cp warmup-benchmarks/target/benchmarks.jar com.warmup.benchmarks.BenchmarkRunner
+java -cp warmup-benchmarks/target/benchmarks.jar io.github.yasmramos.warmup.benchmarks.BenchmarkRunner
 ```
 
 ## Benchmark Scenarios

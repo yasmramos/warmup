@@ -1,0 +1,1562 @@
+package io.github.yasmramos.warmup.processor;
+
+import io.github.yasmramos.warmup.annotations.Bean;
+import io.github.yasmramos.warmup.annotations.Factory;
+import io.github.yasmramos.warmup.annotations.Singleton;
+import io.github.yasmramos.warmup.annotations.Prototype;
+import io.github.yasmramos.warmup.annotations.Component;
+import io.github.yasmramos.warmup.annotations.Inject;
+import io.github.yasmramos.warmup.annotations.Primary;
+import io.github.yasmramos.warmup.annotations.Named;
+import io.github.yasmramos.warmup.annotations.Value;
+import io.github.yasmramos.warmup.annotations.Profile;
+import io.github.yasmramos.warmup.annotations.Conditional;
+import io.github.yasmramos.warmup.annotations.EventListener;
+import io.github.yasmramos.warmup.annotations.Lazy;
+
+import javax.annotation.processing.*;
+import javax.lang.model.SourceVersion;
+import javax.lang.model.element.*;
+import javax.lang.model.type.DeclaredType;
+import javax.lang.model.type.TypeKind;
+import javax.lang.model.type.TypeMirror;
+import javax.tools.Diagnostic;
+import javax.tools.FileObject;
+import javax.tools.StandardLocation;
+import java.io.IOException;
+import java.io.OutputStream;
+import java.io.Writer;
+import java.util.*;
+
+/**
+ * Annotation processor for generating compile-time CompiledFactory implementations.
+ * 
+ * Generates zero-overhead factories that are registered automatically with the container.
+ * 
+ * Supported annotations:
+ * - @Singleton, @Prototype, @Component: Class-level stereotypes that imply @Bean with scope
+ * - @Factory: Class-level marker for configuration classes with @Bean methods
+ * - @Bean: Method-level annotation within @Factory classes to mark producer methods
+ * - @Inject: Marks constructor parameters or method parameters for injection
+ * 
+ * Generated factory structure (as bytecode):
+ * ```java
+ * public class UserService$$WarmupFactory implements CompiledFactory<UserService> {
+ *     private Object dep0;  // wired dependency
+ *     
+ *     public void wire(CompiledFactory<?>[] deps) {
+ *         this.dep0 = deps[0];
+ *     }
+ *     
+ *     public UserService get() {
+ *         return new UserService((DependencyType) dep0);
+ *     }
+ *     
+ *     public Object create(Object... dependencies) { ... }
+ *     public Class<UserService> getBeanType() { ... }
+ *     public int getDependencyCount() { ... }
+ * }
+ * ```
+ */
+@SupportedAnnotationTypes({
+    "io.github.yasmramos.warmup.annotations.Bean",
+    "io.github.yasmramos.warmup.annotations.Factory",
+    "io.github.yasmramos.warmup.annotations.Singleton",
+    "io.github.yasmramos.warmup.annotations.Prototype",
+    "io.github.yasmramos.warmup.annotations.Component",
+    "io.github.yasmramos.warmup.annotations.Inject",
+    "io.github.yasmramos.warmup.annotations.Primary",
+    "io.github.yasmramos.warmup.annotations.Named",
+    "io.github.yasmramos.warmup.annotations.Provider",
+    "io.github.yasmramos.warmup.annotations.Lazy",
+    "io.github.yasmramos.warmup.annotations.Value",
+    "io.github.yasmramos.warmup.annotations.Profile",
+    "io.github.yasmramos.warmup.annotations.Conditional",
+    "io.github.yasmramos.warmup.annotations.EventListener",
+    "io.github.yasmramos.warmup.javafx.WarmupFxController"
+})
+@SupportedSourceVersion(SourceVersion.RELEASE_17)
+public class WarmupProcessor extends AbstractProcessor {
+
+    private final List<BeanInfo> processedBeans = new ArrayList<>();
+    private final Set<String> generatedFactoryClasses = new HashSet<>();
+    private boolean processingOver = false;
+    private FactoryBytecodeGenerator bytecodeGenerator;
+
+    /**
+     * Holds information about an injectable method for factory generation.
+     */
+    private static class InjectMethodInfo {
+        final String methodName;
+        final int paramCount;
+        final List<String> paramTypes;
+        final List<String> depNames;
+        final List<Boolean> isProviderDependency;
+        final List<Boolean> isValueDependency;
+        final List<String> valueExpressions;
+        
+        InjectMethodInfo(String methodName, int paramCount, List<String> paramTypes, List<String> depNames, 
+                        List<Boolean> isProviderDependency, List<Boolean> isValueDependency, List<String> valueExpressions) {
+            this.methodName = methodName;
+            this.paramCount = paramCount;
+            this.paramTypes = paramTypes != null ? paramTypes : new ArrayList<>();
+            this.depNames = depNames != null ? depNames : new ArrayList<>();
+            this.isProviderDependency = isProviderDependency != null ? isProviderDependency : new ArrayList<>();
+            this.isValueDependency = isValueDependency != null ? isValueDependency : new ArrayList<>();
+            this.valueExpressions = valueExpressions != null ? valueExpressions : new ArrayList<>();
+        }
+    }
+    
+    /**
+     * Holds information about a processed bean for later registrar generation.
+     */
+    private static class BeanInfo {
+        final String packageName;
+        final String className;
+        final String beanName;
+        final String factoryClassName;
+        final String scope;
+        final String scopeName;
+        final List<String> dependencyNames;
+        final List<Boolean> isProviderDependency;
+        final List<Boolean> isValueDependency;
+        final List<String> valueExpressions;
+        final boolean isPrimary;
+        final List<InjectMethodInfo> injectMethods;
+        final List<String> profiles;
+        final List<String> conditionClassNames;
+        final List<Boolean> isDeferredDependency;
+        final List<Boolean> isFieldOrSetterDependency;
+
+        BeanInfo(String packageName, String className, String beanName, String factoryClassName, String scope, String scopeName,
+                List<String> dependencyNames, List<Boolean> isProviderDependency, List<Boolean> isValueDependency, 
+                List<String> valueExpressions, boolean isPrimary, List<InjectMethodInfo> injectMethods,
+                List<String> profiles, List<String> conditionClassNames, List<Boolean> isDeferredDependency,
+                List<Boolean> isFieldOrSetterDependency) {
+            this.packageName = packageName;
+            this.className = className;
+            this.beanName = beanName;
+            this.factoryClassName = factoryClassName;
+            this.scope = scope;
+            this.scopeName = scopeName != null ? scopeName : "";
+            this.dependencyNames = dependencyNames != null ? dependencyNames : new ArrayList<>();
+            this.isProviderDependency = isProviderDependency != null ? isProviderDependency : new ArrayList<>();
+            this.isValueDependency = isValueDependency != null ? isValueDependency : new ArrayList<>();
+            this.valueExpressions = valueExpressions != null ? valueExpressions : new ArrayList<>();
+            this.isPrimary = isPrimary;
+            this.injectMethods = injectMethods != null ? injectMethods : new ArrayList<>();
+            this.profiles = profiles != null ? profiles : new ArrayList<>();
+            this.conditionClassNames = conditionClassNames != null ? conditionClassNames : new ArrayList<>();
+            this.isDeferredDependency = isDeferredDependency != null ? isDeferredDependency : new ArrayList<>();
+            this.isFieldOrSetterDependency = isFieldOrSetterDependency != null ? isFieldOrSetterDependency : new ArrayList<>();
+        }
+        
+        BeanInfo(String packageName, String className, String beanName, String factoryClassName, String scope) {
+            this(packageName, className, beanName, factoryClassName, scope, "", new ArrayList<>(), new ArrayList<>(), new ArrayList<>(), new ArrayList<>(), false, new ArrayList<>(), new ArrayList<>(), new ArrayList<>(), new ArrayList<>(), new ArrayList<>());
+        }
+        
+        BeanInfo(String packageName, String className, String beanName, String factoryClassName, String scope, List<String> dependencyNames) {
+            this(packageName, className, beanName, factoryClassName, scope, "", dependencyNames, new ArrayList<>(), new ArrayList<>(), new ArrayList<>(), false, new ArrayList<>(), new ArrayList<>(), new ArrayList<>(), new ArrayList<>(), new ArrayList<>());
+        }
+    }
+
+    @Override
+    public boolean process(Set<? extends TypeElement> annotations, RoundEnvironment roundEnv) {
+        Filer filer = processingEnv.getFiler();
+        Messager messager = processingEnv.getMessager();
+        
+        // Initialize bytecode generator with Elements utility for binary name resolution
+        bytecodeGenerator = new FactoryBytecodeGenerator(new FactoryBytecodeGenerator.MessagerAdapter() {
+            @Override
+            public void printError(String message, Element element) {
+                messager.printMessage(Diagnostic.Kind.ERROR, message, element);
+            }
+        }, processingEnv.getElementUtils());
+        
+        // Process class-level stereotype annotations: @Singleton, @Prototype, @Component
+        // These imply @Bean with a specific scope
+        processClassStereotypes(roundEnv, filer, messager);
+        
+        // Process @WarmupFxController annotation (by qualified name to avoid coupling)
+        processFxControllers(roundEnv, filer, messager);
+        
+        // Process @Factory classes with @Bean methods
+        processFactoryClasses(roundEnv, filer, messager);
+        
+        // Process @EventListener methods for metadata generation
+        processEventListeners(roundEnv, filer, messager);
+        
+        // Generate registrar when processing is complete
+        if (roundEnv.processingOver() && !processingOver && !processedBeans.isEmpty()) {
+            processingOver = true;
+            try {
+                generateFactoryRegistrar(filer);
+            } catch (IOException e) {
+                messager.printMessage(Diagnostic.Kind.ERROR,
+                    "Failed to generate FactoryRegistrar: " + e.getMessage());
+            }
+        }
+        
+        return true;
+    }
+    
+    /**
+     * Processes methods annotated with @EventListener to generate metadata.
+     * This enables compile-time validation and optional optimization of event listener registration.
+     */
+    private void processEventListeners(RoundEnvironment roundEnv, Filer filer, Messager messager) {
+        for (Element element : roundEnv.getElementsAnnotatedWith(EventListener.class)) {
+            if (element.getKind() != ElementKind.METHOD) {
+                messager.printMessage(Diagnostic.Kind.ERROR, 
+                    "@EventListener only applies to methods", element);
+                continue;
+            }
+            
+            ExecutableElement method = (ExecutableElement) element;
+            
+            // Validate method signature: must have exactly one parameter
+            List<? extends VariableElement> parameters = method.getParameters();
+            if (parameters.size() != 1) {
+                messager.printMessage(Diagnostic.Kind.ERROR, 
+                    "@EventListener method must have exactly one parameter", element);
+                continue;
+            }
+            
+            // The parameter type determines the event type this listener handles
+            TypeMirror eventType = parameters.get(0).asType();
+            
+            // Metadata is implicitly available at runtime via reflection
+            // This processing step primarily provides compile-time validation
+            messager.printMessage(Diagnostic.Kind.NOTE, 
+                "Registered @EventListener for event type: " + eventType, element);
+        }
+    }
+    
+    /**
+     * Processes classes annotated with @Singleton, @Prototype, or @Component.
+     * These are treated as beans with constructor-based injection.
+     */
+    private void processClassStereotypes(RoundEnvironment roundEnv, Filer filer, Messager messager) {
+        // Process @Singleton
+        for (Element element : roundEnv.getElementsAnnotatedWith(Singleton.class)) {
+            if (element.getKind() != ElementKind.CLASS) {
+                messager.printMessage(Diagnostic.Kind.ERROR, 
+                    "@Singleton only applies to classes", element);
+                continue;
+            }
+            TypeElement typeElement = (TypeElement) element;
+            
+            // Validate nested class: must be static
+            if (!validateNestedClass(typeElement, messager, "@Singleton")) {
+                continue;
+            }
+            
+            Singleton singleton = typeElement.getAnnotation(Singleton.class);
+            try {
+                String factoryClassName = generateFactoryForClassBytecode(typeElement, "SINGLETON", singleton.value(), filer);
+                storeBeanInfo(typeElement, singleton.value(), "SINGLETON", factoryClassName);
+            } catch (IOException e) {
+                messager.printMessage(Diagnostic.Kind.ERROR, 
+                    "Failed to generate factory: " + e.getMessage(), element);
+            }
+        }
+        
+        // Process @Prototype
+        for (Element element : roundEnv.getElementsAnnotatedWith(Prototype.class)) {
+            if (element.getKind() != ElementKind.CLASS) {
+                messager.printMessage(Diagnostic.Kind.ERROR, 
+                    "@Prototype only applies to classes", element);
+                continue;
+            }
+            TypeElement typeElement = (TypeElement) element;
+            
+            // Validate nested class: must be static
+            if (!validateNestedClass(typeElement, messager, "@Prototype")) {
+                continue;
+            }
+            
+            Prototype prototype = typeElement.getAnnotation(Prototype.class);
+            try {
+                String factoryClassName = generateFactoryForClassBytecode(typeElement, "PROTOTYPE", prototype.value(), filer);
+                storeBeanInfo(typeElement, prototype.value(), "PROTOTYPE", factoryClassName);
+            } catch (IOException e) {
+                messager.printMessage(Diagnostic.Kind.ERROR, 
+                    "Failed to generate factory: " + e.getMessage(), element);
+            }
+        }
+        
+        // Process @Component (treated as SINGLETON)
+        for (Element element : roundEnv.getElementsAnnotatedWith(Component.class)) {
+            if (element.getKind() != ElementKind.CLASS) {
+                messager.printMessage(Diagnostic.Kind.ERROR, 
+                    "@Component only applies to classes", element);
+                continue;
+            }
+            TypeElement typeElement = (TypeElement) element;
+            
+            // Validate nested class: must be static
+            if (!validateNestedClass(typeElement, messager, "@Component")) {
+                continue;
+            }
+            
+            Component component = typeElement.getAnnotation(Component.class);
+            try {
+                String factoryClassName = generateFactoryForClassBytecode(typeElement, "SINGLETON", component.value(), filer);
+                storeBeanInfo(typeElement, component.value(), "SINGLETON", factoryClassName);
+            } catch (IOException e) {
+                messager.printMessage(Diagnostic.Kind.ERROR, 
+                    "Failed to generate factory: " + e.getMessage(), element);
+            }
+        }
+    }
+    
+    /**
+     * Validates that a nested class is static. Non-static inner classes are not supported
+     * because they require an enclosing instance.
+     * 
+     * @return true if the class is valid (not nested, or nested and static), false otherwise
+     */
+    private boolean validateNestedClass(TypeElement typeElement, Messager messager, String annotationName) {
+        NestingKind nestingKind = typeElement.getNestingKind();
+        if (nestingKind.isNested()) {
+            // Check if the nested class is static
+            if (!typeElement.getModifiers().contains(Modifier.STATIC)) {
+                messager.printMessage(Diagnostic.Kind.ERROR,
+                    annotationName + " does not support non-static inner classes. " +
+                    "Declare the class as 'static' or use manual registration.",
+                    typeElement);
+                return false;
+            }
+        }
+        return true;
+    }
+    
+    /**
+     * Processes classes annotated with @WarmupFxController.
+     * This annotation is discovered by qualified name to avoid coupling warmup-processor to warmup-javafx.
+     * If the annotation class is not found (JavaFX module not on classpath), processing is silently skipped.
+     */
+    private void processFxControllers(RoundEnvironment roundEnv, Filer filer, Messager messager) {
+        // Try to get the annotation type element by qualified name
+        TypeElement annotationTypeElement = processingEnv.getElementUtils()
+            .getTypeElement("io.github.yasmramos.warmup.javafx.WarmupFxController");
+        
+        // If null, the JavaFX module is not on the classpath - skip silently
+        if (annotationTypeElement == null) {
+            return;
+        }
+        
+        // Process all elements annotated with @WarmupFxController
+        for (Element element : roundEnv.getElementsAnnotatedWith(annotationTypeElement)) {
+            if (element.getKind() != ElementKind.CLASS) {
+                messager.printMessage(Diagnostic.Kind.ERROR, 
+                    "@WarmupFxController only applies to classes", element);
+                continue;
+            }
+            
+            TypeElement typeElement = (TypeElement) element;
+            
+            // Validate nested class: must be static
+            if (!validateNestedClass(typeElement, messager, "@WarmupFxController")) {
+                continue;
+            }
+            
+            // Extract scope from annotation mirror (since we can't import the annotation class)
+            String scope = extractScopeFromAnnotationMirror(element, annotationTypeElement);
+            
+            // Extract bean name from annotation mirror
+            String beanName = extractBeanNameFromAnnotationMirror(element, annotationTypeElement);
+            
+            try {
+                String factoryClassName = generateFactoryForClassBytecode(typeElement, scope, beanName, filer);
+                storeBeanInfo(typeElement, beanName, scope, factoryClassName);
+            } catch (IOException e) {
+                messager.printMessage(Diagnostic.Kind.ERROR, 
+                    "Failed to generate factory: " + e.getMessage(), element);
+            }
+        }
+    }
+    
+    /**
+     * Extracts the scope value from an annotation mirror.
+     * Default is PROTOTYPE for @WarmupFxController.
+     */
+    private String extractScopeFromAnnotationMirror(Element element, TypeElement annotationType) {
+        for (AnnotationMirror mirror : element.getAnnotationMirrors()) {
+            if (mirror.getAnnotationType().toString().equals(annotationType.getQualifiedName().toString())) {
+                for (Map.Entry<? extends ExecutableElement, ? extends AnnotationValue> entry : mirror.getElementValues().entrySet()) {
+                    if (entry.getKey().getSimpleName().toString().equals("scope")) {
+                        AnnotationValue scopeValue = entry.getValue();
+                        // Scope is an enum, extract its name
+                        if (scopeValue.getValue() instanceof VariableElement) {
+                            return ((VariableElement) scopeValue.getValue()).getSimpleName().toString();
+                        }
+                    }
+                }
+            }
+        }
+        // Default to PROTOTYPE for controllers
+        return "PROTOTYPE";
+    }
+    
+    /**
+     * Extracts the bean name (value) from an annotation mirror.
+     * Returns empty string if not specified.
+     */
+    private String extractBeanNameFromAnnotationMirror(Element element, TypeElement annotationType) {
+        for (AnnotationMirror mirror : element.getAnnotationMirrors()) {
+            if (mirror.getAnnotationType().toString().equals(annotationType.getQualifiedName().toString())) {
+                for (Map.Entry<? extends ExecutableElement, ? extends AnnotationValue> entry : mirror.getElementValues().entrySet()) {
+                    if (entry.getKey().getSimpleName().toString().equals("value") || 
+                        entry.getKey().getSimpleName().toString().equals("fxml")) {
+                        // For @WarmupFxController, there's no 'value' attribute for bean name
+                        // The fxml attribute is separate, bean name uses default behavior
+                        return "";
+                    }
+                }
+            }
+        }
+        return "";
+    }
+    
+    /**
+     * Processes @Factory classes and their @Bean methods.
+     */
+    private void processFactoryClasses(RoundEnvironment roundEnv, Filer filer, Messager messager) {
+        for (Element element : roundEnv.getElementsAnnotatedWith(Factory.class)) {
+            if (element.getKind() != ElementKind.CLASS) {
+                messager.printMessage(Diagnostic.Kind.ERROR, 
+                    "@Factory only applies to classes", element);
+                continue;
+            }
+            
+            TypeElement factoryClass = (TypeElement) element;
+            
+            // Process each @Bean method in the factory class
+            for (Element enclosed : factoryClass.getEnclosedElements()) {
+                if (enclosed.getKind() != ElementKind.METHOD) {
+                    continue;
+                }
+                
+                ExecutableElement method = (ExecutableElement) enclosed;
+                if (method.getAnnotation(Bean.class) == null) {
+                    continue;
+                }
+                
+                Bean beanAnnotation = method.getAnnotation(Bean.class);
+                String scope = beanAnnotation.scope().name();
+                
+                try {
+                    String factoryClassName = generateFactoryForMethodBytecode(factoryClass, method, beanAnnotation, filer);
+                    storeBeanInfoForMethod(factoryClass, method, beanAnnotation, scope, factoryClassName);
+                } catch (IOException e) {
+                    messager.printMessage(Diagnostic.Kind.ERROR, 
+                        "Failed to generate factory for method " + method.getSimpleName() + ": " + e.getMessage(), 
+                        method);
+                }
+            }
+        }
+    }
+    
+    /**
+     * Stores bean information for class-level stereotypes.
+     */
+    private void storeBeanInfo(TypeElement typeElement, String explicitName, String scope, String factoryClassName) {
+        String packageName = getPackageName(typeElement);
+        String className = getFullyQualifiedTypeName(typeElement);
+        String beanName = explicitName.isEmpty() ? typeElement.getSimpleName().toString() : explicitName;
+        
+        // Extract scope name from @Bean annotation if present (for CUSTOM scope)
+        String scopeName = "";
+        Bean beanAnnotation = typeElement.getAnnotation(Bean.class);
+        if (beanAnnotation != null && "CUSTOM".equals(beanAnnotation.scope().name())) {
+            scopeName = beanAnnotation.scopeName();
+        }
+        
+        // Check if the bean is marked as @Primary
+        boolean isPrimary = typeElement.getAnnotation(Primary.class) != null;
+        
+        // Extract @Profile annotation values
+        List<String> profiles = new ArrayList<>();
+        Profile profile = typeElement.getAnnotation(Profile.class);
+        if (profile != null) {
+            for (String p : profile.value()) {
+                profiles.add(p);
+            }
+        }
+        
+        // Extract @Conditional annotation class names
+        List<String> conditionClassNames = new ArrayList<>();
+        Conditional conditional = typeElement.getAnnotation(Conditional.class);
+        if (conditional != null) {
+            for (Class<?> c : conditional.value()) {
+                conditionClassNames.add(c.getName());
+            }
+        }
+        
+        // Extract dependency names from constructor, @Inject fields, and @Inject methods
+        List<String> depNames = new ArrayList<>();
+        List<Boolean> providerFlags = new ArrayList<>();
+        List<Boolean> isDeferred = new ArrayList<>();
+        List<Boolean> isFieldOrSetter = new ArrayList<>();
+        List<InjectMethodInfo> injectMethods = new ArrayList<>();
+        
+        // Constructor dependencies (NOT deferrable - must be available at construction time)
+        ExecutableElement constructor = findInjectableConstructor(typeElement);
+        if (constructor != null) {
+            for (VariableElement param : constructor.getParameters()) {
+                extractDependencyInfo(param, depNames, providerFlags);
+                isDeferred.add(false); // Constructor deps are never deferrable
+                isFieldOrSetter.add(false);
+            }
+        }
+        
+        // @Inject field dependencies (deferrable)
+        for (Element enclosed : typeElement.getEnclosedElements()) {
+            if (enclosed.getKind() == ElementKind.FIELD) {
+                VariableElement field = (VariableElement) enclosed;
+                if (field.getAnnotation(Inject.class) != null) {
+                    extractFieldDependencyInfo(field, depNames, providerFlags, isDeferred, isFieldOrSetter);
+                }
+            }
+        }
+        
+        // @Inject method dependencies (deferrable)
+        for (Element enclosed : typeElement.getEnclosedElements()) {
+            if (enclosed.getKind() == ElementKind.METHOD) {
+                ExecutableElement method = (ExecutableElement) enclosed;
+                if (method.getAnnotation(Inject.class) != null) {
+                    InjectMethodInfo methodInfo = extractMethodDependencyInfo(method, depNames, providerFlags, isDeferred, isFieldOrSetter);
+                    if (methodInfo != null) {
+                        injectMethods.add(methodInfo);
+                    }
+                }
+            }
+        }
+        
+        processedBeans.add(new BeanInfo(packageName, className, beanName, factoryClassName, scope, scopeName, depNames, providerFlags, new ArrayList<>(), new ArrayList<>(), isPrimary, injectMethods, profiles, conditionClassNames, isDeferred, isFieldOrSetter));
+    }
+    
+    /**
+     * Extracts dependency info from a parameter element.
+     */
+    private void extractDependencyInfo(VariableElement param, List<String> depNames, List<Boolean> providerFlags) {
+        String paramType = param.asType().toString();
+        int lastDot = paramType.lastIndexOf('.');
+        String simpleName = lastDot > 0 ? paramType.substring(lastDot + 1) : paramType;
+        
+        // Check if parameter is a Provider<T>
+        boolean isProvider = isProviderType(param.asType());
+        
+        // Check for @Value annotation on parameter (configuration value, not bean reference)
+        Value value = param.getAnnotation(Value.class);
+        if (value != null) {
+            depNames.add(value.value()); // Store the expression as the "name"
+            providerFlags.add(false);
+            return;
+        }
+        
+        // Check for @Named annotation on parameter
+        Named named = param.getAnnotation(Named.class);
+        if (named != null) {
+            depNames.add(named.value());
+        } else if (isProvider) {
+            // For Provider, extract the generic type T
+            String providerTypeName = extractProviderGenericType(param.asType());
+            depNames.add(providerTypeName);
+        } else {
+            // Check for @Inject with value
+            Inject inject = param.getAnnotation(Inject.class);
+            if (inject != null && !inject.value().isEmpty()) {
+                depNames.add(inject.value());
+            } else {
+                depNames.add(simpleName);
+            }
+        }
+        providerFlags.add(isProvider);
+    }
+    
+    /**
+     * Extracts dependency info from a field element.
+     * Field dependencies are always considered deferrable (can be injected after construction).
+     * If marked with @Lazy, they are prioritized for deferred injection.
+     */
+    private void extractFieldDependencyInfo(VariableElement field, List<String> depNames, List<Boolean> providerFlags, 
+                                            List<Boolean> isDeferred, List<Boolean> isFieldOrSetter) {
+        String fieldType = field.asType().toString();
+        int lastDot = fieldType.lastIndexOf('.');
+        String simpleName = lastDot > 0 ? fieldType.substring(lastDot + 1) : fieldType;
+        
+        // Check if field is a Provider<T>
+        boolean isProvider = isProviderType(field.asType());
+        
+        // Check for @Lazy annotation - field dependencies are always deferrable
+        boolean isLazy = field.getAnnotation(Lazy.class) != null;
+        
+        // Check for @Value annotation on field (configuration value, not bean reference)
+        Value value = field.getAnnotation(Value.class);
+        if (value != null) {
+            depNames.add(value.value()); // Store the expression as the "name"
+            providerFlags.add(false);
+            isDeferred.add(false); // Value dependencies are not deferrable in the same way
+            isFieldOrSetter.add(true);
+            return;
+        }
+        
+        // Check for @Named annotation on field
+        Named named = field.getAnnotation(Named.class);
+        if (named != null) {
+            depNames.add(named.value());
+        } else if (isProvider) {
+            // For Provider, extract the generic type T
+            String providerTypeName = extractProviderGenericType(field.asType());
+            depNames.add(providerTypeName);
+        } else {
+            // Check for @Inject with value
+            Inject inject = field.getAnnotation(Inject.class);
+            if (inject != null && !inject.value().isEmpty()) {
+                depNames.add(inject.value());
+            } else {
+                depNames.add(simpleName);
+            }
+        }
+        providerFlags.add(isProvider);
+        isDeferred.add(true); // Field injections are always deferrable
+        isFieldOrSetter.add(true);
+    }
+    
+    /**
+     * Extracts dependency info from an @Inject method and returns method info.
+     * Returns null if the method has no parameters.
+     * Setter/method dependencies are always considered deferrable (can be injected after construction).
+     */
+    private InjectMethodInfo extractMethodDependencyInfo(ExecutableElement method, List<String> depNames, List<Boolean> providerFlags,
+                                                         List<Boolean> isDeferred, List<Boolean> isFieldOrSetter) {
+        String methodName = method.getSimpleName().toString();
+        int paramCount = method.getParameters().size();
+        
+        if (paramCount == 0) {
+            return null; // No parameters to inject
+        }
+        
+        List<String> paramTypes = new ArrayList<>();
+        List<String> methodDepNames = new ArrayList<>();
+        List<Boolean> methodProviderFlags = new ArrayList<>();
+        List<Boolean> methodValueFlags = new ArrayList<>();
+        List<String> methodValueExpressions = new ArrayList<>();
+        List<Boolean> methodIsDeferred = new ArrayList<>();
+        List<Boolean> methodIsFieldOrSetter = new ArrayList<>();
+        
+        for (VariableElement param : method.getParameters()) {
+            String paramType = param.asType().toString();
+            int lastDot = paramType.lastIndexOf('.');
+            String simpleName = lastDot > 0 ? paramType.substring(lastDot + 1) : paramType;
+            paramTypes.add(paramType);
+            
+            // Check if parameter is a Provider<T>
+            boolean isProvider = isProviderType(param.asType());
+            
+            // Check for @Lazy annotation on parameter
+            boolean isLazy = param.getAnnotation(Lazy.class) != null;
+            
+            // Check for @Value annotation on parameter (configuration value, not bean reference)
+            Value value = param.getAnnotation(Value.class);
+            if (value != null) {
+                methodDepNames.add(value.value());
+                depNames.add(value.value());
+                methodProviderFlags.add(false);
+                providerFlags.add(false);
+                methodValueFlags.add(true);
+                methodValueExpressions.add(value.value());
+                methodIsDeferred.add(false); // Value dependencies are not deferrable
+                methodIsFieldOrSetter.add(true);
+                isDeferred.add(false);
+                isFieldOrSetter.add(true);
+                continue;
+            }
+            
+            methodValueFlags.add(false);
+            methodValueExpressions.add(null);
+            
+            // Check for @Named annotation on parameter
+            Named named = param.getAnnotation(Named.class);
+            if (named != null) {
+                methodDepNames.add(named.value());
+                depNames.add(named.value());
+            } else if (isProvider) {
+                // For Provider, extract the generic type T
+                String providerTypeName = extractProviderGenericType(param.asType());
+                methodDepNames.add(providerTypeName);
+                depNames.add(providerTypeName);
+            } else {
+                // Check for @Inject with value
+                Inject inject = param.getAnnotation(Inject.class);
+                if (inject != null && !inject.value().isEmpty()) {
+                    methodDepNames.add(inject.value());
+                    depNames.add(inject.value());
+                } else {
+                    methodDepNames.add(simpleName);
+                    depNames.add(simpleName);
+                }
+            }
+            methodProviderFlags.add(isProvider);
+            providerFlags.add(isProvider);
+            methodIsDeferred.add(true); // Setter injections are always deferrable
+            methodIsFieldOrSetter.add(true);
+            isDeferred.add(true);
+            isFieldOrSetter.add(true);
+        }
+        
+        return new InjectMethodInfo(methodName, paramCount, paramTypes, methodDepNames, methodProviderFlags, methodValueFlags, methodValueExpressions);
+    }
+    
+    /**
+     * Stores bean information for @Factory methods.
+     */
+    private void storeBeanInfoForMethod(TypeElement factoryClass, ExecutableElement method, Bean beanAnnotation, String scope, String factoryClassName) {
+        String packageName = getPackageName(factoryClass);
+        String factoryClassNameStr = factoryClass.getSimpleName().toString();
+        String methodName = method.getSimpleName().toString();
+        String beanName = beanAnnotation.value().isEmpty() ? methodName : beanAnnotation.value();
+        
+        // Check if the bean method is marked as @Primary
+        boolean isPrimary = method.getAnnotation(Primary.class) != null;
+        
+        // Extract @Profile annotation values from method
+        List<String> profiles = new ArrayList<>();
+        Profile profile = method.getAnnotation(Profile.class);
+        if (profile != null) {
+            for (String p : profile.value()) {
+                profiles.add(p);
+            }
+        }
+        
+        // Extract @Conditional annotation class names from method
+        List<String> conditionClassNames = new ArrayList<>();
+        Conditional conditional = method.getAnnotation(Conditional.class);
+        if (conditional != null) {
+            for (Class<?> c : conditional.value()) {
+                conditionClassNames.add(c.getName());
+            }
+        }
+        
+        // Extract dependency names from method parameters
+        List<String> depNames = new ArrayList<>();
+        List<Boolean> providerFlags = new ArrayList<>();
+        for (VariableElement param : method.getParameters()) {
+            String paramType = param.asType().toString();
+            int lastDot = paramType.lastIndexOf('.');
+            String simpleName = lastDot > 0 ? paramType.substring(lastDot + 1) : paramType;
+            
+            // Check if parameter is a Provider<T>
+            boolean isProvider = isProviderType(param.asType());
+            
+            // Check for @Named annotation on parameter
+            Named named = param.getAnnotation(Named.class);
+            if (named != null) {
+                depNames.add(named.value());
+            } else if (isProvider) {
+                // For Provider, extract the generic type T
+                String providerTypeName = extractProviderGenericType(param.asType());
+                depNames.add(providerTypeName);
+            } else {
+                // Check for @Inject with value
+                Inject inject = param.getAnnotation(Inject.class);
+                if (inject != null && !inject.value().isEmpty()) {
+                    depNames.add(inject.value());
+                } else {
+                    depNames.add(simpleName);
+                }
+            }
+            providerFlags.add(isProvider);
+        }
+        
+        // For method-based beans, the bean is registered in the same package as the factory class
+        // The return type might be from any package (e.g., java.lang.String), but for registration
+        // purposes we use the factory's package and store both the simple name and FQN
+        TypeMirror returnTypeMirror = method.getReturnType();
+        String returnTypeNameForCode;  // Used in generated code (e.g., "AppConfig.Service" for nested classes)
+        String returnTypeFqn;          // Fully qualified name for BeanDefinition
+        
+        if (returnTypeMirror.getKind() == TypeKind.DECLARED) {
+            DeclaredType declaredType = (DeclaredType) returnTypeMirror;
+            Element returnTypeElement = declaredType.asElement();
+            if (returnTypeElement instanceof TypeElement) {
+                TypeElement returnTypeElementTyped = (TypeElement) returnTypeElement;
+                
+                // Get the fully qualified name of the return type
+                returnTypeFqn = getFullyQualifiedTypeName(returnTypeElementTyped);
+                String returnTypePackage = getPackageName(returnTypeElementTyped);
+                
+                // For generated code, we need the name as it appears in Java source
+                // e.g., test.AppConfig.Service -> className = "AppConfig.Service" (with dots, not $)
+                if (returnTypePackage.isEmpty()) {
+                    returnTypeNameForCode = returnTypeFqn;
+                } else {
+                    returnTypeNameForCode = returnTypeFqn.substring(returnTypePackage.length() + 1);
+                }
+            } else {
+                // Fallback for unexpected element types
+                String returnTypeStr = returnTypeMirror.toString();
+                int lastDot = returnTypeStr.lastIndexOf('.');
+                returnTypeNameForCode = lastDot > 0 ? returnTypeStr.substring(lastDot + 1) : returnTypeStr;
+                returnTypeFqn = returnTypeStr;
+            }
+        } else {
+            // Fallback for primitive types or other edge cases
+            String returnType = returnTypeMirror.toString();
+            int lastDot = returnType.lastIndexOf('.');
+            returnTypeNameForCode = lastDot > 0 ? returnType.substring(lastDot + 1) : returnType;
+            returnTypeFqn = returnType;
+        }
+        
+        // Store both the simple name (for code generation) and FQN (for BeanDefinition)
+        // The BeanInfo.className will hold the FQN when the return type is from a different package
+        String classNameForRegistration = returnTypeFqn;
+        
+        // For @Bean methods, dependencies are from method parameters (constructor-like, not deferrable)
+        List<Boolean> isDeferred = new ArrayList<>();
+        List<Boolean> isFieldOrSetter = new ArrayList<>();
+        for (int i = 0; i < depNames.size(); i++) {
+            isDeferred.add(false); // Method parameter dependencies are not deferrable
+            isFieldOrSetter.add(false);
+        }
+        
+        processedBeans.add(new BeanInfo(packageName, classNameForRegistration, beanName, factoryClassName, scope, "", depNames, providerFlags, new ArrayList<>(), new ArrayList<>(), isPrimary, new ArrayList<>(), profiles, conditionClassNames, isDeferred, isFieldOrSetter));
+    }
+    
+    /**
+     * Generates bytecode for a class-level bean factory and writes it as a .class file.
+     * Returns the fully qualified name of the generated factory class.
+     */
+    private String generateFactoryForClassBytecode(TypeElement beanClass, String scope, String explicitName, Filer filer) 
+            throws IOException {
+        
+        String packageName = getPackageName(beanClass);
+        String binaryName = getFullyQualifiedTypeName(beanClass); // Use binary name (with $ for nested classes)
+        String className;
+        String factorySimpleClassName;
+        String factoryFullClassName;
+        
+        // For nested classes, we need to create a unique factory name using the binary name
+        if (beanClass.getNestingKind().isNested()) {
+            // For nested classes, use the full binary name with $ and append $$WarmupFactory
+            // e.g., io.github.yasmramos.warmup.test.Outer$Inner -> Outer$Inner$$WarmupFactory
+            // The factory class will be in the same package as the outer class
+            className = binaryName.substring(packageName.isEmpty() ? 0 : packageName.length() + 1);
+            // Keep $ in the simple class name - Filer accepts $ in resource names
+            factorySimpleClassName = className + "$$WarmupFactory";
+            factoryFullClassName = packageName.isEmpty() ? factorySimpleClassName : packageName + "." + factorySimpleClassName;
+        } else {
+            className = beanClass.getSimpleName().toString();
+            factorySimpleClassName = className + "$$WarmupFactory";
+            factoryFullClassName = packageName.isEmpty() ? factorySimpleClassName : packageName + "." + factorySimpleClassName;
+        }
+        
+        // Check if factory already generated to avoid "Attempt to reopen a file" error
+        if (generatedFactoryClasses.contains(factoryFullClassName)) {
+            return factoryFullClassName;
+        }
+        generatedFactoryClasses.add(factoryFullClassName);
+        
+        // Find constructor and dependencies
+        ExecutableElement constructor = findInjectableConstructor(beanClass);
+        List<? extends VariableElement> parameters = constructor != null 
+            ? constructor.getParameters() 
+            : Collections.emptyList();
+        
+        // Collect @Inject fields
+        List<VariableElement> injectFields = new ArrayList<>();
+        for (Element enclosed : beanClass.getEnclosedElements()) {
+            if (enclosed.getKind() == ElementKind.FIELD) {
+                VariableElement field = (VariableElement) enclosed;
+                if (field.getAnnotation(Inject.class) != null) {
+                    // Validate field is not private or final
+                    if (field.getModifiers().contains(Modifier.PRIVATE)) {
+                        processingEnv.getMessager().printMessage(Diagnostic.Kind.ERROR,
+                            "@Inject fields for compile-time wiring must not be private: " + 
+                            field.getSimpleName() + " in " + beanClass.getQualifiedName(), field);
+                        continue;
+                    }
+                    if (field.getModifiers().contains(Modifier.FINAL)) {
+                        processingEnv.getMessager().printMessage(Diagnostic.Kind.ERROR,
+                            "@Inject fields for compile-time wiring must not be final: " + 
+                            field.getSimpleName() + " in " + beanClass.getQualifiedName(), field);
+                        continue;
+                    }
+                    injectFields.add(field);
+                }
+            }
+        }
+        
+        // Collect @Inject methods
+        List<ExecutableElement> injectMethods = new ArrayList<>();
+        for (Element enclosed : beanClass.getEnclosedElements()) {
+            if (enclosed.getKind() == ElementKind.METHOD) {
+                ExecutableElement method = (ExecutableElement) enclosed;
+                if (method.getAnnotation(Inject.class) != null) {
+                    // Validate method has parameters
+                    if (method.getParameters().isEmpty()) {
+                        processingEnv.getMessager().printMessage(Diagnostic.Kind.WARNING,
+                            "@Inject method without parameters will have no effect: " + 
+                            method.getSimpleName() + " in " + beanClass.getQualifiedName(), method);
+                        continue;
+                    }
+                    injectMethods.add(method);
+                }
+            }
+        }
+        
+        // Generate bytecode using FactoryBytecodeGenerator
+        byte[] bytecode = bytecodeGenerator.generateFactoryForClassBytecode(
+            beanClass, scope, explicitName, constructor, injectFields, injectMethods);
+        
+        // Write the .class file - use SOURCE_OUTPUT for test classes to avoid reopen issues
+        FileObject classFile;
+        String packageNameForFile = packageName.isEmpty() ? "" : packageName;
+        try {
+            if (packageName.isEmpty()) {
+                classFile = filer.createResource(StandardLocation.CLASS_OUTPUT, "", factorySimpleClassName + ".class");
+            } else {
+                classFile = filer.createResource(StandardLocation.CLASS_OUTPUT, packageName, factorySimpleClassName + ".class");
+            }
+            try (OutputStream os = classFile.openOutputStream()) {
+                os.write(bytecode);
+            }
+        } catch (FilerException e) {
+            // File already exists - this can happen in multi-round processing
+            // Skip writing as the factory was already generated
+            processingEnv.getMessager().printMessage(Diagnostic.Kind.NOTE, 
+                "Factory already exists: " + factoryFullClassName);
+        }
+        
+        return factoryFullClassName;
+    }
+    
+    /**
+     * Generates bytecode for a @Bean method factory and writes it as a .class file.
+     * Returns the simple name of the generated factory class.
+     */
+    private String generateFactoryForMethodBytecode(TypeElement factoryClass, ExecutableElement method, Bean beanAnnotation, Filer filer) 
+            throws IOException {
+        
+        String packageName = getPackageName(factoryClass);
+        String factoryClassNameStr = factoryClass.getSimpleName().toString();
+        String methodName = method.getSimpleName().toString();
+        String generatedFactoryName = factoryClassNameStr + "$$" + methodName + "$$WarmupFactory";
+        
+        // Generate bytecode using FactoryBytecodeGenerator
+        byte[] bytecode = bytecodeGenerator.generateFactoryForMethodBytecode(factoryClass, method, beanAnnotation);
+        
+        // Write the .class file
+        FileObject classFile;
+        if (packageName.isEmpty()) {
+            classFile = filer.createResource(StandardLocation.CLASS_OUTPUT, "", generatedFactoryName + ".class");
+        } else {
+            classFile = filer.createResource(StandardLocation.CLASS_OUTPUT, packageName, generatedFactoryName + ".class");
+        }
+        try (OutputStream os = classFile.openOutputStream()) {
+            os.write(bytecode);
+        }
+        
+        return generatedFactoryName;
+    }
+    
+    /**
+     * Generates a CompiledFactory implementation for a @Bean method within a @Factory class.
+     * The factory invokes the producer method on a cached instance of the factory class.
+     */
+    private String generateFactoryForMethod(TypeElement factoryClass, ExecutableElement method, Bean beanAnnotation, Filer filer) 
+            throws IOException {
+        
+        String packageName = getPackageName(factoryClass);
+        String factoryClassNameStr = factoryClass.getSimpleName().toString();
+        String methodName = method.getSimpleName().toString();
+        String returnType = method.getReturnType().toString();
+        String factoryFullClassName = packageName.isEmpty() ? factoryClassNameStr : packageName + "." + factoryClassNameStr;
+        
+        // Get method parameters (dependencies)
+        List<? extends VariableElement> parameters = method.getParameters();
+        
+        StringBuilder code = new StringBuilder();
+        
+        // Only add package declaration if not in default package
+        if (!packageName.isEmpty()) {
+            code.append("package ").append(packageName).append(";\n\n");
+        }
+        
+        code.append("import io.github.yasmramos.warmup.core.jit.CompiledFactory;\n");
+        code.append("import java.lang.Class;\n\n");
+        
+        // Generate factory class
+        String generatedFactoryName = factoryClassNameStr + "$$" + methodName + "$$WarmupFactory";
+        code.append("/**\n");
+        code.append(" * Auto-generated factory for {@link ").append(factoryClassNameStr).append("#").append(methodName).append("()}.\n");
+        code.append(" * Produces beans of type {@link ").append(returnType).append("}.\n");
+        code.append(" * Scope: ").append(beanAnnotation.scope().name()).append("\n");
+        code.append(" * DO NOT MODIFY - generated by Warmup annotation processor\n");
+        code.append(" */\n");
+        code.append("@javax.annotation.processing.Generated(\"io.github.yasmramos.warmup.processor.WarmupProcessor\")\n");
+        code.append("public final class ").append(generatedFactoryName)
+            .append(" implements CompiledFactory<").append(returnType).append("> {\n\n");
+        
+        // Field for caching the factory instance (singleton pattern for the factory itself)
+        code.append("    private ").append(factoryFullClassName).append(" factoryInstance;\n\n");
+        
+        // Generate fields for dependency factories (if any)
+        for (int i = 0; i < parameters.size(); i++) {
+            VariableElement param = parameters.get(i);
+            String paramType = param.asType().toString();
+            code.append("    private CompiledFactory<").append(paramType)
+                .append("> factory").append(i).append(";\n");
+        }
+        
+        if (!parameters.isEmpty()) {
+            code.append("\n");
+        }
+        
+        // Generate constructor
+        code.append("    public ").append(generatedFactoryName).append("() {\n");
+        code.append("        // Factory instance will be created on first call\n");
+        code.append("        // Dependencies will be wired by container\n");
+        for (int i = 0; i < parameters.size(); i++) {
+            code.append("        this.factory").append(i).append(" = null;\n");
+        }
+        code.append("    }\n\n");
+        
+        // Generate wire method
+        if (!parameters.isEmpty()) {
+            code.append("    @Override\n");
+            code.append("    public void wire(CompiledFactory<?>[] dependencyFactories) {\n");
+            for (int i = 0; i < parameters.size(); i++) {
+                VariableElement param = parameters.get(i);
+                String paramType = param.asType().toString();
+                code.append("        this.factory").append(i)
+                    .append(" = (CompiledFactory<").append(paramType).append(">) dependencyFactories[").append(i).append("];\n");
+            }
+            code.append("    }\n\n");
+        }
+        
+        // Generate get method (wired path - no Object[] allocation)
+        if (!parameters.isEmpty()) {
+            code.append("    @Override\n");
+            code.append("    public ").append(returnType).append(" get() {\n");
+            code.append("        if (factoryInstance == null) {\n");
+            code.append("            factoryInstance = new ").append(factoryFullClassName).append("();\n");
+            code.append("        }\n");
+            code.append("        return factoryInstance.").append(methodName).append("(");
+            for (int i = 0; i < parameters.size(); i++) {
+                if (i > 0) code.append(", ");
+                code.append("factory").append(i).append(".get()");
+            }
+            code.append(");\n");
+            code.append("    }\n\n");
+        }
+        
+        // Generate create method (fallback path for backward compatibility)
+        code.append("    @Override\n");
+        code.append("    public ").append(returnType).append(" create(Object... dependencies) {\n");
+        code.append("        if (factoryInstance == null) {\n");
+        code.append("            factoryInstance = new ").append(factoryFullClassName).append("();\n");
+        code.append("        }\n");
+        
+        // Cast dependencies and invoke method
+        for (int i = 0; i < parameters.size(); i++) {
+            VariableElement param = parameters.get(i);
+            String paramType = param.asType().toString();
+            code.append("        ").append(paramType).append(" arg").append(i)
+                .append(" = (").append(paramType).append(") dependencies[").append(i).append("];\n");
+        }
+        
+        code.append("        return factoryInstance.").append(methodName).append("(");
+        for (int i = 0; i < parameters.size(); i++) {
+            if (i > 0) code.append(", ");
+            code.append("arg").append(i);
+        }
+        code.append(");\n");
+        code.append("    }\n\n");
+        
+        // Generate getBeanType method
+        code.append("    @Override\n");
+        code.append("    public Class<").append(returnType).append("> getBeanType() {\n");
+        code.append("        return ").append(returnType).append(".class;\n");
+        code.append("    }\n\n");
+        
+        // Generate getDependencyCount method
+        code.append("    @Override\n");
+        code.append("    public int getDependencyCount() {\n");
+        code.append("        return ").append(parameters.size()).append(";\n");
+        code.append("    }\n");
+        
+        code.append("}\n");
+        
+        // Write the file
+        Writer writer;
+        if (packageName.isEmpty()) {
+            writer = filer.createSourceFile(generatedFactoryName).openWriter();
+        } else {
+            writer = filer.createSourceFile(packageName + "." + generatedFactoryName).openWriter();
+        }
+        try {
+            writer.write(code.toString());
+        } finally {
+            writer.close();
+        }
+        
+        return generatedFactoryName;
+    }
+
+    /**
+     * Generates a CompiledFactory implementation for the given bean class.
+     * Returns the simple name of the generated factory class.
+     * 
+     * Handles default package: if packageName is empty, omits the package declaration
+     * and creates the source file without a package prefix.
+     */
+    private String generateFactory(TypeElement beanClass, Bean annotation, Filer filer) 
+            throws IOException {
+        
+        String packageName = getPackageName(beanClass);
+        String className = beanClass.getSimpleName().toString();
+        String factoryClassName = className + "$$WarmupFactory";
+        
+        // Find constructor and dependencies
+        ExecutableElement constructor = findInjectableConstructor(beanClass);
+        List<? extends VariableElement> parameters = constructor != null 
+            ? constructor.getParameters() 
+            : Collections.emptyList();
+        
+        StringBuilder code = new StringBuilder();
+        
+        // Only add package declaration if not in default package
+        if (!packageName.isEmpty()) {
+            code.append("package ").append(packageName).append(";\n\n");
+        }
+        
+        code.append("import io.github.yasmramos.warmup.core.jit.CompiledFactory;\n");
+        code.append("import java.lang.Class;\n\n");
+        
+        // Generate factory class
+        code.append("/**\n");
+        code.append(" * Auto-generated factory for {@link ").append(className).append("}.\n");
+        code.append(" * DO NOT MODIFY - generated by Warmup annotation processor\n");
+        code.append(" */\n");
+        code.append("@javax.annotation.processing.Generated(\"io.github.yasmramos.warmup.processor.WarmupProcessor\")\n");
+        code.append("public final class ").append(factoryClassName)
+            .append(" implements CompiledFactory<").append(className).append("> {\n\n");
+        
+        // Generate fields for dependency factories (if any)
+        for (int i = 0; i < parameters.size(); i++) {
+            VariableElement param = parameters.get(i);
+            String paramType = param.asType().toString();
+            code.append("    private final CompiledFactory<").append(paramType)
+                .append("> factory").append(i).append(";\n");
+        }
+        
+        if (!parameters.isEmpty()) {
+            code.append("\n");
+        }
+        
+        // Generate constructor
+        code.append("    public ").append(factoryClassName).append("() {\n");
+        // In a full implementation, we would inject dependency factories here
+        code.append("        // Dependencies resolved at runtime\n");
+        for (int i = 0; i < parameters.size(); i++) {
+            code.append("        this.factory").append(i).append(" = null;\n");
+        }
+        code.append("    }\n\n");
+        
+        // Generate create method
+        code.append("    @Override\n");
+        code.append("    public ").append(className).append(" create(Object... dependencies) {\n");
+        
+        // Cast dependencies
+        for (int i = 0; i < parameters.size(); i++) {
+            VariableElement param = parameters.get(i);
+            String paramType = param.asType().toString();
+            code.append("        ").append(paramType).append(" arg").append(i)
+                .append(" = (").append(paramType).append(") dependencies[").append(i).append("];\n");
+        }
+        
+        // Invoke constructor
+        code.append("        return new ").append(className).append("(");
+        for (int i = 0; i < parameters.size(); i++) {
+            if (i > 0) code.append(", ");
+            code.append("arg").append(i);
+        }
+        code.append(");\n");
+        code.append("    }\n\n");
+        
+        // Generate getBeanType method
+        code.append("    @Override\n");
+        code.append("    public Class<").append(className).append("> getBeanType() {\n");
+        code.append("        return ").append(className).append(".class;\n");
+        code.append("    }\n\n");
+        
+        // Generate getDependencyCount method
+        code.append("    @Override\n");
+        code.append("    public int getDependencyCount() {\n");
+        code.append("        return ").append(parameters.size()).append(";\n");
+        code.append("    }\n");
+        
+        code.append("}\n");
+        
+        // Write the file - handle default package
+        Writer writer;
+        if (packageName.isEmpty()) {
+            writer = filer.createSourceFile(factoryClassName).openWriter();
+        } else {
+            writer = filer.createSourceFile(packageName + "." + factoryClassName).openWriter();
+        }
+        try {
+            writer.write(code.toString());
+        } finally {
+            writer.close();
+        }
+        
+        return factoryClassName;
+    }
+
+    /**
+     * Finds the constructor to use for injection.
+     * Prioritizes: @Inject constructor > single public constructor > no-arg constructor
+     */
+    private ExecutableElement findInjectableConstructor(TypeElement beanClass) {
+        ExecutableElement injectableConstructor = null;
+        int publicConstructors = 0;
+        ExecutableElement publicConstructor = null;
+        
+        for (Element enclosed : beanClass.getEnclosedElements()) {
+            if (enclosed.getKind() != ElementKind.CONSTRUCTOR) {
+                continue;
+            }
+            
+            ExecutableElement constructor = (ExecutableElement) enclosed;
+            
+            // Check for @Inject annotation
+            if (constructor.getAnnotation(Inject.class) != null) {
+                return constructor;
+            }
+            
+            // Track public constructors
+            if (constructor.getModifiers().contains(Modifier.PUBLIC)) {
+                publicConstructors++;
+                publicConstructor = constructor;
+            }
+        }
+        
+        // Return single public constructor or no-arg constructor
+        if (publicConstructors == 1 && publicConstructor != null) {
+            return publicConstructor;
+        }
+        
+        // Try to find no-arg constructor
+        for (Element enclosed : beanClass.getEnclosedElements()) {
+            if (enclosed.getKind() == ElementKind.CONSTRUCTOR) {
+                ExecutableElement constructor = (ExecutableElement) enclosed;
+                if (constructor.getParameters().isEmpty()) {
+                    return constructor;
+                }
+            }
+        }
+        
+        return null;
+    }
+
+    /**
+     * Checks if a type is a Provider<T>.
+     */
+    private boolean isProviderType(TypeMirror type) {
+        if (type.getKind() != TypeKind.DECLARED) {
+            return false;
+        }
+        DeclaredType declaredType = (DeclaredType) type;
+        Element element = declaredType.asElement();
+        if (!(element instanceof TypeElement)) {
+            return false;
+        }
+        TypeElement typeElement = (TypeElement) element;
+        return "io.github.yasmramos.warmup.annotations.Provider".equals(typeElement.getQualifiedName().toString());
+    }
+    
+    /**
+     * Extracts the generic type T from a Provider<T>.
+     */
+    private String extractProviderGenericType(TypeMirror providerType) {
+        if (providerType.getKind() != TypeKind.DECLARED) {
+            return null;
+        }
+        DeclaredType declaredType = (DeclaredType) providerType;
+        List<? extends TypeMirror> typeArguments = declaredType.getTypeArguments();
+        if (typeArguments.isEmpty()) {
+            return null;
+        }
+        TypeMirror genericType = typeArguments.get(0);
+        if (genericType.getKind() == TypeKind.DECLARED) {
+            DeclaredType genericDeclaredType = (DeclaredType) genericType;
+            Element element = genericDeclaredType.asElement();
+            if (element instanceof TypeElement) {
+                TypeElement typeElement = (TypeElement) element;
+                String fqn = typeElement.getQualifiedName().toString();
+                int lastDot = fqn.lastIndexOf('.');
+                return lastDot > 0 ? fqn.substring(lastDot + 1) : fqn;
+            }
+        }
+        return genericType.toString();
+    }
+
+    private String getPackageName(TypeElement type) {
+        // For nested classes, getPackageOf returns the package of the outermost enclosing class
+        String packageName = processingEnv.getElementUtils()
+            .getPackageOf(type).getQualifiedName().toString();
+        return packageName != null ? packageName : "";
+    }
+    
+    /**
+     * Gets the fully qualified name of a type element, handling nested classes correctly.
+     * Uses binary name (with $ for nested classes) for correct bytecode generation.
+     */
+    private String getFullyQualifiedTypeName(TypeElement type) {
+        return processingEnv.getElementUtils().getBinaryName(type).toString();
+    }
+
+    /**
+     * Derives the bean name from the type element and annotation.
+     * 
+     * Convention: If @Bean.value() is empty, uses the simple class name as-is.
+     * This matches the documentation in Bean.java: "if not specified, the simple class name is used".
+     * 
+     * For users building BeanDefinition manually: both the simple class name and the fully
+     * qualified name are registered as keys, so resolution works regardless of which name was used.
+     */
+    private String deriveBeanName(TypeElement typeElement, Bean bean) {
+        // If explicit name is provided in annotation, use it
+        if (bean != null && !bean.value().isEmpty()) {
+            return bean.value();
+        }
+        
+        // Otherwise, use simple class name as-is (no decapitalization)
+        return typeElement.getSimpleName().toString();
+    }
+
+    /**
+     * Generates the FactoryRegistrar implementation and service file.
+     * This creates a single registrar class that registers all factories from this module.
+     * 
+     * Handles default package: if packageName is empty, omits the package declaration
+     * and uses simple class names for factory references.
+     */
+    private void generateFactoryRegistrar(Filer filer) throws IOException {
+        if (processedBeans.isEmpty()) {
+            return;
+        }
+
+        // Group beans by the bean type's package to generate registrars in the correct package
+        // This ensures that the generated registrar can reference the bean classes without import issues
+        Map<String, List<BeanInfo>> beansByPackage = new LinkedHashMap<>();
+        for (BeanInfo beanInfo : processedBeans) {
+            beansByPackage.computeIfAbsent(beanInfo.packageName, k -> new ArrayList<>()).add(beanInfo);
+        }
+        
+        // Generate one registrar per package and collect their fully qualified names
+        List<String> allRegistrarNames = new ArrayList<>();
+        for (Map.Entry<String, List<BeanInfo>> entry : beansByPackage.entrySet()) {
+            String registrarPackage = entry.getKey();
+            List<BeanInfo> packageBeans = entry.getValue();
+            
+            String registrarClassName = "GeneratedFactoryRegistrar";
+            String fullyQualifiedRegistrarName = registrarPackage.isEmpty() 
+                ? registrarClassName 
+                : registrarPackage + "." + registrarClassName;
+            
+            allRegistrarNames.add(fullyQualifiedRegistrarName);
+            
+            // Generate registrar as bytecode
+            byte[] registrarBytecode = generateRegistrarBytecode(registrarPackage, packageBeans);
+            
+            // Write the .class file
+            String resourcePath = registrarPackage.replace('.', '/') + "/" + registrarClassName + ".class";
+            if (registrarPackage.isEmpty()) {
+                resourcePath = registrarClassName + ".class";
+            }
+            
+            FileObject classFile = filer.createResource(
+                StandardLocation.CLASS_OUTPUT,
+                registrarPackage,
+                registrarClassName + ".class"
+            );
+            try (OutputStream os = classFile.openOutputStream()) {
+                os.write(registrarBytecode);
+            }
+        }
+
+        // Create the service file - register ALL registrars (one per package)
+        // ServiceLoader expects one FQN per line
+        FileObject serviceFile = filer.createResource(
+            StandardLocation.CLASS_OUTPUT,
+            "",
+            "META-INF/services/io.github.yasmramos.warmup.core.jit.FactoryRegistrar"
+        );
+        
+        Writer serviceWriter = serviceFile.openWriter();
+        try {
+            // Write all registrar FQNs, one per line
+            for (String registrarName : allRegistrarNames) {
+                serviceWriter.write(registrarName);
+                serviceWriter.write("\n");
+            }
+        } finally {
+            serviceWriter.close();
+        }
+    }
+    
+    /**
+     * Converts a binary name (with $ for nested classes) to JVM internal name format.
+     * E.g., "com.pkg.Outer$Inner" -> "com/pkg/Outer$Inner"
+     */
+    private String binaryNameToInternalName(String binaryName) {
+        // Only replace dots that separate package segments, not the $ in nested classes
+        int lastDollarIndex = binaryName.lastIndexOf('$');
+        if (lastDollarIndex < 0) {
+            // No nested class, just replace all dots with slashes
+            return binaryName.replace('.', '/');
+        } else {
+            // Has nested class: replace dots in package part, keep $ and simple name intact
+            String packagePart = binaryName.substring(0, lastDollarIndex);
+            String classPart = binaryName.substring(lastDollarIndex); // includes the $
+            return packagePart.replace('.', '/') + classPart;
+        }
+    }
+    
+    /**
+     * Generates bytecode for the GeneratedFactoryRegistrar class.
+     * 
+     * @param packageName the package name for the registrar
+     * @param beans the list of bean infos to register
+     * @return the generated bytecode
+     */
+    private byte[] generateRegistrarBytecode(String packageName, List<BeanInfo> beans) {
+        org.objectweb.asm.ClassWriter cw = new org.objectweb.asm.ClassWriter(org.objectweb.asm.ClassWriter.COMPUTE_FRAMES);
+        
+        String registrarClassName = "GeneratedFactoryRegistrar";
+        String registrarInternalName = packageName.isEmpty() ? registrarClassName : packageName.replace('.', '/') + "/" + registrarClassName;
+        String interfaceName = "io/github/yasmramos/warmup/core/jit/FactoryRegistrar";
+        
+        // Class declaration: public class GeneratedFactoryRegistrar implements FactoryRegistrar
+        cw.visit(org.objectweb.asm.Opcodes.V17, org.objectweb.asm.Opcodes.ACC_PUBLIC, registrarInternalName, null,
+                "java/lang/Object", new String[]{interfaceName});
+        
+        // Default constructor
+        org.objectweb.asm.MethodVisitor ctor = cw.visitMethod(org.objectweb.asm.Opcodes.ACC_PUBLIC, "<init>", "()V", null, null);
+        ctor.visitCode();
+        ctor.visitVarInsn(org.objectweb.asm.Opcodes.ALOAD, 0);
+        ctor.visitMethodInsn(org.objectweb.asm.Opcodes.INVOKESPECIAL, "java/lang/Object", "<init>", "()V", false);
+        ctor.visitInsn(org.objectweb.asm.Opcodes.RETURN);
+        ctor.visitMaxs(1, 1);
+        ctor.visitEnd();
+        
+        // registerAll method: public void registerAll(BiConsumer<BeanDefinition<?>, CompiledFactory<?>> sink)
+        org.objectweb.asm.MethodVisitor mv = cw.visitMethod(org.objectweb.asm.Opcodes.ACC_PUBLIC, "registerAll",
+                "(Ljava/util/function/BiConsumer;)V",
+                "(Ljava/util/function/BiConsumer<Lio/github/yasmramos/warmup/core/registry/BeanDefinition<*>;Lio/github/yasmramos/warmup/core/jit/CompiledFactory<*>;>;)V", null);
+        mv.visitCode();
+        
+        // For each bean, create BeanDefinition and call sink.accept()
+        String beanDefInternal = "io/github/yasmramos/warmup/core/registry/BeanDefinition";
+        for (BeanInfo beanInfo : beans) {
+            // Load sink
+            mv.visitVarInsn(org.objectweb.asm.Opcodes.ALOAD, 1);
+            
+            // Create new BeanDefinition instance
+            mv.visitTypeInsn(org.objectweb.asm.Opcodes.NEW, beanDefInternal);
+            mv.visitInsn(org.objectweb.asm.Opcodes.DUP);
+            
+            // Convert binary name to internal name correctly (preserving $ for nested classes)
+            String beanTypeInternal = binaryNameToInternalName(beanInfo.className);
+            String beanTypeFqn = beanInfo.className;
+            
+            // Push beanType.class onto stack
+            mv.visitLdcInsn(org.objectweb.asm.Type.getType("L" + beanTypeInternal + ";"));
+            
+            // Push bean name
+            mv.visitLdcInsn(beanInfo.beanName);
+            
+            // Push scope enum
+            String scopeEnum = beanInfo.scope.equals("PROTOTYPE") ? "PROTOTYPE" : "SINGLETON";
+            mv.visitFieldInsn(org.objectweb.asm.Opcodes.GETSTATIC, "io/github/yasmramos/warmup/core/scope/Scope", scopeEnum, "Lio/github/yasmramos/warmup/core/scope/Scope;");
+            
+            // Push LifecycleCallbacks.empty()
+            mv.visitMethodInsn(org.objectweb.asm.Opcodes.INVOKESTATIC, "io/github/yasmramos/warmup/core/lifecycle/LifecycleCallbacks", "empty", 
+                    "()Lio/github/yasmramos/warmup/core/lifecycle/LifecycleCallbacks;", false);
+            
+            // Push isPrimary flag
+            mv.visitLdcInsn(beanInfo.isPrimary);
+            
+            // Create dependency names array (String[] for BeanDefinition constructor)
+            if (beanInfo.dependencyNames.isEmpty()) {
+                mv.visitInsn(org.objectweb.asm.Opcodes.ICONST_0);
+                mv.visitTypeInsn(org.objectweb.asm.Opcodes.ANEWARRAY, "java/lang/String");
+            } else {
+                mv.visitLdcInsn(beanInfo.dependencyNames.size());
+                mv.visitTypeInsn(org.objectweb.asm.Opcodes.ANEWARRAY, "java/lang/String");
+                for (int i = 0; i < beanInfo.dependencyNames.size(); i++) {
+                    mv.visitInsn(org.objectweb.asm.Opcodes.DUP);
+                    mv.visitLdcInsn(i);
+                    mv.visitLdcInsn(beanInfo.dependencyNames.get(i));
+                    mv.visitInsn(org.objectweb.asm.Opcodes.AASTORE);
+                }
+            }
+            
+            // Create profiles array
+            if (beanInfo.profiles.isEmpty()) {
+                mv.visitInsn(org.objectweb.asm.Opcodes.ACONST_NULL);
+            } else {
+                mv.visitLdcInsn(beanInfo.profiles.size());
+                mv.visitTypeInsn(org.objectweb.asm.Opcodes.ANEWARRAY, "java/lang/String");
+                for (int i = 0; i < beanInfo.profiles.size(); i++) {
+                    mv.visitInsn(org.objectweb.asm.Opcodes.DUP);
+                    mv.visitLdcInsn(i);
+                    mv.visitLdcInsn(beanInfo.profiles.get(i));
+                    mv.visitInsn(org.objectweb.asm.Opcodes.AASTORE);
+                }
+            }
+            
+            // Create condition classes array
+            if (beanInfo.conditionClassNames.isEmpty()) {
+                mv.visitInsn(org.objectweb.asm.Opcodes.ACONST_NULL);
+            } else {
+                mv.visitLdcInsn(beanInfo.conditionClassNames.size());
+                mv.visitTypeInsn(org.objectweb.asm.Opcodes.ANEWARRAY, "java/lang/String");
+                for (int i = 0; i < beanInfo.conditionClassNames.size(); i++) {
+                    mv.visitInsn(org.objectweb.asm.Opcodes.DUP);
+                    mv.visitLdcInsn(i);
+                    mv.visitLdcInsn(beanInfo.conditionClassNames.get(i));
+                    mv.visitInsn(org.objectweb.asm.Opcodes.AASTORE);
+                }
+            }
+            
+            // Invoke BeanDefinition constructor
+            // Constructor descriptor: (Ljava/lang/Class;Ljava/lang/String;Lio/github/yasmramos/warmup/core/scope/Scope;Lio/github/yasmramos/warmup/core/lifecycle/LifecycleCallbacks;Z[Ljava/lang/Object;[Ljava/lang/String;[Ljava/lang/String;)V
+            StringBuilder beanDefCtorDesc = new StringBuilder("(Ljava/lang/Class;Ljava/lang/String;Lio/github/yasmramos/warmup/core/scope/Scope;Lio/github/yasmramos/warmup/core/lifecycle/LifecycleCallbacks;Z[Ljava/lang/Object;[Ljava/lang/String;[Ljava/lang/String;)V");
+            mv.visitMethodInsn(org.objectweb.asm.Opcodes.INVOKESPECIAL, beanDefInternal, "<init>", beanDefCtorDesc.toString(), false);
+            
+            // Create new factory instance - factory class names use dots, convert to internal name
+            String factoryInternal = binaryNameToInternalName(beanInfo.factoryClassName);
+            mv.visitTypeInsn(org.objectweb.asm.Opcodes.NEW, factoryInternal);
+            mv.visitInsn(org.objectweb.asm.Opcodes.DUP);
+            mv.visitMethodInsn(org.objectweb.asm.Opcodes.INVOKESPECIAL, factoryInternal, "<init>", "()V", false);
+            
+            // Call sink.accept(beanDef, factory)
+            mv.visitMethodInsn(org.objectweb.asm.Opcodes.INVOKEINTERFACE, "java/util/function/BiConsumer", "accept", 
+                    "(Ljava/lang/Object;Ljava/lang/Object;)V", true);
+        }
+        
+        mv.visitInsn(org.objectweb.asm.Opcodes.RETURN);
+        mv.visitMaxs(10, 2);
+        mv.visitEnd();
+        
+        cw.visitEnd();
+        
+        return cw.toByteArray();
+    }
+}

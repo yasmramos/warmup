@@ -1,0 +1,467 @@
+package io.github.yasmramos.warmup.core.circular;
+
+import io.github.yasmramos.warmup.annotations.Component;
+import io.github.yasmramos.warmup.annotations.Inject;
+import io.github.yasmramos.warmup.annotations.Lazy;
+import io.github.yasmramos.warmup.annotations.PostConstruct;
+import io.github.yasmramos.warmup.core.Warmup;
+import io.github.yasmramos.warmup.core.lifecycle.LifecycleCallbacks;
+import io.github.yasmramos.warmup.core.registry.BeanDefinition;
+import io.github.yasmramos.warmup.core.scope.Scope;
+import org.junit.jupiter.api.Test;
+
+import static org.junit.jupiter.api.Assertions.*;
+
+/**
+ * Tests for circular dependency resolution with @Lazy injection.
+ * Verifies that cycles can be broken by field/setter injection with @Lazy,
+ * while constructor-only cycles still fail with CircularDependencyException.
+ */
+class CircularDependencyWithLazyTest {
+
+    /**
+     * Helper method to register all beans needed for circular dependency tests.
+     * Registers beans with proper deferred dependency metadata to allow cycle breaking.
+     * Uses reflection to detect @Lazy fields and setters to mark dependencies as deferrable.
+     * Also detects @Inject constructors for constructor dependencies.
+     * Detects @PostConstruct methods and creates appropriate LifecycleCallbacks.
+     */
+    private void registerBeansForCircularTest(Warmup warmup, Class<?>... beanClasses) {
+        for (Class<?> beanClass : beanClasses) {
+            // Use reflection to detect @Lazy fields, setters, and constructor injection
+            java.lang.reflect.Field[] fields = beanClass.getDeclaredFields();
+            java.lang.reflect.Method[] methods = beanClass.getDeclaredMethods();
+            java.lang.reflect.Constructor<?>[] constructors = beanClass.getDeclaredConstructors();
+            
+            int fieldCount = 0;
+            int setterCount = 0;
+            int constructorParamCount = 0;
+            
+            // Count @Inject fields
+            for (java.lang.reflect.Field field : fields) {
+                if (field.isAnnotationPresent(io.github.yasmramos.warmup.annotations.Inject.class)) {
+                    fieldCount++;
+                }
+            }
+            
+            // Count @Inject setter methods
+            for (java.lang.reflect.Method method : methods) {
+                if (method.isAnnotationPresent(io.github.yasmramos.warmup.annotations.Inject.class) && 
+                    method.getName().startsWith("set") && method.getParameterCount() == 1) {
+                    setterCount++;
+                }
+            }
+            
+            // Find @Inject constructor and count params
+            java.lang.reflect.Constructor<?> injectConstructor = null;
+            for (java.lang.reflect.Constructor<?> constructor : constructors) {
+                if (constructor.isAnnotationPresent(io.github.yasmramos.warmup.annotations.Inject.class)) {
+                    injectConstructor = constructor;
+                    constructorParamCount = constructor.getParameterCount();
+                    break;
+                }
+            }
+            
+            // If no @Inject constructor found, the class uses the default no-arg constructor
+            // Default constructors are NOT @Inject annotated, so we treat them as having 0 constructor dependencies
+            if (injectConstructor == null) {
+                constructorParamCount = 0;
+                // The class will use its implicit or explicit no-arg constructor
+            }
+            
+            // Total dependencies = constructor params + field injections + setter injections
+            int totalDeps = constructorParamCount + fieldCount + setterCount;
+            
+            // If there are NO constructor dependencies (only field/setter deps), 
+            // all dependencies are deferred by nature since they'll be injected after construction
+            // In this case, we need to mark ALL field/setter deps as deferred
+            boolean[] deferredDeps = new boolean[totalDeps];
+            boolean[] fieldOrSetterDeps = new boolean[totalDeps];
+            Object[] dependencies = new Object[totalDeps];
+            
+            int idx = 0;
+            
+            // Process constructor dependencies first (NOT deferrable, NOT field/setter)
+            if (injectConstructor != null && constructorParamCount > 0) {
+                Class<?>[] paramTypes = injectConstructor.getParameterTypes();
+                for (int i = 0; i < paramTypes.length; i++) {
+                    deferredDeps[idx] = false; // Constructor deps are never lazy
+                    fieldOrSetterDeps[idx] = false; // Constructor dep
+                    dependencies[idx] = paramTypes[i].getName(); // Use fully qualified name
+                    idx++;
+                }
+            }
+            
+            // Process fields
+            for (java.lang.reflect.Field field : fields) {
+                if (field.isAnnotationPresent(io.github.yasmramos.warmup.annotations.Inject.class)) {
+                    boolean isLazy = field.isAnnotationPresent(io.github.yasmramos.warmup.annotations.Lazy.class);
+                    // If no constructor injection, ALL field deps are effectively deferred
+                    deferredDeps[idx] = isLazy || (injectConstructor == null);
+                    fieldOrSetterDeps[idx] = true;
+                    dependencies[idx] = field.getType().getName(); // Use fully qualified name
+                    idx++;
+                }
+            }
+            
+            // Process setter methods
+            for (java.lang.reflect.Method method : methods) {
+                if (method.isAnnotationPresent(io.github.yasmramos.warmup.annotations.Inject.class) && 
+                    method.getName().startsWith("set") && method.getParameterCount() == 1) {
+                    boolean isLazy = method.isAnnotationPresent(io.github.yasmramos.warmup.annotations.Lazy.class);
+                    // If no constructor injection, ALL setter deps are effectively deferred
+                    deferredDeps[idx] = isLazy || (injectConstructor == null);
+                    fieldOrSetterDeps[idx] = true;
+                    dependencies[idx] = method.getParameterTypes()[0].getName(); // Use fully qualified name
+                    idx++;
+                }
+            }
+            
+            // Detect @PostConstruct method and create appropriate LifecycleCallbacks
+            @SuppressWarnings("unchecked")
+            LifecycleCallbacks<Object> lifecycleCallbacks = (LifecycleCallbacks<Object>) (Object) LifecycleCallbacks.empty();
+            
+            for (java.lang.reflect.Method method : methods) {
+                if (method.isAnnotationPresent(io.github.yasmramos.warmup.annotations.PostConstruct.class) && 
+                    method.getParameterCount() == 0) {
+                    lifecycleCallbacks = LifecycleCallbacks.initOnly((Object instance) -> {
+                        try {
+                            method.setAccessible(true);
+                            method.invoke(instance);
+                        } catch (Exception e) {
+                            throw new RuntimeException("Failed to invoke @PostConstruct method", e);
+                        }
+                    });
+                    break;
+                }
+            }
+            
+            @SuppressWarnings("unchecked")
+            BeanDefinition<Object> definition = new BeanDefinition<>(
+                (Class<Object>) beanClass,
+                beanClass.getName(), // Use fully qualified name as bean name
+                Scope.SINGLETON,
+                lifecycleCallbacks,
+                false,
+                dependencies,
+                new String[0], // profiles
+                new String[0], // conditionClasses
+                "", // scopeName
+                deferredDeps,
+                fieldOrSetterDeps
+            );
+            warmup.registerDynamic(definition);
+        }
+    }
+
+    @Test
+    void testCircularDependencyWithLazyFieldInjection() {
+        Warmup warmup = Warmup.builder().build();
+        
+        // Register beans manually since container doesn't scan classpath
+        registerBeansForCircularTest(warmup, ServiceA.class, ServiceB.class);
+        
+        ServiceA serviceA = warmup.resolve(ServiceA.class);
+        ServiceB serviceB = warmup.resolve(ServiceB.class);
+
+        assertNotNull(serviceA);
+        assertNotNull(serviceB);
+        
+        // Verify real instances, not proxies
+        assertSame(serviceA, serviceB.getServiceA());
+        assertSame(serviceB, serviceA.getServiceB());
+        
+        // Verify PostConstruct was called after full initialization
+        assertTrue(serviceA.isPostConstructCalled());
+        assertTrue(serviceB.isPostConstructCalled());
+    }
+
+    @Test
+    void testCircularDependencyWithLazySetterInjection() {
+        Warmup warmup = Warmup.builder().build();
+        
+        // Register beans manually since container doesn't scan classpath
+        registerBeansForCircularTest(warmup, ServiceC.class, ServiceD.class);
+        
+        ServiceC serviceC = warmup.resolve(ServiceC.class);
+        ServiceD serviceD = warmup.resolve(ServiceD.class);
+
+        assertNotNull(serviceC);
+        assertNotNull(serviceD);
+        
+        // Verify real instances, not proxies
+        assertSame(serviceC, serviceD.getServiceC());
+        assertSame(serviceD, serviceC.getServiceD());
+        
+        // Verify PostConstruct was called after full initialization
+        assertTrue(serviceC.isPostConstructCalled());
+        assertTrue(serviceD.isPostConstructCalled());
+    }
+
+    @Test
+    void testMultipleBeansInCircularDependency() {
+        Warmup warmup = Warmup.builder().build();
+        
+        // Register beans manually since container doesn't scan classpath
+        registerBeansForCircularTest(warmup, BeanX.class, BeanY.class, BeanZ.class);
+        
+        BeanX beanX = warmup.resolve(BeanX.class);
+        BeanY beanY = warmup.resolve(BeanY.class);
+        BeanZ beanZ = warmup.resolve(BeanZ.class);
+
+        assertNotNull(beanX);
+        assertNotNull(beanY);
+        assertNotNull(beanZ);
+        
+        // Verify the cycle is properly resolved
+        assertSame(beanY, beanX.getBeanY());
+        assertSame(beanZ, beanY.getBeanZ());
+        assertSame(beanX, beanZ.getBeanX());
+        
+        // Verify all PostConstruct methods were called
+        assertTrue(beanX.isPostConstructCalled());
+        assertTrue(beanY.isPostConstructCalled());
+        assertTrue(beanZ.isPostConstructCalled());
+    }
+
+    @Test
+    void testConstructorOnlyCircularDependencyFails() {
+        Warmup warmup = Warmup.builder().build();
+        
+        // This should fail during registration because both dependencies are via constructor
+        assertThrows(io.github.yasmramos.warmup.core.graph.CircularDependencyException.class, () -> {
+            registerBeansForCircularTest(warmup, ConstructorA.class, ConstructorB.class);
+        });
+    }
+
+    @Test
+    void testLazyFieldNotAnnotatedStillWorks() {
+        Warmup warmup = Warmup.builder().build();
+        
+        // Register beans manually since container doesn't scan classpath
+        registerBeansForCircularTest(warmup, ServiceE.class, ServiceF.class);
+        
+        ServiceE serviceE = warmup.resolve(ServiceE.class);
+        ServiceF serviceF = warmup.resolve(ServiceF.class);
+
+        assertNotNull(serviceE);
+        assertNotNull(serviceF);
+        
+        // Verify the relationship works
+        assertSame(serviceF, serviceE.getServiceF());
+        assertSame(serviceE, serviceF.getServiceE());
+    }
+
+    // Beans for lazy field injection test
+    @Component
+    public static class ServiceA {
+        @Inject
+        @Lazy
+        ServiceB serviceB;
+        
+        private boolean postConstructCalled = false;
+
+        public ServiceB getServiceB() {
+            return serviceB;
+        }
+
+        @PostConstruct
+        public void init() {
+            postConstructCalled = true;
+        }
+
+        public boolean isPostConstructCalled() {
+            return postConstructCalled;
+        }
+    }
+
+    @Component
+    public static class ServiceB {
+        @Inject
+        @Lazy
+        ServiceA serviceA;
+        
+        private boolean postConstructCalled = false;
+
+        public ServiceA getServiceA() {
+            return serviceA;
+        }
+
+        @PostConstruct
+        public void init() {
+            postConstructCalled = true;
+        }
+
+        public boolean isPostConstructCalled() {
+            return postConstructCalled;
+        }
+    }
+
+    // Beans for lazy setter injection test
+    @Component
+    public static class ServiceC {
+        private ServiceD serviceD;
+        private boolean postConstructCalled = false;
+
+        @Inject
+        @Lazy
+        public void setServiceD(ServiceD serviceD) {
+            this.serviceD = serviceD;
+        }
+
+        public ServiceD getServiceD() {
+            return serviceD;
+        }
+
+        @PostConstruct
+        public void init() {
+            postConstructCalled = true;
+        }
+
+        public boolean isPostConstructCalled() {
+            return postConstructCalled;
+        }
+    }
+
+    @Component
+    public static class ServiceD {
+        private ServiceC serviceC;
+        private boolean postConstructCalled = false;
+
+        @Inject
+        @Lazy
+        public void setServiceC(ServiceC serviceC) {
+            this.serviceC = serviceC;
+        }
+
+        public ServiceC getServiceC() {
+            return serviceC;
+        }
+
+        @PostConstruct
+        public void init() {
+            postConstructCalled = true;
+        }
+
+        public boolean isPostConstructCalled() {
+            return postConstructCalled;
+        }
+    }
+
+    // Beans for 3-bean circular dependency test
+    @Component
+    public static class BeanX {
+        @Inject
+        @Lazy
+        BeanY beanY;
+        
+        private boolean postConstructCalled = false;
+
+        public BeanY getBeanY() {
+            return beanY;
+        }
+
+        @PostConstruct
+        public void init() {
+            postConstructCalled = true;
+        }
+
+        public boolean isPostConstructCalled() {
+            return postConstructCalled;
+        }
+    }
+
+    @Component
+    public static class BeanY {
+        @Inject
+        @Lazy
+        BeanZ beanZ;
+        
+        private boolean postConstructCalled = false;
+
+        public BeanZ getBeanZ() {
+            return beanZ;
+        }
+
+        @PostConstruct
+        public void init() {
+            postConstructCalled = true;
+        }
+
+        public boolean isPostConstructCalled() {
+            return postConstructCalled;
+        }
+    }
+
+    @Component
+    public static class BeanZ {
+        @Inject
+        @Lazy
+        BeanX beanX;
+        
+        private boolean postConstructCalled = false;
+
+        public BeanX getBeanX() {
+            return beanX;
+        }
+
+        @PostConstruct
+        public void init() {
+            postConstructCalled = true;
+        }
+
+        public boolean isPostConstructCalled() {
+            return postConstructCalled;
+        }
+    }
+
+    // Beans for constructor-only circular dependency (should fail)
+    @Component
+    public static class ConstructorA {
+        private final ConstructorB constructorB;
+
+        @Inject
+        public ConstructorA(ConstructorB constructorB) {
+            this.constructorB = constructorB;
+        }
+
+        public ConstructorB getConstructorB() {
+            return constructorB;
+        }
+    }
+
+    @Component
+    public static class ConstructorB {
+        private final ConstructorA constructorA;
+
+        @Inject
+        public ConstructorB(ConstructorA constructorA) {
+            this.constructorA = constructorA;
+        }
+
+        public ConstructorA getConstructorA() {
+            return constructorA;
+        }
+    }
+
+    // Beans for non-@Lazy field injection (should still work as it's field injection)
+    @Component
+    public static class ServiceE {
+        @Inject
+        ServiceF serviceF;
+
+        public ServiceF getServiceF() {
+            return serviceF;
+        }
+    }
+
+    @Component
+    public static class ServiceF {
+        @Inject
+        ServiceE serviceE;
+
+        public ServiceE getServiceE() {
+            return serviceE;
+        }
+    }
+}

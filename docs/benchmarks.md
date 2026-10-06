@@ -30,33 +30,33 @@ mvn clean package
 ### Run All Benchmarks
 
 ```bash
-java -jar target/warmup-benchmarks-1.0.0-SNAPSHOT.jar
+java -jar target/benchmarks.jar
 ```
 
 Or use the included runner:
 
 ```bash
-java -cp target/warmup-benchmarks-1.0.0-SNAPSHOT.jar \
-     com.warmup.benchmarks.BenchmarkRunner
+java -cp target/benchmarks.jar \
+     io.github.yasmramos.warmup.benchmarks.BenchmarkRunner
 ```
 
 ### Run Specific Benchmark
 
 ```bash
 # Resolution benchmark only
-java -jar target/warmup-benchmarks-1.0.0-SNAPSHOT.jar ".*ResolutionBenchmark.*"
+java -jar target/benchmarks.jar ".*ResolutionBenchmark.*"
 
 # Startup benchmark only
-java -jar target/warmup-benchmarks-1.0.0-SNAPSHOT.jar ".*StartupBenchmark.*"
+java -jar target/benchmarks.jar ".*StartupBenchmark.*"
 
 # Avaje Inject comparison
-java -jar target/warmup-benchmarks-1.0.0-SNAPSHOT.jar ".*AvajeInjectBenchmark.*"
+java -jar target/benchmarks.jar ".*AvajeInjectBenchmark.*"
 ```
 
 ### Custom Parameters
 
 ```bash
-java -jar target/warmup-benchmarks-1.0.0-SNAPSHOT.jar \
+java -jar target/benchmarks.jar \
      -i 5 -wi 3 -f 2 -t 4 \
      ".*ResolutionBenchmark.*"
 ```
@@ -309,7 +309,7 @@ jobs:
         run: |
           cd warmup-benchmarks
           mvn clean package
-          java -jar target/warmup-benchmarks-*.jar > results.txt
+          java -jar target/benchmarks.jar > results.txt
       
       - name: Upload results
         uses: actions/upload-artifact@v3

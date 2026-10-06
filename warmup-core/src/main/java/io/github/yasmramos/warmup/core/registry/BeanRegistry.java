@@ -1,0 +1,266 @@
+package io.github.yasmramos.warmup.core.registry;
+
+import java.util.Optional;
+import java.util.Set;
+
+/**
+ * Thread-safe bean registry with O(1) lookup using ConcurrentHashMap.
+ * Supports singleton caching and prototype factory storage.
+ */
+public interface BeanRegistry {
+    
+    /**
+     * Registers a bean definition in the registry.
+     * 
+     * @param <T> the bean type
+     * @param definition the bean definition
+     * @throws IllegalStateException if a bean with the same name already exists
+     */
+    <T> void register(BeanDefinition<T> definition);
+
+    /**
+     * Retrieves a bean definition by name.
+     * 
+     * @param <T> the bean type
+     * @param name the bean name
+     * @return Optional containing the bean definition if found
+     */
+    <T> Optional<BeanDefinition<T>> getDefinition(String name);
+
+    /**
+     * Retrieves a bean definition by type.
+     * 
+     * @param <T> the bean type
+     * @param type the bean class
+     * @return Optional containing the bean definition if found
+     */
+    <T> Optional<BeanDefinition<T>> getDefinitionByType(Class<T> type);
+
+    /**
+     * Retrieves a bean definition by type without Optional allocation.
+     * This is a performance-optimized method for hot paths that need to check existence.
+     * 
+     * @param <T> the bean type
+     * @param type the bean class
+     * @return the bean definition if found, null otherwise
+     * @see #getDefinitionByType(Class)
+     */
+    @SuppressWarnings("unchecked")
+    default <T> BeanDefinition<T> getDefinitionByTypeOrNull(Class<T> type) {
+        // Default implementation delegates to getDefinitionByType and unwraps Optional
+        // Implementations should override for better performance
+        return (BeanDefinition<T>) getDefinitionByType(type).orElse(null);
+    }
+
+    /**
+     * Gets or creates a bean instance based on its scope.
+     * - Singleton: returns cached instance (creates if not exists)
+     * - Prototype: creates new instance every time
+     * 
+     * @param <T> the bean type
+     * @param name the bean name
+     * @param factory factory to create the instance if needed
+     * @return the bean instance
+     */
+    <T> T getInstance(String name, java.util.function.Supplier<T> factory);
+
+    /**
+     * Gets or creates a bean instance based on its scope, using a pre-resolved BeanDefinition.
+     * This overload avoids the internal lookup by name for better performance.
+     * - Singleton: returns cached instance (creates if not exists)
+     * - Prototype: creates new instance every time
+     * 
+     * @param <T> the bean type
+     * @param definition the pre-resolved bean definition
+     * @param factory factory to create the instance if needed
+     * @return the bean instance
+     */
+    default <T> T getInstance(BeanDefinition<T> definition, java.util.function.Supplier<T> factory) {
+        // Default implementation delegates to the name-based version
+        return getInstance(definition.name(), factory);
+    }
+
+    /**
+     * Gets or creates a bean instance based on its scope, using a CompiledFactory directly.
+     * This overload eliminates the Supplier lambda allocation for better performance in hot paths.
+     * - Singleton: returns cached instance (creates if not exists)
+     * - Prototype: creates new instance every time
+     * 
+     * @param <T> the bean type
+     * @param definition the pre-resolved bean definition
+     * @param factory the CompiledFactory to create the instance if needed
+     * @return the bean instance
+     */
+    default <T> T getInstance(BeanDefinition<T> definition, io.github.yasmramos.warmup.core.jit.CompiledFactory<T> factory) {
+        // Default implementation delegates to the Supplier-based version
+        return getInstance(definition, factory::get);
+    }
+
+    /**
+     * Checks if a singleton instance is already cached.
+     * 
+     * @param name the bean name
+     * @return true if the singleton is cached
+     */
+    boolean hasInstance(String name);
+
+    /**
+     * Removes a bean from the registry (including cached instances).
+     * Used for hot-reload and testing scenarios.
+     * 
+     * @param name the bean name
+     * @return true if the bean was removed
+     */
+    boolean remove(String name);
+
+    /**
+     * Evicts only the cached singleton instance for a bean, applying destroy callback if applicable.
+     * The bean definition is preserved for future resolutions.
+     * Used for hot-reload scenarios where the factory needs to be recompiled.
+     * 
+     * @param name the bean name
+     * @return true if an instance was evicted
+     */
+    boolean evictInstance(String name);
+
+    /**
+     * Clears all beans from the registry.
+     * Used primarily for testing container reset.
+     */
+    void clear();
+
+    /**
+     * Returns the number of registered beans.
+     * 
+     * @return the registry size
+     */
+    int size();
+
+    /**
+     * Checks if the registry contains a bean with the given name.
+     * 
+     * @param name the bean name
+     * @return true if the bean exists
+     */
+    boolean contains(String name);
+    
+    /**
+     * Returns all registered bean names.
+     * 
+     * @return set of bean names
+     */
+    Set<String> getAllNames();
+    
+    /**
+     * Returns all registered bean names (alias for getAllNames).
+     * Used by HybridContainer.getBeanNames().
+     * 
+     * @return set of bean names
+     */
+    Set<String> getBeanNames();
+    
+    /**
+     * Gets a cached singleton instance if present, without triggering creation.
+     * This is a fast-path method for hot resolution scenarios.
+     * 
+     * @param <T> the bean type
+     * @param name the bean name
+     * @return the cached instance or null if not present/not a singleton
+     */
+    @SuppressWarnings("unchecked")
+    default <T> T getIfPresent(String name) {
+        // Default implementation returns null - to be overridden by implementations
+        return null;
+    }
+    
+    /**
+     * Gets a cached singleton instance by index if present, without triggering creation.
+     * This is an experimental fast-path method using integer indexing to avoid String hashing.
+     * 
+     * @param <T> the bean type
+     * @param index the bean index (obtained via indexOf)
+     * @return the cached instance or null if not present/not a singleton
+     * @experimental Internal API for performance-critical paths
+     */
+    @SuppressWarnings("unchecked")
+    default <T> T getIfPresent(int index) {
+        // Default implementation returns null - to be overridden by implementations
+        return null;
+    }
+    
+    /**
+     * Retrieves a bean definition by name without Optional allocation.
+     * This is a performance-optimized method for hot paths that need to check existence.
+     * 
+     * @param <T> the bean type
+     * @param name the bean name
+     * @return the bean definition if found, null otherwise
+     * @see #getDefinition(String)
+     */
+    @SuppressWarnings("unchecked")
+    default <T> BeanDefinition<T> getDefinitionOrNull(String name) {
+        // Default implementation delegates to getDefinition and unwraps Optional
+        // Implementations should override for better performance
+        return (BeanDefinition<T>) getDefinition(name).orElse(null);
+    }
+    
+    /**
+     * Returns the integer index for a bean name, assigning one if not yet assigned.
+     * This enables fast indexed resolution avoiding String hashing overhead.
+     * 
+     * @param name the bean name
+     * @return the bean index (non-negative integer)
+     * @experimental Internal API for performance-critical paths
+     */
+    default int indexOf(String name) {
+        throw new UnsupportedOperationException("Index-based resolution not supported");
+    }
+    
+    /**
+     * Retrieves a pre-computed ResolvedBeanDefinition by name without Optional allocation.
+     * This provides single-lookup access to resolved bean definitions with cached index and factory.
+     * 
+     * @param <T> the bean type
+     * @param name the bean name
+     * @return the ResolvedBeanDefinition if found, null otherwise
+     */
+    @SuppressWarnings("unchecked")
+    default <T> ResolvedBeanDefinition<T> getResolvedOrNull(String name) {
+        // Default implementation returns null - to be overridden by implementations
+        return null;
+    }
+    
+    /**
+     * Retrieves all bean definitions registered for a given type.
+     * This is used for collection injection (List<T>, Set<T>, Map<String,T>).
+     * 
+     * @param <T> the bean type
+     * @param type the bean class
+     * @return list of all bean definitions for this type (may be empty)
+     */
+    <T> java.util.List<BeanDefinition<T>> getAllDefinitionsByType(Class<T> type);
+
+    /**
+     * Finalizes registration by resolving all pending dependency indices that were left as -1
+     * due to forward references during initial registration. This method should be called once
+     * after all beans have been registered to ensure all dependency indices are pre-computed.
+     * 
+     * After this call, the lazy resolution path in resolveDependencies() should rarely execute,
+     * serving only as a safeguard for dynamic forward references.
+     */
+    default void finalizeRegistration() {
+        // Default implementation does nothing - implementations with index-based resolution should override
+    }
+    
+    /**
+     * Sets a singleton instance directly in the indexed array by its bean index.
+     * This is used to populate the indexed array when a singleton is created,
+     * ensuring that indexed lookups are hits rather than falling back to name-based lookup.
+     * 
+     * @param index the bean index
+     * @param instance the singleton instance
+     */
+    default void setInstanceByIndex(int index, Object instance) {
+        // Default implementation does nothing - implementations with index-based storage should override
+    }
+}

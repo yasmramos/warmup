@@ -4,15 +4,15 @@ This document explains bean scopes (SINGLETON vs PROTOTYPE) and lifecycle callba
 
 ## Bean Scopes
 
-Warmup supports two bean scopes defined in `com.warmup.annotations.Bean.Scope`:
+Warmup supports two bean scopes defined in `io.github.yasmramos.warmup.annotations.Bean.Scope`:
 
 ### SINGLETON
 
 **Default scope.** One instance per container, cached after first creation.
 
 ```java
-import com.warmup.annotations.Bean;
-import com.warmup.annotations.Bean.Scope;
+import io.github.yasmramos.warmup.annotations.Bean;
+import io.github.yasmramos.warmup.annotations.Bean.Scope;
 
 @Bean(scope = Scope.SINGLETON)  // Default, can be omitted
 public class DatabaseConnection {
@@ -51,8 +51,8 @@ assert conn1 == conn2;  // Same instance
 New instance on every resolution. Not cached.
 
 ```java
-import com.warmup.annotations.Bean;
-import com.warmup.annotations.Bean.Scope;
+import io.github.yasmramos.warmup.annotations.Bean;
+import io.github.yasmramos.warmup.annotations.Bean.Scope;
 
 @Bean(scope = Scope.PROTOTYPE)
 public class RequestHandler {
@@ -104,8 +104,8 @@ public class CustomScopedBean {
 Called after bean construction and dependency injection.
 
 ```java
-import com.warmup.annotations.Bean;
-import com.warmup.annotations.PostConstruct;
+import io.github.yasmramos.warmup.annotations.Bean;
+import io.github.yasmramos.warmup.annotations.PostConstruct;
 
 @Bean
 public class CacheManager {
@@ -152,8 +152,8 @@ try {
 Called before bean destruction during container shutdown.
 
 ```java
-import com.warmup.annotations.Bean;
-import com.warmup.annotations.PreDestroy;
+import io.github.yasmramos.warmup.annotations.Bean;
+import io.github.yasmramos.warmup.annotations.PreDestroy;
 
 @Bean(scope = Scope.SINGLETON)
 public class DatabaseConnection {

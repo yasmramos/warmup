@@ -41,8 +41,8 @@ Annotate your controller classes with `@WarmupFxController`:
 ```java
 package com.example;
 
-import com.warmup.javafx.WarmupFxController;
-import com.warmup.annotations.Inject;
+import io.github.yasmramos.warmup.javafx.WarmupFxController;
+import io.github.yasmramos.warmup.annotations.Inject;
 import javafx.fxml.Initializable;
 
 @WarmupFxController(fxml = "/com/example/main.fxml")

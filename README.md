@@ -29,8 +29,8 @@ Warmup is the evolution of traditional DI frameworks, featuring:
 ```
 warmup-parent/
 ├── warmup-core           # Core DI engine (Warmup, HybridContainer, annotations, ASM JIT compiler)
-│                         # Annotations package: com.warmup.annotations
-│                         # ASM JIT package: com.warmup.asm
+│                         # Annotations package: io.github.yasmramos.warmup.annotations
+│                         # ASM JIT package: io.github.yasmramos.warmup.asm
 ├── warmup-processor      # Annotation processor for compile-time factory generation
 ├── warmup-javafx         # Optional JavaFX integration (lazy controllers, hot-reload)
 └── warmup-benchmarks     # JMH benchmarks comparing vs Avaje Inject
@@ -42,7 +42,7 @@ warmup-parent/
 
 ```xml
 <dependency>
-    <groupId>com.warmup</groupId>
+    <groupId>io.github.yasmramos</groupId>
     <artifactId>warmup-core</artifactId>
     <version>1.0.0-SNAPSHOT</version>
 </dependency>
@@ -51,12 +51,12 @@ warmup-parent/
 ### Basic Usage
 
 ```java
-import com.warmup.core.Warmup;
-import com.warmup.annotations.Component;
-import com.warmup.annotations.Singleton;
-import com.warmup.annotations.Inject;
-import com.warmup.annotations.Factory;
-import com.warmup.annotations.Bean;
+import io.github.yasmramos.warmup.core.Warmup;
+import io.github.yasmramos.warmup.annotations.Component;
+import io.github.yasmramos.warmup.annotations.Singleton;
+import io.github.yasmramos.warmup.annotations.Inject;
+import io.github.yasmramos.warmup.annotations.Factory;
+import io.github.yasmramos.warmup.annotations.Bean;
 
 // Define your beans using stereotype annotations
 @Singleton  // or @Component, @Prototype
@@ -140,8 +140,8 @@ Warmup provides a comprehensive set of annotations for dependency injection:
 - `@Value` - Inject configuration values with placeholder syntax `${key}` or `${key:defaultValue}`
 
 ```java
-import com.warmup.annotations.*;
-import com.warmup.annotations.Bean.Scope;
+import io.github.yasmramos.warmup.annotations.*;
+import io.github.yasmramos.warmup.annotations.Bean.Scope;
 
 // Stereotype annotations for class-level bean registration
 @Singleton  // or @Component, @Prototype
@@ -541,7 +541,7 @@ Run benchmarks:
 ```bash
 cd warmup-benchmarks
 mvn clean package
-java -jar target/warmup-benchmarks-1.0.0-SNAPSHOT.jar
+java -jar target/benchmarks.jar
 ```
 
 ### Scenarios
@@ -580,7 +580,7 @@ if (org.graalvm.nativeimage.ImageInfo.inImageCode()) {
 Build native image:
 ```bash
 native-image -cp target/warmup-core-1.0.0-SNAPSHOT.jar \
-             --initialize-at-build-time=com.warmup \
+             --initialize-at-build-time=io.github.yasmramos.warmup \
              -H:+ReportUnsupportedElementsAtRuntime
 ```
 
@@ -660,7 +660,7 @@ mvn test
 mvn package -DskipTests
 
 # Run specific benchmark
-java -jar warmup-benchmarks/target/warmup-benchmarks-1.0.0-SNAPSHOT.jar \
+java -jar warmup-benchmarks/target/benchmarks.jar \
      ".*ResolutionBenchmark.*"
 ```
 

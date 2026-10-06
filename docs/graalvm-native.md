@@ -102,7 +102,7 @@ Add the GraalVM Maven plugin:
             <configuration>
                 <imageName>${project.artifactId}</imageName>
                 <buildArgs>
-                    <arg>--initialize-at-build-time=com.warmup</arg>
+                    <arg>--initialize-at-build-time=io.github.yasmramos.warmup</arg>
                     <arg>--report-unsupported-elements-at-runtime</arg>
                 </buildArgs>
             </configuration>
@@ -119,7 +119,7 @@ mvn -Pnative clean package
 
 # Or using native-image directly
 native-image -cp target/warmup-core-1.0.0-SNAPSHOT.jar \
-             --initialize-at-build-time=com.warmup \
+             --initialize-at-build-time=io.github.yasmramos.warmup \
              -H:+ReportUnsupportedElementsAtRuntime \
              warmup-app
 ```
@@ -153,7 +153,7 @@ Include ServiceLoader files:
 {
   "resources": [
     {
-      "pattern": "META-INF/services/com.warmup.core.jit.FactoryRegistrar"
+      "pattern": "META-INF/services/io.github.yasmramos.warmup.core.jit.FactoryRegistrar"
     },
     {
       "pattern": "META-INF/services/java.lang.System$LoggerFinder"
@@ -186,7 +186,7 @@ For best native image performance, use annotation processing:
             <configuration>
                 <annotationProcessorPaths>
                     <path>
-                        <groupId>com.warmup</groupId>
+                        <groupId>io.github.yasmramos</groupId>
                         <artifactId>warmup-processor</artifactId>
                         <version>1.0.0-SNAPSHOT</version>
                     </path>
@@ -318,7 +318,7 @@ diff jvm-results.txt native-results.txt
 
 ```xml
 <dependency>
-    <groupId>com.warmup</groupId>
+    <groupId>io.github.yasmramos</groupId>
     <artifactId>warmup-processor</artifactId>
     <scope>provided</scope>
 </dependency>
@@ -345,7 +345,7 @@ diff jvm-results.txt native-results.txt
 
 ```json
 {
-  "pattern": "META-INF/services/com.warmup.core.jit.FactoryRegistrar"
+  "pattern": "META-INF/services/io.github.yasmramos.warmup.core.jit.FactoryRegistrar"
 }
 ```
 
@@ -370,12 +370,12 @@ diff jvm-results.txt native-results.txt
 <project>
     <dependencies>
         <dependency>
-            <groupId>com.warmup</groupId>
+            <groupId>io.github.yasmramos</groupId>
             <artifactId>warmup-core</artifactId>
             <version>1.0.0-SNAPSHOT</version>
         </dependency>
         <dependency>
-            <groupId>com.warmup</groupId>
+            <groupId>io.github.yasmramos</groupId>
             <artifactId>warmup-annotations</artifactId>
             <version>1.0.0-SNAPSHOT</version>
         </dependency>
@@ -390,7 +390,7 @@ diff jvm-results.txt native-results.txt
                 <configuration>
                     <annotationProcessorPaths>
                         <path>
-                            <groupId>com.warmup</groupId>
+                            <groupId>io.github.yasmramos</groupId>
                             <artifactId>warmup-processor</artifactId>
                             <version>1.0.0-SNAPSHOT</version>
                         </path>
@@ -421,8 +421,8 @@ diff jvm-results.txt native-results.txt
 ### Application Code
 
 ```java
-import com.warmup.annotations.Bean;
-import com.warmup.core.Warmup;
+import io.github.yasmramos.warmup.annotations.Bean;
+import io.github.yasmramos.warmup.core.Warmup;
 
 @Bean
 public class GreetingService {

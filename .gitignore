@@ -1,4 +1,3 @@
-```
 # Java/Maven build artifacts
 target/
 *.class
@@ -6,6 +5,7 @@ target/
 *.war
 *.ear
 *.zip
+dependency-reduced-pom.xml
 
 # IDE files
 .idea/
@@ -39,4 +39,3 @@ build/
 # System files
 .DS_Store
 Thumbs.db
-```
