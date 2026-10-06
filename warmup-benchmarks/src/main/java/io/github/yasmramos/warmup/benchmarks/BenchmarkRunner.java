@@ -1,9 +1,10 @@
 package io.github.yasmramos.warmup.benchmarks;
 
 import org.openjdk.jmh.profile.GCProfiler;
-import org.openjdk.jmh.runner.CommandLineOptions;
 import org.openjdk.jmh.runner.Runner;
 import org.openjdk.jmh.runner.RunnerException;
+import org.openjdk.jmh.runner.options.CommandLineOptionException;
+import org.openjdk.jmh.runner.options.CommandLineOptions;
 import org.openjdk.jmh.runner.options.Options;
 import org.openjdk.jmh.runner.options.OptionsBuilder;
 import org.openjdk.jmh.runner.options.TimeValue;
@@ -17,7 +18,7 @@ import org.openjdk.jmh.runner.options.TimeValue;
  */
 public class BenchmarkRunner {
 
-    public static void main(String[] args) throws RunnerException {
+    public static void main(String[] args) throws RunnerException, CommandLineOptionException {
         // Any arguments are forwarded verbatim to JMH, so filtering and tuning
         // work as documented, e.g.:
         //   java -jar benchmarks.jar -l
