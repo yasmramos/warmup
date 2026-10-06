@@ -98,6 +98,7 @@ public abstract class WarmupApplication extends Application {
     /**
      * Called after container initialization but before UI start.
      * Override for custom initialization logic.
+     * @throws java.lang.Exception
      */
     protected void onInit() throws Exception {
         // Default: do nothing
@@ -108,6 +109,7 @@ public abstract class WarmupApplication extends Application {
      * Override to set up the UI.
      * 
      * @param stage primary stage
+     * @throws java.lang.Exception
      */
     protected void onStart(Stage stage) throws Exception {
         // Default: do nothing
@@ -116,6 +118,7 @@ public abstract class WarmupApplication extends Application {
     /**
      * Called when the application stops.
      * Override for cleanup logic.
+     * @throws java.lang.Exception
      */
     protected void onStop() throws Exception {
         // Default: do nothing
