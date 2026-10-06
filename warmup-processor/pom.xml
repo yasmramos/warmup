@@ -5,7 +5,7 @@
     <modelVersion>4.0.0</modelVersion>
 
     <parent>
-        <groupId>com.warmup</groupId>
+        <groupId>io.github.yasmramos</groupId>
         <artifactId>warmup-parent</artifactId>
         <version>1.0.0-SNAPSHOT</version>
     </parent>
@@ -19,16 +19,26 @@
     <dependencies>
         <!-- Internal dependencies - annotations are now in warmup-core -->
         <dependency>
-            <groupId>com.warmup</groupId>
+            <groupId>io.github.yasmramos</groupId>
             <artifactId>warmup-core</artifactId>
             <version>${project.version}</version>
         </dependency>
         
-        <!-- ASM for bytecode manipulation - shaded to avoid leaking to consumers -->
+        <!-- ASM for bytecode generation (used by FactoryBytecodeGenerator).
+             Declared as a normal compile dependency so it is supplied
+             transitively on annotationProcessorPaths in consumer modules. -->
         <dependency>
             <groupId>org.ow2.asm</groupId>
             <artifactId>asm</artifactId>
         </dependency>
+
+        <!-- ASM utilities (asm-util) are not used directly by this module;
+             uncomment if bytecode printing/debugging helpers are needed.
+        <dependency>
+            <groupId>org.ow2.asm</groupId>
+            <artifactId>asm-util</artifactId>
+        </dependency>
+        -->
         
         <!-- Annotation processing only needs JDK tools -->
         
@@ -55,41 +65,6 @@
                     <!-- Disable annotation processing for this module itself -->
                     <compilerArgument>-proc:none</compilerArgument>
                 </configuration>
-            </plugin>
-            
-            <!-- Shade ASM to avoid leaking the dependency to consumers -->
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-shade-plugin</artifactId>
-                <version>3.5.1</version>
-                <executions>
-                    <execution>
-                        <phase>package</phase>
-                        <goals>
-                            <goal>shade</goal>
-                        </goals>
-                        <configuration>
-                            <shadedArtifactAttached>true</shadedArtifactAttached>
-                            <shadedClassifierName>shaded</shadedClassifierName>
-                            <relocations>
-                                <relocation>
-                                    <pattern>org.objectweb.asm</pattern>
-                                    <shadedPattern>com.warmup.processor.shaded.asm</shadedPattern>
-                                </relocation>
-                            </relocations>
-                            <filters>
-                                <filter>
-                                    <artifact>*:*</artifact>
-                                    <excludes>
-                                        <exclude>META-INF/*.SF</exclude>
-                                        <exclude>META-INF/*.DSA</exclude>
-                                        <exclude>META-INF/*.RSA</exclude>
-                                    </excludes>
-                                </filter>
-                            </filters>
-                        </configuration>
-                    </execution>
-                </executions>
             </plugin>
         </plugins>
     </build>

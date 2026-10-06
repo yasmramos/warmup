@@ -53,7 +53,7 @@ flowchart TD
 - **Trigger**: Bean annotated with `@Bean` and processed by annotation processor
 - **Mechanism**: Pre-generated `XXX$$WarmupFactory` class implementing `CompiledFactory<T>`
 - **Performance**: ~10-20ns per resolution (direct method call)
-- **Registration**: Automatic via `META-INF/services/com.warmup.core.jit.FactoryRegistrar`
+- **Registration**: Automatic via `META-INF/services/io.github.yasmramos.warmup.core.jit.FactoryRegistrar`
 
 ### Path B: JIT Runtime
 
@@ -107,7 +107,7 @@ sequenceDiagram
 
 ## Key Classes
 
-### `com.warmup.core.Warmup`
+### `io.github.yasmramos.warmup.core.Warmup`
 
 Main entry point providing ergonomic API:
 
@@ -123,7 +123,7 @@ Warmup warmup = Warmup.builder()
     .build();
 ```
 
-### `com.warmup.core.container.HybridContainer`
+### `io.github.yasmramos.warmup.core.container.HybridContainer`
 
 Core container implementation managing:
 
@@ -134,7 +134,7 @@ Core container implementation managing:
 - Background warmup executor
 - Metrics collection
 
-### `com.warmup.core.jit.CompiledFactory<T>`
+### `io.github.yasmramos.warmup.core.jit.CompiledFactory<T>`
 
 Functional interface for zero-overhead bean instantiation:
 
@@ -148,7 +148,7 @@ public interface CompiledFactory<T> {
 }
 ```
 
-### `com.warmup.core.jit.JITCompiler`
+### `io.github.yasmramos.warmup.core.jit.JITCompiler`
 
 Interface for runtime bytecode generation:
 
@@ -164,7 +164,7 @@ public interface JITCompiler {
 }
 ```
 
-### `com.warmup.asm.AsmJITCompiler`
+### `io.github.yasmramos.warmup.asm.AsmJITCompiler`
 
 ASM-based implementation generating bytecode:
 
@@ -182,13 +182,13 @@ public class BeanType$$WarmupFactory implements CompiledFactory<BeanType> {
 }
 ```
 
-### `com.warmup.processor.WarmupProcessor`
+### `io.github.yasmramos.warmup.processor.WarmupProcessor`
 
 Annotation processor generating:
 
 1. `XXX$$WarmupFactory` - Factory class for each `@Bean`
 2. `GeneratedFactoryRegistrar` - Aggregates all factories in module
-3. `META-INF/services/com.warmup.core.jit.FactoryRegistrar` - ServiceLoader file
+3. `META-INF/services/io.github.yasmramos.warmup.core.jit.FactoryRegistrar` - ServiceLoader file
 
 ## Thread Safety
 

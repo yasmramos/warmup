@@ -5,7 +5,7 @@
     <modelVersion>4.0.0</modelVersion>
 
     <parent>
-        <groupId>com.warmup</groupId>
+        <groupId>io.github.yasmramos</groupId>
         <artifactId>warmup-parent</artifactId>
         <version>1.0.0-SNAPSHOT</version>
     </parent>
@@ -18,11 +18,11 @@
 
     <dependencies>
         <dependency>
-            <groupId>com.warmup</groupId>
+            <groupId>io.github.yasmramos</groupId>
             <artifactId>warmup-core</artifactId>
         </dependency>
         <dependency>
-            <groupId>com.warmup</groupId>
+            <groupId>io.github.yasmramos</groupId>
             <artifactId>warmup-processor</artifactId>
         </dependency>
 
@@ -103,12 +103,12 @@
                             <version>12.6</version>
                         </path>
                         <path>
-                            <groupId>com.warmup</groupId>
+                            <groupId>io.github.yasmramos</groupId>
                             <artifactId>warmup-core</artifactId>
                             <version>${project.version}</version>
                         </path>
                         <path>
-                            <groupId>com.warmup</groupId>
+                            <groupId>io.github.yasmramos</groupId>
                             <artifactId>warmup-processor</artifactId>
                             <version>${project.version}</version>
                         </path>
@@ -146,7 +146,7 @@
                             <shadedArtifactAttached>false</shadedArtifactAttached>
                             <transformers>
                                 <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
-                                    <mainClass>com.warmup.benchmarks.BenchmarkRunner</mainClass>
+                                    <mainClass>io.github.yasmramos.warmup.benchmarks.BenchmarkRunner</mainClass>
                                 </transformer>
                                 <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
                             </transformers>

@@ -12,7 +12,7 @@ The `AsmJITCompiler` is the runtime bytecode generation engine that:
 4. Caches compiled factories to avoid recompilation
 5. Supports class unloading to prevent metaspace leaks
 
-**Note:** As of the latest version, `AsmJITCompiler` is now embedded within `warmup-core` and instantiated directly by the `Warmup.Builder`. It no longer uses ServiceLoader discovery. The service file `META-INF/services/com.warmup.core.jit.JITCompiler` has been removed.
+**Note:** As of the latest version, `AsmJITCompiler` is now embedded within `warmup-core` and instantiated directly by the `Warmup.Builder`. It no longer uses ServiceLoader discovery. The service file `META-INF/services/io.github.yasmramos.warmup.core.jit.JITCompiler` has been removed.
 
 ## Architecture
 

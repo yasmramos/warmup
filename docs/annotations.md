@@ -9,7 +9,7 @@ Marks a class as a bean managed by the Warmup container. The annotation processo
 ### Definition
 
 ```java
-package com.warmup.annotations;
+package io.github.yasmramos.warmup.annotations;
 
 import java.lang.annotation.ElementType;
 import java.lang.annotation.Retention;
@@ -103,7 +103,7 @@ The processor generates:
 ```java
 package com.example;
 
-@Generated("com.warmup.processor.WarmupProcessor")
+@Generated("io.github.yasmramos.warmup.processor.WarmupProcessor")
 public final class UserService$$WarmupFactory implements CompiledFactory<UserService> {
     
     public UserService$$WarmupFactory() {
@@ -135,7 +135,7 @@ Marks a constructor or field for dependency injection.
 ### Definition
 
 ```java
-package com.warmup.annotations;
+package io.github.yasmramos.warmup.annotations;
 
 import java.lang.annotation.ElementType;
 import java.lang.annotation.Retention;
@@ -218,7 +218,7 @@ Marks a method to be called after the bean is constructed and all dependencies a
 ### Definition
 
 ```java
-package com.warmup.annotations;
+package io.github.yasmramos.warmup.annotations;
 
 import java.lang.annotation.ElementType;
 import java.lang.annotation.Retention;
@@ -270,7 +270,7 @@ Marks a method to be called before the bean is destroyed (during container shutd
 ### Definition
 
 ```java
-package com.warmup.annotations;
+package io.github.yasmramos.warmup.annotations;
 
 import java.lang.annotation.ElementType;
 import java.lang.annotation.Retention;
@@ -338,7 +338,7 @@ Annotations are processed at compile-time by `WarmupProcessor`:
 1. Scans for classes annotated with `@Bean`
 2. Generates `XXX$$WarmupFactory` for each bean
 3. Creates `GeneratedFactoryRegistrar` aggregating all factories
-4. Writes `META-INF/services/com.warmup.core.jit.FactoryRegistrar` for ServiceLoader discovery
+4. Writes `META-INF/services/io.github.yasmramos.warmup.core.jit.FactoryRegistrar` for ServiceLoader discovery
 
 ### Supported Annotation Combinations
 
@@ -357,8 +357,8 @@ Annotations are processed at compile-time by `WarmupProcessor`:
 When building `BeanDefinition` manually (without annotations):
 
 ```java
-import com.warmup.core.registry.BeanDefinition;
-import com.warmup.core.scope.Scope;
+import io.github.yasmramos.warmup.core.registry.BeanDefinition;
+import io.github.yasmramos.warmup.core.scope.Scope;
 
 // Using simple class name (matches annotation processor convention)
 BeanDefinition<UserService> def1 = new BeanDefinition<>(
@@ -393,9 +393,9 @@ This annotation is processed by the annotation processor to generate a zero-over
 ### Definition
 
 ```java
-package com.warmup.javafx;
+package io.github.yasmramos.warmup.javafx;
 
-import com.warmup.core.scope.Scope;
+import io.github.yasmramos.warmup.core.scope.Scope;
 import javafx.fxml.Initializable;
 import java.lang.annotation.ElementType;
 import java.lang.annotation.Retention;
@@ -429,8 +429,8 @@ public @interface WarmupFxController {
 ```java
 package com.example.ui;
 
-import com.warmup.javafx.WarmupFxController;
-import com.warmup.annotations.Inject;
+import io.github.yasmramos.warmup.javafx.WarmupFxController;
+import io.github.yasmramos.warmup.annotations.Inject;
 import javafx.fxml.Initializable;
 import java.net.URL;
 import java.util.ResourceBundle;
@@ -466,7 +466,7 @@ FxLoader fxLoader = new FxLoader(warmup);
 Parent root = fxLoader.loadFxml("/views/main.fxml");
 ```
 
-**Important**: Controllers must be annotated with `@WarmupFxController` (or registered manually as beans) to be resolved by the container. The `FxLoader` no longer performs manual field injection via reflection—all injection is handled by the container when the bean is created.
+**Important**: Controllers must be annotated with `@WarmupFxController` (or registered manually as beans) to be resolved by the container. The `FxLoader` no longer performs manual field injection via reflectionï¿½all injection is handled by the container when the bean is created.
 
 ### Processor Behavior
 

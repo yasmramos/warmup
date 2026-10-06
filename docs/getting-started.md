@@ -10,7 +10,7 @@ Add the core dependency to your `pom.xml`:
 
 ```xml
 <dependency>
-    <groupId>com.warmup</groupId>
+    <groupId>io.github.yasmramos</groupId>
     <artifactId>warmup-core</artifactId>
     <version>1.0.0-SNAPSHOT</version>
 </dependency>
@@ -20,14 +20,14 @@ For annotation processing (compile-time factory generation):
 
 ```xml
 <dependency>
-    <groupId>com.warmup</groupId>
+    <groupId>io.github.yasmramos</groupId>
     <artifactId>warmup-annotations</artifactId>
     <version>1.0.0-SNAPSHOT</version>
 </dependency>
 
 <!-- Annotation processor -->
 <dependency>
-    <groupId>com.warmup</groupId>
+    <groupId>io.github.yasmramos</groupId>
     <artifactId>warmup-processor</artifactId>
     <version>1.0.0-SNAPSHOT</version>
     <scope>provided</scope>
@@ -38,7 +38,7 @@ For JIT compilation support (runtime bytecode generation):
 
 ```xml
 <dependency>
-    <groupId>com.warmup</groupId>
+    <groupId>io.github.yasmramos</groupId>
     <artifactId>warmup-asm</artifactId>
     <version>1.0.0-SNAPSHOT</version>
 </dependency>
@@ -55,9 +55,9 @@ For JIT compilation support (runtime bytecode generation):
 ### Basic Usage
 
 ```java
-import com.warmup.core.Warmup;
-import com.warmup.annotations.Bean;
-import com.warmup.annotations.Inject;
+import io.github.yasmramos.warmup.core.Warmup;
+import io.github.yasmramos.warmup.annotations.Bean;
+import io.github.yasmramos.warmup.annotations.Inject;
 
 // Define your beans
 @Bean
@@ -97,7 +97,7 @@ public class Main {
 ### Advanced Configuration
 
 ```java
-import com.warmup.core.Warmup;
+import io.github.yasmramos.warmup.core.Warmup;
 
 // Builder pattern for advanced settings
 Warmup warmup = Warmup.builder()
@@ -117,9 +117,9 @@ System.out.println("Compile-time hits: " + metrics.compileTimeHits());
 For beans not annotated with `@Bean`, use dynamic registration:
 
 ```java
-import com.warmup.core.Warmup;
-import com.warmup.core.registry.BeanDefinition;
-import com.warmup.core.scope.Scope;
+import io.github.yasmramos.warmup.core.Warmup;
+import io.github.yasmramos.warmup.core.registry.BeanDefinition;
+import io.github.yasmramos.warmup.core.scope.Scope;
 
 Warmup warmup = Warmup.builder().build();
 
