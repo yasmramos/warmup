@@ -623,6 +623,14 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
         T instance;
         if (factory != null && resolvedDef.isWired()) {
             // Wired factory: use factory.get() path without Object[] allocation
+            // This branch bypasses createBean/createBeanWithoutDeferredInjection, which is
+            // where the COMPILE_TIME path is normally accounted for. Without this the
+            // compile-time path stays invisible to ContainerMetrics (compileTimeHits
+            // remains 0) even though the generated factory is used - which is exactly the
+            // path taken by factories registered through ServiceLoader discovery.
+            if (resolvedDef.isCompileTime()) {
+                compileTimeHits.add(1);
+            }
             instance = registry.getInstance(resolvedDef.getDefinition(), factory);
         } else {
             // Non-wired or no factory: fall back to createBean lambda
@@ -772,6 +780,14 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
         T instance;
         if (factory != null && resolvedDef.isWired()) {
             // Wired factory: use factory.get() path without Object[] allocation
+            // This branch bypasses createBean/createBeanWithoutDeferredInjection, which is
+            // where the COMPILE_TIME path is normally accounted for. Without this the
+            // compile-time path stays invisible to ContainerMetrics (compileTimeHits
+            // remains 0) even though the generated factory is used - which is exactly the
+            // path taken by factories registered through ServiceLoader discovery.
+            if (resolvedDef.isCompileTime()) {
+                compileTimeHits.add(1);
+            }
             instance = registry.getInstance(resolvedDef.getDefinition(), factory);
         } else {
             // Non-wired or no factory: fall back to createBean lambda
