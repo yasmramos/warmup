@@ -1,10 +1,5 @@
 package io.github.yasmramos.warmup.core.container;
 
-import io.github.yasmramos.warmup.core.jit.CompiledFactory;
-import io.github.yasmramos.warmup.core.lifecycle.LifecycleCallbacks;
-import io.github.yasmramos.warmup.core.registry.BeanDefinition;
-import io.github.yasmramos.warmup.core.scope.Scope;
-
 /**
  * Diagnostic information about which resolution path was used for a bean.
  * 

@@ -1,7 +1,5 @@
 package io.github.yasmramos.warmup.core.container;
 
-import java.util.function.Consumer;
-
 /**
  * Container metrics for performance monitoring.
  * 

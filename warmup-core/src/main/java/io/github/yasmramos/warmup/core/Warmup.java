@@ -10,7 +10,6 @@ import io.github.yasmramos.warmup.core.registry.BeanDefinition;
 
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.function.Function;
 
 /**
  * Main entry point for the Warmup dependency injection container.
