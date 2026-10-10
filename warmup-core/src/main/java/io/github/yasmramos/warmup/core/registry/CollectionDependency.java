@@ -7,7 +7,9 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.TreeMap;
 import java.util.TreeSet;
 
@@ -189,6 +191,33 @@ public final class CollectionDependency {
                     "Cannot resolve collection element type '" + fqn + "'. "
                             + "Make sure the type is on the application class path.", e);
         }
+    }
+
+    /**
+     * Maps a raw type class onto the kind of collection container it needs, or {@code null}
+     * for types that are not collections.
+     *
+     * <p>Used by {@code @Value} string→collection conversion: a value such as
+     * {@code "8080,8081"} is parsed into the declared {@code List}/{@code Set}/{@code Queue}
+     * type. Maps are intentionally excluded (a string does not describe a map).</p>
+     *
+     * @param declaredType the raw declared injection type
+     * @return the matching kind, or {@code null} when {@code declaredType} is not a collection
+     */
+    public static Kind kindOfType(Class<?> declaredType) {
+        if (declaredType == null || Map.class.isAssignableFrom(declaredType)) {
+            return null;
+        }
+        if (List.class.isAssignableFrom(declaredType)) {
+            return Kind.LIST;
+        }
+        if (Set.class.isAssignableFrom(declaredType)) {
+            return Kind.SET;
+        }
+        if (Collection.class.isAssignableFrom(declaredType)) {
+            return Kind.COLLECTION;
+        }
+        return null;
     }
 
     private static Object newInstanceOf(Class<?> type) {

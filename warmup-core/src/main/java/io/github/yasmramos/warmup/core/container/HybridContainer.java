@@ -1,11 +1,14 @@
 package io.github.yasmramos.warmup.core.container;
 
 import io.github.yasmramos.warmup.annotations.EventListener;
+import io.github.yasmramos.warmup.annotations.Inject;
+import io.github.yasmramos.warmup.annotations.Value;
 import io.github.yasmramos.warmup.core.annotation.InternalApi;
 import io.github.yasmramos.warmup.core.condition.Condition;
 import io.github.yasmramos.warmup.core.condition.ConditionContext;
 import io.github.yasmramos.warmup.core.event.ApplicationEventPublisher;
 import io.github.yasmramos.warmup.core.event.SimpleApplicationEventPublisher;
+import io.github.yasmramos.warmup.core.exception.AmbiguousBeanException;
 import io.github.yasmramos.warmup.core.graph.DependencyGraph;
 import io.github.yasmramos.warmup.core.jit.CompiledFactory;
 import io.github.yasmramos.warmup.core.jit.CompilationException;
@@ -17,6 +20,7 @@ import io.github.yasmramos.warmup.core.registry.BeanDefinition;
 import io.github.yasmramos.warmup.core.registry.BeanRegistry;
 import io.github.yasmramos.warmup.core.registry.BeanRegistryImpl;
 import io.github.yasmramos.warmup.core.registry.CollectionDependency;
+import io.github.yasmramos.warmup.core.registry.OptionalDependency;
 import io.github.yasmramos.warmup.core.registry.ResolvedBeanDefinition;
 import io.github.yasmramos.warmup.core.registry.ValueDependency;
 import io.github.yasmramos.warmup.core.scope.Scope;
@@ -406,6 +410,12 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
                         depFactories[i] = collectionFactory(depName);
                         continue;
                     }
+                    if (OptionalDependency.isMarker(depName)) {
+                        // Optional injection point: synthesise a factory that wraps the matching
+                        // bean (or empty), keeping the bean on the wired fast path.
+                        depFactories[i] = optionalFactory(depName);
+                        continue;
+                    }
                     CompiledFactory<?> depFactory = factoryCache.get(depName);
                     if (depFactory != null) {
                         depFactories[i] = depFactory;
@@ -666,6 +676,11 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
         // bean to look up, so resolve every bean of the element type instead.
         if (CollectionDependency.isMarker(name)) {
             return (T) resolveCollectionDependency(name);
+        }
+
+        // Optional<T> injection point: resolve the element bean if present, else Optional.empty().
+        if (OptionalDependency.isMarker(name)) {
+            return (T) resolveOptionalDependency(name);
         }
 
         // Single lookup: get pre-computed ResolvedBeanDefinition directly from registry
@@ -1212,6 +1227,62 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
     }
 
     /**
+     * Resolves an {@code Optional<T>} injection point encoded as an {@link OptionalDependency}
+     * marker.
+     *
+     * <p>Returns {@code Optional.of(bean)} when exactly one bean of the element type is
+     * registered (respecting {@code @Primary}), {@code Optional.empty()} when none is, and
+     * throws {@link AmbiguousBeanException} when several candidates exist and none is primary
+     * (matching the single-bean resolution semantics of {@code warmup.get(type)}).</p>
+     *
+     * @param marker the dependency name recorded by the annotation processor
+     * @return an {@code Optional} holding the matching bean, or empty, never {@code null}
+     */
+    @SuppressWarnings("unchecked")
+    private Object resolveOptionalDependency(String marker) {
+        Class<Object> elementType =
+                (Class<Object>) OptionalDependency.loadType(OptionalDependency.elementOf(marker));
+        java.util.List<BeanDefinition<Object>> definitions = registry.getAllDefinitionsByType(elementType);
+
+        if (definitions.isEmpty()) {
+            return java.util.Optional.empty();
+        }
+
+        // Respect @Primary: prefer a primary definition when more than one candidate exists.
+        BeanDefinition<?> selected = null;
+        for (BeanDefinition<?> def : definitions) {
+            if (def.isPrimary()) {
+                selected = def;
+                break;
+            }
+        }
+        if (selected == null) {
+            if (definitions.size() > 1) {
+                java.util.List<String> names = new java.util.ArrayList<>(definitions.size());
+                for (BeanDefinition<?> def : definitions) {
+                    names.add(def.name());
+                }
+                throw new AmbiguousBeanException(elementType, names);
+            }
+            selected = definitions.get(0);
+        }
+
+        Object bean = resolveByName(selected.name());
+        return java.util.Optional.ofNullable(bean);
+    }
+
+    /**
+     * Wraps an {@code Optional<T>} injection point as a factory, keeping beans that depend on
+     * an optional bean on the compile-time fast path.
+     *
+     * @param marker the dependency name recorded by the annotation processor
+     * @return a factory producing the Optional on each {@code create} call
+     */
+    private CompiledFactory<Object> optionalFactory(String marker) {
+        return (Object... ignored) -> resolveOptionalDependency(marker);
+    }
+
+    /**
      * Gets all registered bean names.
      */
     public Set<String> getBeanNames() {
@@ -1725,6 +1796,19 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
                             CollectionDependency.declaredTypeOf(depName));
                     continue;
                 }
+                if (OptionalDependency.isMarker(depName)) {
+                    // Optional injection point: the constructor parameter is the declared raw
+                    // type (java.util.Optional); the resolved value is an Optional instance.
+                    depClasses[depIndex++] = OptionalDependency.loadType(
+                            OptionalDependency.declaredTypeOf(depName));
+                    continue;
+                }
+                if (isValueExpression(depName)) {
+                    // @Value placeholder: the constructor parameter type drives the conversion
+                    // (e.g. List for a comma separated value string). No bean definition exists.
+                    depClasses[depIndex++] = valueTargetType(definition, i);
+                    continue;
+                }
                 BeanDefinition<?> d = registry.getDefinitionOrNull(depName);
                 if (d == null) {
                     throw new IllegalStateException(
@@ -1733,6 +1817,10 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
                     );
                 }
                 depClasses[depIndex++] = d.type();
+            } else if (dep instanceof ValueDependency valueDep) {
+                // @Value dependency supplied as an object (dynamic registration): the declared
+                // target type drives both the constructor parameter and value conversion.
+                depClasses[depIndex++] = valueDep.targetType();
             } else if (dep != null) {
                 depClasses[depIndex++] = findConstructorParameterType(definition.type(), i, dep.getClass());
             } else {
@@ -1819,6 +1907,21 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
             
             Object dep = dependencies[i];
             if (dep instanceof String depName) {
+                // @Value placeholders ({@code ${...}}) recorded by the annotation processor are
+                // configuration values, not bean names: resolve them through the PropertyResolver
+                // with the declared injection type driving any string→collection conversion.
+                if (isValueExpression(depName)) {
+                    if (propertyResolver == null) {
+                        throw new IllegalStateException(
+                            "PropertyResolver not configured but @Value dependency found in bean '" + 
+                            definition.name() + "'. Use Warmup.builder().propertySource(...) to configure."
+                        );
+                    }
+                    deps[depIndex++] = resolveValueDependency(
+                            new ValueDependency(depName, valueTargetType(definition, i)));
+                    depIndices[i] = -2; // value dependencies have no bean index
+                    continue;
+                }
                 // Check if we have a cached index for this dependency
                 int cachedIdx = depIndices[i];
                 
@@ -1878,7 +1981,21 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
             Object dep = dependencies[i];
             if (dep instanceof String depName) {
                 // Resolve the deferred dependency now that the bean is published
-                Object resolvedDep = resolveByName(depName);
+                Object resolvedDep;
+                if (isValueExpression(depName)) {
+                    // @Value placeholder on a field/setter: resolve via PropertyResolver with a
+                    // target type derived from the reflected field/setter parameter.
+                    if (propertyResolver == null) {
+                        throw new IllegalStateException(
+                            "PropertyResolver not configured but @Value dependency found in bean '" + 
+                            definition.name() + "'. Use Warmup.builder().propertySource(...) to configure."
+                        );
+                    }
+                    resolvedDep = resolveValueDependency(
+                            new ValueDependency(depName, valueTargetType(definition, i)));
+                } else {
+                    resolvedDep = resolveByName(depName);
+                }
                 
                 // Inject via field or setter based on metadata
                 if (definition.isFieldOrSetterDependency(i)) {
@@ -1978,7 +2095,14 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
     private Object resolveValueDependency(ValueDependency valueDep) {
         String expression = valueDep.expression();
         Class<?> targetType = valueDep.targetType();
-        
+
+        // String -> collection conversion for @Value List<String>, Set<String>, etc.
+        CollectionDependency.Kind kind = CollectionDependency.kindOfType(targetType);
+        if (kind != null) {
+            return splitValueIntoCollection(
+                    targetType, kind, propertyResolver.resolveString(expression));
+        }
+
         if (targetType == String.class) {
             return propertyResolver.resolveString(expression);
         } else if (targetType == int.class || targetType == Integer.class) {
@@ -1995,6 +2119,84 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
             // Default to String resolution
             return propertyResolver.resolveString(expression);
         }
+    }
+
+    /**
+     * Splits a comma separated configuration value into the declared collection type.
+     *
+     * <p>For example {@code @Value("${app.ports}") List<String>} with the property
+     * {@code app.ports = "8080, 8081"} yields {@code ["8080", "8081"]}. The declared raw type
+     * is honoured ({@code LinkedList}, {@code TreeSet}, {@code Deque}, ...). Elements are kept
+     * as strings; typed element conversion is not part of this feature.</p>
+     *
+     * @param targetType the declared raw collection type
+     * @param kind the collection kind
+     * @param raw the resolved property value
+     * @return a mutable collection of the declared type containing the trimmed elements
+     */
+    @SuppressWarnings("unchecked")
+    private Object splitValueIntoCollection(Class<?> targetType, CollectionDependency.Kind kind, String raw) {
+        Object container = CollectionDependency.newContainer(targetType, kind);
+        if (raw != null && !raw.isBlank()) {
+            for (String part : raw.split(",", -1)) {
+                String trimmed = part.trim();
+                if (!trimmed.isEmpty()) {
+                    ((Collection<Object>) container).add(trimmed);
+                }
+            }
+        }
+        return container;
+    }
+
+    /**
+     * @param name a dependency name
+     * @return {@code true} when {@code name} is a {@code @Value} placeholder expression such
+     *         as {@code ${app.name}} or {@code ${app.port:8080}}
+     */
+    private boolean isValueExpression(String name) {
+        return name != null && name.length() >= 3 && name.startsWith("${") && name.endsWith("}");
+    }
+
+    /**
+     * Best-effort target type for a {@code @Value} dependency at the given dependency index.
+     *
+     * <p>Constructor parameters come first in the dependency array, followed by {@code @Inject}
+     * / {@code @Value} fields and single-argument {@code @Inject} setters. Only the erased type
+     * is needed, because it drives string→collection conversion ({@code List} vs {@code String}).
+     * Falls back to {@link String} when the index cannot be mapped.</p>
+     *
+     * @param definition the owning bean definition
+     * @param depIndex the dependency index
+     * @return the erased injection type driving value conversion
+     */
+    private Class<?> valueTargetType(BeanDefinition<?> definition, int depIndex) {
+        Class<?> beanType = definition.type();
+
+        for (java.lang.reflect.Constructor<?> ctor : beanType.getDeclaredConstructors()) {
+            Class<?>[] params = ctor.getParameterTypes();
+            if (depIndex < params.length) {
+                return params[depIndex];
+            }
+        }
+
+        int count = 0;
+        for (java.lang.reflect.Field field : beanType.getDeclaredFields()) {
+            if (field.isAnnotationPresent(Inject.class) || field.isAnnotationPresent(Value.class)) {
+                if (count == depIndex) {
+                    return field.getType();
+                }
+                count++;
+            }
+        }
+        for (java.lang.reflect.Method method : beanType.getDeclaredMethods()) {
+            if (method.isAnnotationPresent(Inject.class) && method.getParameterCount() == 1) {
+                if (count == depIndex) {
+                    return method.getParameterTypes()[0];
+                }
+                count++;
+            }
+        }
+        return String.class;
     }
 
     @SuppressWarnings("unchecked")

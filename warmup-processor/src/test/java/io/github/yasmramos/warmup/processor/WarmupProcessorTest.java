@@ -400,6 +400,76 @@ class WarmupProcessorTest {
     }
 
     /**
+     * An {@code Optional<T>} injection point used to be recorded as the raw name "Optional",
+     * which the container failed to resolve at runtime ("Bean not found: Optional").
+     * The dependency name must now be an optional marker string
+     * ($$warmup:optional:java.util.Optional:test.PaymentProcessor) and the factory constructor
+     * must use the erased java.util.Optional parameter type.
+     */
+    @Test
+    void optionalInjectionPointIsEncodedAsMarkerNotRawName() throws Exception {
+        JavaFileObject iface = JavaFileObjects.forSourceLines(
+            "test.PaymentProcessor",
+            "package test;",
+            "public interface PaymentProcessor {",
+            "    String pay(int amount);",
+            "}"
+        );
+        JavaFileObject impl = JavaFileObjects.forSourceLines(
+            "test.CardProcessor",
+            "package test;",
+            "import io.github.yasmramos.warmup.annotations.Component;",
+            "@Component",
+            "public class CardProcessor implements PaymentProcessor {",
+            "    public String pay(int amount) { return \"card:\" + amount; }",
+            "}"
+        );
+        JavaFileObject holder = JavaFileObjects.forSourceLines(
+            "test.OptionalHolder",
+            "package test;",
+            "import io.github.yasmramos.warmup.annotations.Component;",
+            "import io.github.yasmramos.warmup.annotations.Inject;",
+            "import java.util.Optional;",
+            "@Component",
+            "public class OptionalHolder {",
+            "    private final Optional<PaymentProcessor> processor;",
+            "    @Inject",
+            "    public OptionalHolder(Optional<PaymentProcessor> processor) {",
+            "        this.processor = processor;",
+            "    }",
+            "}"
+        );
+
+        Compilation compilation = compiler.compile(iface, impl, holder);
+        assertTrue(compilation.diagnostics().stream()
+                .noneMatch(d -> d.getKind() == javax.tools.Diagnostic.Kind.ERROR),
+            "Compilation should succeed; diagnostics: " + compilation.diagnostics());
+
+        Optional<JavaFileObject> factoryOpt = compilation.generatedFile(
+            StandardLocation.CLASS_OUTPUT, "test/OptionalHolder$$WarmupFactory.class");
+        assertTrue(factoryOpt.isPresent(), "Factory class should be generated");
+
+        byte[] factoryBytes = factoryOpt.get().openInputStream().readAllBytes();
+        String factoryText = new String(factoryBytes, java.nio.charset.StandardCharsets.UTF_8);
+        assertTrue(factoryText.contains("(Ljava/util/Optional;)V"),
+            "Factory constructor must use the erased Optional type, bytes were: " + factoryText);
+
+        Optional<JavaFileObject> registrarOpt = compilation.generatedFile(
+            StandardLocation.CLASS_OUTPUT, "test/GeneratedFactoryRegistrar.class");
+        assertTrue(registrarOpt.isPresent(), "Registrar class should be generated");
+        byte[] registrarBytes = registrarOpt.get().openInputStream().readAllBytes();
+        String registrarText = new String(registrarBytes, java.nio.charset.StandardCharsets.UTF_8);
+        assertTrue(registrarText.contains("$$warmup:optional:java.util.Optional:test.PaymentProcessor"),
+            "Dependency must be encoded as the optional marker, registrar bytes were: " + registrarText);
+        assertFalse(registrarText.contains("Optional>"),
+            "Old broken raw-name encoding (Optional>) must be gone");
+
+        TestClassLoader classLoader = new TestClassLoader();
+        Class<?> factoryClassLoaded = classLoader.defineClass("test.OptionalHolder$$WarmupFactory", factoryBytes);
+        assertNotNull(factoryClassLoaded.getDeclaredConstructor().newInstance());
+    }
+
+    /**
      * Helper ClassLoader for loading generated classes during tests.
      */
     private static class TestClassLoader extends ClassLoader {

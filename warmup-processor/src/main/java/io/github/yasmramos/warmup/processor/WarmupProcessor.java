@@ -573,7 +573,12 @@ public class WarmupProcessor extends AbstractProcessor {
                 // Collection injection points (List<T>, Set<T>, Map<String, T>) have no
                 // single bean name - encode them so the container resolves all of them.
                 String collection = collectionMarker(param.asType(), param);
-                depNames.add(collection != null ? collection : simpleName);
+                if (collection != null) {
+                    depNames.add(collection);
+                } else {
+                    String optional = optionalMarker(param.asType(), param);
+                    depNames.add(optional != null ? optional : simpleName);
+                }
             }
         }
         providerFlags.add(isProvider);
@@ -621,7 +626,12 @@ public class WarmupProcessor extends AbstractProcessor {
                 depNames.add(inject.value());
             } else {
                 String collection = collectionMarker(field.asType(), field);
-                depNames.add(collection != null ? collection : simpleName);
+                if (collection != null) {
+                    depNames.add(collection);
+                } else {
+                    String optional = optionalMarker(field.asType(), field);
+                    depNames.add(optional != null ? optional : simpleName);
+                }
             }
         }
         providerFlags.add(isProvider);
@@ -700,7 +710,13 @@ public class WarmupProcessor extends AbstractProcessor {
                     depNames.add(inject.value());
                 } else {
                     String collection = collectionMarker(param.asType(), param);
-                    String depName = collection != null ? collection : simpleName;
+                    String depName;
+                    if (collection != null) {
+                        depName = collection;
+                    } else {
+                        String optional = optionalMarker(param.asType(), param);
+                        depName = optional != null ? optional : simpleName;
+                    }
                     methodDepNames.add(depName);
                     depNames.add(depName);
                 }
@@ -1429,6 +1445,67 @@ public class WarmupProcessor extends AbstractProcessor {
 
         static String encode(CollectionKind kind, String declaredTypeFqn, String elementFqn) {
             return PREFIX + kind.name().toLowerCase() + ":" + declaredTypeFqn + ":" + elementFqn;
+        }
+    }
+
+    /**
+     * Encodes an {@code Optional<T>} injection point so the container resolves the element
+     * bean if present (wrapping it in {@code Optional.of}) or injects {@code Optional.empty()}
+     * when no bean of the element type exists.
+     *
+     * @param type the declared parameter/field type
+     * @param injectionPoint the element to report diagnostics against
+     * @return the marker, or {@code null} when {@code type} is not a parameterised
+     *         {@code java.util.Optional}
+     */
+    private String optionalMarker(TypeMirror type, Element injectionPoint) {
+        if (type.getKind() != TypeKind.DECLARED) {
+            return null;
+        }
+        DeclaredType declaredType = (DeclaredType) type;
+        Element rawElement = declaredType.asElement();
+        if (!(rawElement instanceof TypeElement rawType)) {
+            return null;
+        }
+        if (!rawType.getQualifiedName().contentEquals("java.util.Optional")) {
+            return null;
+        }
+
+        List<? extends TypeMirror> typeArguments = declaredType.getTypeArguments();
+        if (typeArguments.size() != 1) {
+            // Raw Optional - nothing to resolve by element type.
+            return null;
+        }
+
+        TypeMirror target = typeArguments.get(0);
+        if (target.getKind() != TypeKind.DECLARED
+                || !(((DeclaredType) target).asElement() instanceof TypeElement elementType)) {
+            processingEnv.getMessager().printMessage(Diagnostic.Kind.ERROR,
+                    "Cannot determine the element type of optional injection point '" + type
+                            + "'. Declare a concrete element type, or resolve the bean yourself "
+                            + "with Warmup.get(...).",
+                    injectionPoint);
+            return null;
+        }
+
+        return OptionalMarker.encode(elementType.getQualifiedName().toString());
+    }
+
+    /**
+     * Encodes the marker string for an {@code Optional<T>} injection point. Plain string
+     * contract shared with the container, mirroring {@link CollectionMarker}: the processor
+     * must not load container classes.
+     *
+     * <p>Format: {@code $$warmup:optional:java.util.Optional:&lt;elementFqn&gt;}</p>
+     */
+    private static final class OptionalMarker {
+        private static final String PREFIX = "$$warmup:optional:";
+
+        private OptionalMarker() {
+        }
+
+        static String encode(String elementFqn) {
+            return PREFIX + "java.util.Optional:" + elementFqn;
         }
     }
 
