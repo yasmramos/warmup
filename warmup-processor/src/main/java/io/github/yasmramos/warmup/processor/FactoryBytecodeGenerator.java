@@ -706,27 +706,6 @@ public class FactoryBytecodeGenerator {
     }
 
     /**
-     * Maps a type string to its internal name.
-     */
-    private String mapTypeToInternal(String typeStr) {
-        // Handle primitives
-        switch (typeStr) {
-            case "int": return "I";
-            case "long": return "J";
-            case "short": return "S";
-            case "byte": return "B";
-            case "char": return "C";
-            case "boolean": return "Z";
-            case "float": return "F";
-            case "double": return "D";
-            case "void": return "V";
-            default:
-                // Reference type: replace dots with slashes
-                return typeStr.replace('.', '/');
-        }
-    }
-
-    /**
      * Gets the descriptor for a type (e.g., "Ljava/lang/String;" or "I").
      */
     private String getDescriptor(TypeMirror type) {
