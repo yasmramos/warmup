@@ -551,7 +551,8 @@ public class WarmupProcessor extends AbstractProcessor {
         // Check for @Value annotation on parameter (configuration value, not bean reference)
         Value value = param.getAnnotation(Value.class);
         if (value != null) {
-            depNames.add(value.value()); // Store the expression as the "name"
+            String typed = typedValueMarker(param.asType(), value.value());
+            depNames.add(typed != null ? typed : value.value()); // Store the expression/marker
             providerFlags.add(false);
             return;
         }
@@ -604,7 +605,8 @@ public class WarmupProcessor extends AbstractProcessor {
         // Check for @Value annotation on field (configuration value, not bean reference)
         Value value = field.getAnnotation(Value.class);
         if (value != null) {
-            depNames.add(value.value()); // Store the expression as the "name"
+            String typed = typedValueMarker(field.asType(), value.value());
+            depNames.add(typed != null ? typed : value.value()); // Store the expression/marker
             providerFlags.add(false);
             isDeferred.add(false); // Value dependencies are not deferrable in the same way
             isFieldOrSetter.add(true);
@@ -676,8 +678,10 @@ public class WarmupProcessor extends AbstractProcessor {
             // Check for @Value annotation on parameter (configuration value, not bean reference)
             Value value = param.getAnnotation(Value.class);
             if (value != null) {
-                methodDepNames.add(value.value());
-                depNames.add(value.value());
+                String typed = typedValueMarker(param.asType(), value.value());
+                String valueName = typed != null ? typed : value.value();
+                methodDepNames.add(valueName);
+                depNames.add(valueName);
                 methodProviderFlags.add(false);
                 providerFlags.add(false);
                 methodValueFlags.add(true);
@@ -1241,6 +1245,77 @@ public class WarmupProcessor extends AbstractProcessor {
         }
 
         return OptionalMarker.encode(elementType.getQualifiedName().toString());
+    }
+
+    /**
+     * Encodes a {@code @Value} injection point whose declared type is a parameterised
+     * collection with a non-{@code String} element type, for example
+     * {@code @Value("${app.ports}") List<Integer>}.
+     *
+     * <p>A plain {@code @Value} expression is recorded verbatim and the container derives the
+     * erased target type by reflection. That is enough for {@code List<String>}, but the
+     * element type of {@code List<Integer>} is erased, so every element would stay a String.
+     * In that case the injection point is encoded as a marker carrying the declared raw type
+     * and the element type, so the container can convert each split element.</p>
+     *
+     * @param type the declared parameter/field type
+     * @param expression the {@code @Value} placeholder expression
+     * @return the marker, or {@code null} when the plain expression should be used
+     */
+    private String typedValueMarker(TypeMirror type, String expression) {
+        if (type.getKind() != TypeKind.DECLARED) {
+            return null;
+        }
+        DeclaredType declaredType = (DeclaredType) type;
+        Element rawElement = declaredType.asElement();
+        if (!(rawElement instanceof TypeElement rawType)) {
+            return null;
+        }
+
+        String rawFqn = rawType.getQualifiedName().toString();
+        CollectionKind kind = collectionKindOf(rawFqn);
+        if (kind == null || kind == CollectionKind.MAP) {
+            // Not a supported collection, or a Map (a comma separated string cannot describe one).
+            return null;
+        }
+
+        List<? extends TypeMirror> typeArguments = declaredType.getTypeArguments();
+        if (typeArguments.size() != 1) {
+            // Raw use (e.g. an unparameterised List) - keep the plain expression.
+            return null;
+        }
+
+        TypeMirror element = typeArguments.get(0);
+        if (element.getKind() != TypeKind.DECLARED
+                || !(((DeclaredType) element).asElement() instanceof TypeElement elementType)) {
+            // Nested generics, arrays or type variables: keep the plain expression.
+            return null;
+        }
+
+        String elementFqn = elementType.getQualifiedName().toString();
+        if (elementFqn.equals("java.lang.String")) {
+            // String elements already convert correctly through the plain expression path.
+            return null;
+        }
+        return TypedValueMarker.encode(rawFqn, elementFqn, expression);
+    }
+
+    /**
+     * Encodes the marker string for a typed {@code @Value} collection injection point. Plain
+     * string contract shared with the container, mirroring {@link CollectionMarker}: the
+     * processor must not load container classes.
+     *
+     * <p>Format: {@code $$warmup:value:&lt;declaredFqn&gt;:&lt;elementFqn&gt;:&lt;expression&gt;}</p>
+     */
+    private static final class TypedValueMarker {
+        private static final String PREFIX = "$$warmup:value:";
+
+        private TypedValueMarker() {
+        }
+
+        static String encode(String declaredTypeFqn, String elementFqn, String expression) {
+            return PREFIX + declaredTypeFqn + ":" + elementFqn + ":" + expression;
+        }
     }
 
     /**

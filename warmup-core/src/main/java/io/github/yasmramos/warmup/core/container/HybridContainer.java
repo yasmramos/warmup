@@ -22,6 +22,7 @@ import io.github.yasmramos.warmup.core.registry.BeanRegistryImpl;
 import io.github.yasmramos.warmup.core.registry.CollectionDependency;
 import io.github.yasmramos.warmup.core.registry.OptionalDependency;
 import io.github.yasmramos.warmup.core.registry.ResolvedBeanDefinition;
+import io.github.yasmramos.warmup.core.registry.TypedValueDependency;
 import io.github.yasmramos.warmup.core.registry.ValueDependency;
 import io.github.yasmramos.warmup.core.scope.Scope;
 import java.lang.System.Logger;
@@ -1803,6 +1804,13 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
                             OptionalDependency.declaredTypeOf(depName));
                     continue;
                 }
+                if (TypedValueDependency.isMarker(depName)) {
+                    // Typed @Value collection: the constructor parameter is the declared raw
+                    // collection type (List/Set/Deque/...), materialised with converted elements.
+                    depClasses[depIndex++] = TypedValueDependency.loadType(
+                            TypedValueDependency.declaredTypeOf(depName));
+                    continue;
+                }
                 if (isValueExpression(depName)) {
                     // @Value placeholder: the constructor parameter type drives the conversion
                     // (e.g. List for a comma separated value string). No bean definition exists.
@@ -1910,6 +1918,17 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
                 // @Value placeholders ({@code ${...}}) recorded by the annotation processor are
                 // configuration values, not bean names: resolve them through the PropertyResolver
                 // with the declared injection type driving any string→collection conversion.
+                if (TypedValueDependency.isMarker(depName)) {
+                    if (propertyResolver == null) {
+                        throw new IllegalStateException(
+                            "PropertyResolver not configured but @Value dependency found in bean '" + 
+                            definition.name() + "'. Use Warmup.builder().propertySource(...) to configure."
+                        );
+                    }
+                    deps[depIndex++] = resolveTypedValueDependency(depName);
+                    depIndices[i] = -2; // value dependencies have no bean index
+                    continue;
+                }
                 if (isValueExpression(depName)) {
                     if (propertyResolver == null) {
                         throw new IllegalStateException(
@@ -1982,7 +2001,17 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
             if (dep instanceof String depName) {
                 // Resolve the deferred dependency now that the bean is published
                 Object resolvedDep;
-                if (isValueExpression(depName)) {
+                if (TypedValueDependency.isMarker(depName)) {
+                    // Typed @Value collection on a field/setter: convert every split element to
+                    // the element type encoded in the marker.
+                    if (propertyResolver == null) {
+                        throw new IllegalStateException(
+                            "PropertyResolver not configured but @Value dependency found in bean '" + 
+                            definition.name() + "'. Use Warmup.builder().propertySource(...) to configure."
+                        );
+                    }
+                    resolvedDep = resolveTypedValueDependency(depName);
+                } else if (isValueExpression(depName)) {
                     // @Value placeholder on a field/setter: resolve via PropertyResolver with a
                     // target type derived from the reflected field/setter parameter.
                     if (propertyResolver == null) {
@@ -2100,7 +2129,7 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
         CollectionDependency.Kind kind = CollectionDependency.kindOfType(targetType);
         if (kind != null) {
             return splitValueIntoCollection(
-                    targetType, kind, propertyResolver.resolveString(expression));
+                    targetType, kind, propertyResolver.resolveString(expression), String.class);
         }
 
         if (targetType == String.class) {
@@ -2126,26 +2155,107 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
      *
      * <p>For example {@code @Value("${app.ports}") List<String>} with the property
      * {@code app.ports = "8080, 8081"} yields {@code ["8080", "8081"]}. The declared raw type
-     * is honoured ({@code LinkedList}, {@code TreeSet}, {@code Deque}, ...). Elements are kept
-     * as strings; typed element conversion is not part of this feature.</p>
+     * is honoured ({@code LinkedList}, {@code TreeSet}, {@code Deque}, ...).</p>
+     *
+     * <p>When {@code elementType} is not {@link String} each trimmed element is converted to
+     * that type ({@code @Value List<Integer>} yields {@code [8080, 8081]}). This is what the
+     * {@link TypedValueDependency} marker encodes; plain {@code @Value} expressions keep
+     * {@code String} elements.</p>
      *
      * @param targetType the declared raw collection type
      * @param kind the collection kind
      * @param raw the resolved property value
-     * @return a mutable collection of the declared type containing the trimmed elements
+     * @param elementType the element type to convert each split value to
+     * @return a mutable collection of the declared type containing the converted elements
      */
     @SuppressWarnings("unchecked")
-    private Object splitValueIntoCollection(Class<?> targetType, CollectionDependency.Kind kind, String raw) {
+    private Object splitValueIntoCollection(Class<?> targetType, CollectionDependency.Kind kind,
+                                            String raw, Class<?> elementType) {
         Object container = CollectionDependency.newContainer(targetType, kind);
         if (raw != null && !raw.isBlank()) {
             for (String part : raw.split(",", -1)) {
                 String trimmed = part.trim();
                 if (!trimmed.isEmpty()) {
-                    ((Collection<Object>) container).add(trimmed);
+                    ((Collection<Object>) container).add(convertElement(trimmed, elementType));
                 }
             }
         }
         return container;
+    }
+
+    /**
+     * Resolves a typed {@code @Value} collection dependency encoded as a
+     * {@link TypedValueDependency} marker.
+     *
+     * <p>Reads the declared raw collection type and element type back out of the marker,
+     * resolves the placeholder expression through the {@code PropertyResolver} and splits the
+     * resulting string into a collection of converted elements.</p>
+     *
+     * @param marker the dependency name produced by the annotation processor
+     * @return a mutable collection of the declared type with converted elements
+     */
+    private Object resolveTypedValueDependency(String marker) {
+        Class<?> declaredType = TypedValueDependency.loadType(TypedValueDependency.declaredTypeOf(marker));
+        Class<?> elementType = TypedValueDependency.loadType(TypedValueDependency.elementOf(marker));
+        CollectionDependency.Kind kind = CollectionDependency.kindOfType(declaredType);
+        String raw = propertyResolver.resolveString(TypedValueDependency.expressionOf(marker));
+        if (kind == null) {
+            // The declared type is not a supported collection: fall back to the raw string.
+            return raw;
+        }
+        return splitValueIntoCollection(declaredType, kind, raw, elementType);
+    }
+
+    /**
+     * Converts a single configuration value to the requested element type.
+     *
+     * <p>Supports {@code String}, the eight boxed primitives, their numeric wrappers' wider
+     * relatives ({@code BigInteger}, {@code BigDecimal}) and enums. Unknown types fall back to
+     * the raw string.</p>
+     *
+     * @param value the trimmed configuration value
+     * @param elementType the requested element type
+     * @return the converted value
+     */
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private Object convertElement(String value, Class<?> elementType) {
+        if (elementType == null || elementType == String.class || elementType == Object.class) {
+            return value;
+        }
+        if (elementType == Integer.class || elementType == int.class) {
+            return Integer.valueOf(value);
+        }
+        if (elementType == Long.class || elementType == long.class) {
+            return Long.valueOf(value);
+        }
+        if (elementType == Boolean.class || elementType == boolean.class) {
+            return Boolean.valueOf(value);
+        }
+        if (elementType == Double.class || elementType == double.class) {
+            return Double.valueOf(value);
+        }
+        if (elementType == Float.class || elementType == float.class) {
+            return Float.valueOf(value);
+        }
+        if (elementType == Short.class || elementType == short.class) {
+            return Short.valueOf(value);
+        }
+        if (elementType == Byte.class || elementType == byte.class) {
+            return Byte.valueOf(value);
+        }
+        if (elementType == Character.class || elementType == char.class) {
+            return value.isEmpty() ? null : value.charAt(0);
+        }
+        if (elementType == java.math.BigInteger.class) {
+            return new java.math.BigInteger(value);
+        }
+        if (elementType == java.math.BigDecimal.class) {
+            return new java.math.BigDecimal(value);
+        }
+        if (elementType.isEnum()) {
+            return Enum.valueOf((Class<? extends Enum>) elementType, value);
+        }
+        return value;
     }
 
     /**

@@ -470,6 +470,76 @@ class WarmupProcessorTest {
     }
 
     /**
+     * A {@code @Value} collection with a non-{@code String} element type used to be recorded as
+     * the plain placeholder expression, so the element type was erased and the container left
+     * every element as a String (blowing up on first typed access at runtime). The dependency
+     * name must now be a typed value marker
+     * ({@code $$warmup:value:java.util.List:java.lang.Integer:${app.ports}}), while a
+     * {@code String} element type keeps the plain expression.
+     */
+    @Test
+    void typedValueCollectionIsEncodedAsMarkerNotPlainExpression() throws Exception {
+        JavaFileObject intBean = JavaFileObjects.forSourceLines(
+            "test.IntPortsBean",
+            "package test;",
+            "import io.github.yasmramos.warmup.annotations.Singleton;",
+            "import io.github.yasmramos.warmup.annotations.Value;",
+            "import java.util.List;",
+            "@Singleton",
+            "public class IntPortsBean {",
+            "    private final List<Integer> ports;",
+            "    public IntPortsBean(@Value(\"${app.ports}\") List<Integer> ports) {",
+            "        this.ports = ports;",
+            "    }",
+            "}"
+        );
+        JavaFileObject stringBean = JavaFileObjects.forSourceLines(
+            "test.StringTagsBean",
+            "package test;",
+            "import io.github.yasmramos.warmup.annotations.Singleton;",
+            "import io.github.yasmramos.warmup.annotations.Value;",
+            "import java.util.List;",
+            "@Singleton",
+            "public class StringTagsBean {",
+            "    private final List<String> tags;",
+            "    public StringTagsBean(@Value(\"${app.tags}\") List<String> tags) {",
+            "        this.tags = tags;",
+            "    }",
+            "}"
+        );
+
+        Compilation compilation = compiler.compile(intBean, stringBean);
+        assertTrue(compilation.diagnostics().stream()
+                .noneMatch(d -> d.getKind() == javax.tools.Diagnostic.Kind.ERROR),
+            "Compilation should succeed; diagnostics: " + compilation.diagnostics());
+
+        // The factory constructor keeps the erased java.util.List parameter type for both beans.
+        Optional<JavaFileObject> factoryOpt = compilation.generatedFile(
+            StandardLocation.CLASS_OUTPUT, "test/IntPortsBean$$WarmupFactory.class");
+        assertTrue(factoryOpt.isPresent(), "Factory class should be generated");
+        byte[] factoryBytes = factoryOpt.get().openInputStream().readAllBytes();
+        String factoryText = new String(factoryBytes, java.nio.charset.StandardCharsets.UTF_8);
+        assertTrue(factoryText.contains("(Ljava/util/List;)V"),
+            "Factory constructor must use the erased collection type, bytes were: " + factoryText);
+
+        Optional<JavaFileObject> registrarOpt = compilation.generatedFile(
+            StandardLocation.CLASS_OUTPUT, "test/GeneratedFactoryRegistrar.class");
+        assertTrue(registrarOpt.isPresent(), "Registrar class should be generated");
+        byte[] registrarBytes = registrarOpt.get().openInputStream().readAllBytes();
+        String registrarText = new String(registrarBytes, java.nio.charset.StandardCharsets.UTF_8);
+        assertTrue(registrarText.contains("$$warmup:value:java.util.List:java.lang.Integer:${app.ports}"),
+            "Non-String element type must be encoded as a typed value marker, registrar bytes were: " + registrarText);
+        assertFalse(registrarText.contains("$$warmup:value:java.util.List:java.lang.String"),
+            "String element type must keep the plain expression, not a typed value marker");
+        assertTrue(registrarText.contains("${app.tags}"),
+            "String element type must keep the plain placeholder expression");
+
+        TestClassLoader classLoader = new TestClassLoader();
+        Class<?> factoryClassLoaded = classLoader.defineClass("test.IntPortsBean$$WarmupFactory", factoryBytes);
+        assertNotNull(factoryClassLoaded.getDeclaredConstructor().newInstance());
+    }
+
+    /**
      * Regression test for primitive injection points (constructor parameters, fields and
      * setter parameters).
      *
