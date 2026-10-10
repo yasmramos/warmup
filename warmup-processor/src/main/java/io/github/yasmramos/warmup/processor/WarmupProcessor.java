@@ -824,8 +824,15 @@ public class WarmupProcessor extends AbstractProcessor {
                 returnTypeNameForCode = lastDot > 0 ? returnTypeStr.substring(lastDot + 1) : returnTypeStr;
                 returnTypeFqn = returnTypeStr;
             }
+        } else if (returnTypeMirror.getKind().isPrimitive()
+                && returnTypeMirror.getKind() != TypeKind.VOID) {
+            // A primitive-returning @Bean method is boxed by the generated factory, so the bean is
+            // registered as its wrapper class (e.g. @Bean int -> java.lang.Integer) rather than the
+            // primitive descriptor, which would produce an invalid class constant in the registrar.
+            returnTypeFqn = wrapperTypeName(returnTypeMirror.getKind());
+            returnTypeNameForCode = returnTypeFqn;
         } else {
-            // Fallback for primitive types or other edge cases
+            // Fallback for other edge cases (e.g. void, arrays)
             String returnType = returnTypeMirror.toString();
             int lastDot = returnType.lastIndexOf('.');
             returnTypeNameForCode = lastDot > 0 ? returnType.substring(lastDot + 1) : returnType;
@@ -1629,6 +1636,25 @@ public class WarmupProcessor extends AbstractProcessor {
             String packagePart = binaryName.substring(0, lastDollarIndex);
             String classPart = binaryName.substring(lastDollarIndex); // includes the $
             return packagePart.replace('.', '/') + classPart;
+        }
+    }
+
+    /**
+     * Returns the fully qualified name of the wrapper class for a primitive kind. Primitive values
+     * are boxed by generated factories, so a primitive bean type is represented by its wrapper.
+     */
+    private static String wrapperTypeName(TypeKind kind) {
+        switch (kind) {
+            case INT: return "java.lang.Integer";
+            case LONG: return "java.lang.Long";
+            case SHORT: return "java.lang.Short";
+            case BYTE: return "java.lang.Byte";
+            case CHAR: return "java.lang.Character";
+            case BOOLEAN: return "java.lang.Boolean";
+            case FLOAT: return "java.lang.Float";
+            case DOUBLE: return "java.lang.Double";
+            case VOID: return "java.lang.Void";
+            default: throw new IllegalArgumentException("Not a primitive: " + kind);
         }
     }
     

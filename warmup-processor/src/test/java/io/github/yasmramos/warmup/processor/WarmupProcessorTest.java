@@ -618,6 +618,66 @@ class WarmupProcessorTest {
     }
 
     /**
+     * Regression test for {@code @Bean} methods with a primitive return type.
+     *
+     * <p>The bean type of a primitive-returning producer method must be the wrapper class
+     * (e.g. {@code java.lang.Integer}) - matching the boxing the generated factory already
+     * performs - rather than the primitive descriptor {@code "I"}/{@code "int"}. Before the
+     * fix the factory generator built an invalid generic signature and an invalid
+     * {@code Type.getType("LI;")} class literal, and the registrar emitted
+     * {@code Type.getType("Lint;")}; both crashed the processor.</p>
+     */
+    @Test
+    void primitiveBeanMethodReturnTypeIsTreatedAsWrapper() throws Exception {
+        JavaFileObject source = JavaFileObjects.forSourceLines(
+            "test.PrimitiveReturnConfig",
+            "package test;",
+            "import io.github.yasmramos.warmup.annotations.Factory;",
+            "import io.github.yasmramos.warmup.annotations.Bean;",
+            "@Factory",
+            "public class PrimitiveReturnConfig {",
+            "    @Bean",
+            "    public int port() { return 8080; }",
+            "}"
+        );
+
+        Compilation compilation = compiler.compile(source);
+        assertTrue(compilation.diagnostics().stream()
+                .noneMatch(d -> d.getKind() == javax.tools.Diagnostic.Kind.ERROR),
+            "Compilation should succeed; diagnostics: " + compilation.diagnostics());
+
+        Optional<JavaFileObject> factoryOpt = compilation.generatedFile(
+            StandardLocation.CLASS_OUTPUT, "test/PrimitiveReturnConfig$$port$$WarmupFactory.class");
+        assertTrue(factoryOpt.isPresent(), "Method factory class should be generated");
+
+        Optional<JavaFileObject> registrarOpt = compilation.generatedFile(
+            StandardLocation.CLASS_OUTPUT, "test/GeneratedFactoryRegistrar.class");
+        assertTrue(registrarOpt.isPresent(), "Registrar class should be generated");
+
+        // The bean type registered for a primitive-returning producer must be the wrapper class.
+        byte[] registrarBytes = registrarOpt.get().openInputStream().readAllBytes();
+        String registrarText = new String(registrarBytes, java.nio.charset.StandardCharsets.UTF_8);
+        assertTrue(registrarText.contains("java/lang/Integer"),
+            "Registrar must register the bean as java.lang.Integer; bytes were: " + registrarText);
+
+        JavaFileObject configOpt = compilation.generatedFile(
+            StandardLocation.CLASS_OUTPUT, "test/PrimitiveReturnConfig.class").orElseThrow(
+                () -> new AssertionError("Compiled @Factory class should be available"));
+
+        TestClassLoader classLoader = new TestClassLoader();
+        classLoader.defineClass("test.PrimitiveReturnConfig", configOpt.openInputStream().readAllBytes());
+        Class<?> factoryClass = classLoader.defineClass(
+            "test.PrimitiveReturnConfig$$port$$WarmupFactory",
+            factoryOpt.get().openInputStream().readAllBytes());
+
+        Object factory = factoryClass.getDeclaredConstructor().newInstance();
+        // getBeanType must report the wrapper class, and create() must box the primitive return.
+        assertEquals(Integer.class, factoryClass.getMethod("getBeanType").invoke(factory));
+        assertEquals(8080, factoryClass.getMethod("create", Object[].class)
+                .invoke(factory, (Object) new Object[0]));
+    }
+
+    /**
      * Helper ClassLoader for loading generated classes during tests.
      */
     private static class TestClassLoader extends ClassLoader {

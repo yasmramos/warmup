@@ -487,7 +487,14 @@ public class FactoryBytecodeGenerator {
         
         TypeMirror returnTypeMirror = method.getReturnType();
         String returnTypeName = returnTypeMirror.toString();
-        String returnTypeInternalName = getInternalName(returnTypeMirror);
+        // A primitive-returning @Bean method is boxed by the generated factory, so the bean type
+        // exposed through the generic signature and getBeanType() is the wrapper class
+        // (e.g. int -> java.lang.Integer), never the primitive descriptor.
+        boolean primitiveReturn = returnTypeMirror.getKind().isPrimitive()
+                && returnTypeMirror.getKind() != TypeKind.VOID;
+        String returnTypeInternalName = primitiveReturn
+                ? boxedInternalName(returnTypeMirror.getKind())
+                : getInternalName(returnTypeMirror);
         String returnTypeFqn = getFullyQualifiedTypeName(returnTypeMirror);
         
         String generatedFactoryName = packageName.isEmpty() ? factoryClassNameStr + "$$" + methodName + "$$WarmupFactory" 
