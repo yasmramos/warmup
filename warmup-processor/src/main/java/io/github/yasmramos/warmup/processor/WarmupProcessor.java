@@ -570,7 +570,10 @@ public class WarmupProcessor extends AbstractProcessor {
             if (inject != null && !inject.value().isEmpty()) {
                 depNames.add(inject.value());
             } else {
-                depNames.add(simpleName);
+                // Collection injection points (List<T>, Set<T>, Map<String, T>) have no
+                // single bean name - encode them so the container resolves all of them.
+                String collection = collectionMarker(param.asType(), param);
+                depNames.add(collection != null ? collection : simpleName);
             }
         }
         providerFlags.add(isProvider);
@@ -617,7 +620,8 @@ public class WarmupProcessor extends AbstractProcessor {
             if (inject != null && !inject.value().isEmpty()) {
                 depNames.add(inject.value());
             } else {
-                depNames.add(simpleName);
+                String collection = collectionMarker(field.asType(), field);
+                depNames.add(collection != null ? collection : simpleName);
             }
         }
         providerFlags.add(isProvider);
@@ -695,8 +699,10 @@ public class WarmupProcessor extends AbstractProcessor {
                     methodDepNames.add(inject.value());
                     depNames.add(inject.value());
                 } else {
-                    methodDepNames.add(simpleName);
-                    depNames.add(simpleName);
+                    String collection = collectionMarker(param.asType(), param);
+                    String depName = collection != null ? collection : simpleName;
+                    methodDepNames.add(depName);
+                    depNames.add(depName);
                 }
             }
             methodProviderFlags.add(isProvider);
@@ -1303,6 +1309,127 @@ public class WarmupProcessor extends AbstractProcessor {
             }
         }
         return genericType.toString();
+    }
+
+    /**
+     * Detects a collection injection point and returns the marker that makes the container
+     * resolve <em>every</em> bean of the element type.
+     *
+     * <p>Without this the injection point would be reduced to a raw name such as
+     * {@code PaymentProcessor>} &mdash; the trailing bracket survives the simple-name
+     * extraction below &mdash; and resolution would fail at runtime with
+     * {@code Bean not found: PaymentProcessor>}.</p>
+     *
+     * @param type the declared type of the injection point
+     * @param injectionPoint the element reported in diagnostics when the type is malformed
+     * @return the collection marker, or {@code null} when this is not a supported collection
+     */
+    private String collectionMarker(TypeMirror type, Element injectionPoint) {
+        if (type.getKind() != TypeKind.DECLARED) {
+            return null;
+        }
+        DeclaredType declaredType = (DeclaredType) type;
+        Element rawElement = declaredType.asElement();
+        if (!(rawElement instanceof TypeElement rawType)) {
+            return null;
+        }
+
+        CollectionKind kind = collectionKindOf(rawType.getQualifiedName().toString());
+        if (kind == null) {
+            return null;
+        }
+
+        List<? extends TypeMirror> typeArguments = declaredType.getTypeArguments();
+        int targetIndex = kind == CollectionKind.MAP ? 1 : 0;
+        if (typeArguments.size() <= targetIndex) {
+            // Raw use (e.g. an unparameterised List) - nothing to resolve by element type.
+            return null;
+        }
+
+        TypeMirror target = typeArguments.get(targetIndex);
+        if (target.getKind() != TypeKind.DECLARED
+                || !(((DeclaredType) target).asElement() instanceof TypeElement elementType)) {
+            processingEnv.getMessager().printMessage(Diagnostic.Kind.ERROR,
+                    "Cannot determine the element type of collection injection point '" + type
+                            + "'. Declare a concrete element type, or resolve the beans yourself "
+                            + "with Warmup.resolveAll(...).",
+                    injectionPoint);
+            return null;
+        }
+
+        return CollectionMarker.encode(
+                kind,
+                rawType.getQualifiedName().toString(),
+                elementType.getQualifiedName().toString());
+    }
+
+    /**
+     * Maps a raw collection type name onto the kind of container the injection point needs.
+     * Returns {@code null} for types that are not collections, so that ordinary beans and
+     * already-handled types such as {@code Provider} keep their existing behaviour.
+     */
+    private CollectionKind collectionKindOf(String rawTypeName) {
+        switch (rawTypeName) {
+            case "java.util.List":
+            case "java.util.ArrayList":
+            case "java.util.LinkedList":
+            case "java.util.Vector":
+            case "java.util.Stack":
+                return CollectionKind.LIST;
+            case "java.util.Set":
+            case "java.util.HashSet":
+            case "java.util.LinkedHashSet":
+            case "java.util.SortedSet":
+            case "java.util.NavigableSet":
+            case "java.util.TreeSet":
+                return CollectionKind.SET;
+            case "java.util.Map":
+            case "java.util.HashMap":
+            case "java.util.LinkedHashMap":
+            case "java.util.TreeMap":
+            case "java.util.SortedMap":
+            case "java.util.NavigableMap":
+            case "java.util.concurrent.ConcurrentHashMap":
+                return CollectionKind.MAP;
+            case "java.util.Collection":
+            case "java.util.Queue":
+            case "java.util.Deque":
+            case "java.util.ArrayDeque":
+            case "java.util.PriorityQueue":
+            case "java.util.concurrent.CopyOnWriteArrayList":
+            case "java.util.concurrent.CopyOnWriteArraySet":
+                return CollectionKind.COLLECTION;
+            default:
+                return null;
+        }
+    }
+
+    /**
+     * The kind of container a collection injection point asks for. Mirrors the values used by
+     * the container's {@code CollectionDependency} marker parsing.
+     */
+    private enum CollectionKind {
+        LIST, SET, COLLECTION, MAP
+    }
+
+    /**
+     * Encodes the marker string that makes the container resolve every bean of the element
+     * type. This is a plain string contract shared with the container: the processor must not
+     * load container classes, because annotation processors run isolated on the
+     * {@code -processorpath} and a thin JAR would otherwise fail with
+     * {@code NoClassDefFoundError}.
+     *
+     * <p>Format: {@code $$warmup:collection:&lt;kind:lowercase&gt;:&lt;declaredFqn&gt;:&lt;elementFqn&gt;}</p>
+     */
+    private static final class CollectionMarker {
+        private static final String PREFIX = "$$warmup:collection:";
+
+        private CollectionMarker() {
+        }
+
+        static String encode(CollectionKind kind, String declaredTypeFqn, String elementFqn) {
+            return PREFIX + kind.name().toLowerCase() + ":" + declaredTypeFqn + ":" + elementFqn;
+        }
     }
 
     private String getPackageName(TypeElement type) {

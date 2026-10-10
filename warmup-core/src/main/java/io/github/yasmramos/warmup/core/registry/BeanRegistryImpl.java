@@ -17,6 +17,10 @@ import java.util.Set;
 import java.util.List;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.HashSet;
+import java.util.LinkedHashSet;
 
 /**
  * Thread-safe implementation of BeanRegistry using lock-free data structures.
@@ -127,6 +131,20 @@ public class BeanRegistryImpl implements BeanRegistry {
             }
             return existing;
         });
+
+        // Also index the bean under every assignable interface and supertype. Without this,
+        // interface-based lookup (warmup.get(PaymentProcessor.class)) and collection injection
+        // (List<PaymentProcessor>) would never see beans declared as their concrete type.
+        for (Class<?> assignable : assignableInterfacesAndSuperclasses(definition.type())) {
+            allBeansByType.computeIfAbsent(assignable, k -> new ArrayList<>()).add(name);
+            definitionsByType.compute(assignable, (type, existing) -> {
+                if (existing == null || definition.isPrimary()) {
+                    typeToNameMap.put(assignable, name);
+                    return definition;
+                }
+                return existing;
+            });
+        }
     }
     
     /**
@@ -420,15 +438,29 @@ public class BeanRegistryImpl implements BeanRegistry {
 
     @Override
     public void clear() {
-        // Apply destroy callbacks before clearing
-        definitionsByName.forEach((name, definition) -> {
-            if (definition.hasLifecycle() && definition.lifecycle().onDestroy() != null) {
-                Object instance = singletonInstances.get(name);
-                if (instance != null) {
-                    applyDestroyCallback(instance, definition);
-                }
+        // Destroy beans in reverse-dependency order: a bean is destroyed before the beans
+        // it depends on, so its dependencies are still alive while @PreDestroy runs. Each
+        // destroy callback is also guarded: one failing bean must not skip the remaining
+        // shutdown work, so failures are collected and thrown as a single aggregate after
+        // every callback has been attempted.
+        List<Throwable> destroyFailures = new ArrayList<>();
+        for (String name : destructionOrder()) {
+            BeanDefinition<?> definition = definitionsByName.get(name);
+            if (definition == null || !definition.hasLifecycle()
+                    || definition.lifecycle().onDestroy() == null) {
+                continue;
             }
-        });
+            Object instance = singletonInstances.get(name);
+            if (instance == null) {
+                continue;
+            }
+            try {
+                applyDestroyCallback(instance, definition);
+            } catch (Throwable t) {
+                destroyFailures.add(new IllegalStateException(
+                        "Destroy callback failed for bean '" + name + "': " + t.getMessage(), t));
+            }
+        }
         
         // Invalidate cached instances in all ResolvedBeanDefinitions before clearing
         resolvedByName.values().forEach(resolvedDef -> resolvedDef.setCachedInstance(null));
@@ -445,6 +477,86 @@ public class BeanRegistryImpl implements BeanRegistry {
         allBeansByType.clear();
         nameToIndex.clear();
         nextIndex.set(0);
+
+        if (!destroyFailures.isEmpty()) {
+            IllegalStateException aggregate = new IllegalStateException(
+                    destroyFailures.size() + " bean(s) failed during destruction");
+            destroyFailures.forEach(aggregate::addSuppressed);
+            throw aggregate;
+        }
+    }
+
+    /**
+     * Computes the order in which beans must be destroyed.
+     *
+     * <p>If bean A lists bean B among its dependencies, B must outlive A: B is created
+     * first and destroyed last. Starting from a registration-ordered key set, a depth-first
+     * traversal produces a post-order (dependencies first, dependent last) which is then
+     * reversed, yielding dependents-first destruction order. Dependency cycles (possible
+     * with lazy / forward references) are broken by skipping nodes that are already being
+     * visited.</p>
+     *
+     * @return destruction order: the bean at index 0 is destroyed before the bean at index 1
+     */
+    private List<String> destructionOrder() {
+        List<String> beansInRegistrationOrder = new ArrayList<>(definitionsByName.keySet());
+        beansInRegistrationOrder.sort(Comparator.comparingInt(
+                name -> nameToIndex.getOrDefault(name, 0)));
+
+        List<String> postOrder = new ArrayList<>(beansInRegistrationOrder.size());
+        Set<String> visiting = new HashSet<>();
+        Set<String> done = new HashSet<>();
+
+        for (String name : beansInRegistrationOrder) {
+            visitForDestruction(name, visiting, done, postOrder);
+        }
+        Collections.reverse(postOrder);
+        return postOrder;
+    }
+
+    private void visitForDestruction(String name, Set<String> visiting, Set<String> done,
+                                     List<String> postOrder) {
+        if (visiting.contains(name) || done.contains(name)) {
+            return;
+        }
+        visiting.add(name);
+        BeanDefinition<?> definition = definitionsByName.get(name);
+        if (definition != null) {
+            for (Object dep : definition.dependencies()) {
+                if (!(dep instanceof String depName) || CollectionDependency.isMarker(depName)) {
+                    continue;
+                }
+                if (definitionsByName.containsKey(depName)) {
+                    visitForDestruction(depName, visiting, done, postOrder);
+                }
+            }
+        }
+        visiting.remove(name);
+        done.add(name);
+        postOrder.add(name);
+    }
+
+    /**
+     * Collects every interface and superclass a bean type is assignable to (excluding
+     * {@code Object} and {@code this} type itself). Used to index beans for interface-based
+     * lookup and collection injection.
+     */
+    private static Set<Class<?>> assignableInterfacesAndSuperclasses(Class<?> type) {
+        Set<Class<?>> result = new LinkedHashSet<>();
+        collectAssignableTypes(type, result);
+        return result;
+    }
+
+    private static void collectAssignableTypes(Class<?> type, Set<Class<?>> out) {
+        for (Class<?> iface : type.getInterfaces()) {
+            if (out.add(iface)) {
+                collectAssignableTypes(iface, out);
+            }
+        }
+        Class<?> superclass = type.getSuperclass();
+        if (superclass != null && superclass != Object.class && out.add(superclass)) {
+            collectAssignableTypes(superclass, out);
+        }
     }
 
     @Override

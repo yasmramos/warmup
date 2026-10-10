@@ -16,9 +16,12 @@ import io.github.yasmramos.warmup.core.lifecycle.LifecycleCallbacks;
 import io.github.yasmramos.warmup.core.registry.BeanDefinition;
 import io.github.yasmramos.warmup.core.registry.BeanRegistry;
 import io.github.yasmramos.warmup.core.registry.BeanRegistryImpl;
+import io.github.yasmramos.warmup.core.registry.CollectionDependency;
 import io.github.yasmramos.warmup.core.registry.ResolvedBeanDefinition;
 import io.github.yasmramos.warmup.core.registry.ValueDependency;
 import io.github.yasmramos.warmup.core.scope.Scope;
+import java.lang.System.Logger;
+import java.lang.reflect.InvocationTargetException;
 
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
@@ -49,6 +52,8 @@ import java.util.ServiceLoader;
  */
 public class HybridContainer implements HotReloadCapable, AutoCloseable {
 
+    private Logger log = System.getLogger(HybridContainer.class.getName());
+    
     private final BeanRegistry registry = new BeanRegistryImpl();
     private final DependencyGraph dependencyGraph = new DependencyGraph();
     private final JITCompiler jitCompiler;
@@ -124,6 +129,10 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
     // Track pending warmup futures to await them during shutdown
     // This ensures no compilation tasks write to jitCompiler after clear() is called
     private final Set<CompletableFuture<?>> pendingWarmupFutures = ConcurrentHashMap.newKeySet();
+
+    // Track beans whose @EventListener methods have already been scanned, so registering
+    // (or re-registering) a bean cannot attach the same listener twice.
+    private final Set<String> eventListenersScanned = ConcurrentHashMap.newKeySet();
     
     // Resolution version counter for detecting invalidation due to reload/re-registration
     // Incremented on registerDynamic, reload, and other operations that invalidate cached resolutions
@@ -391,6 +400,12 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
             for (int i = 0; i < dependencies.length; i++) {
                 Object dep = dependencies[i];
                 if (dep instanceof String depName) {
+                    if (CollectionDependency.isMarker(depName)) {
+                        // Collection injection point: synthesise a factory that collects every
+                        // bean of the element type, keeping the bean on the wired fast path.
+                        depFactories[i] = collectionFactory(depName);
+                        continue;
+                    }
                     CompiledFactory<?> depFactory = factoryCache.get(depName);
                     if (depFactory != null) {
                         depFactories[i] = depFactory;
@@ -440,6 +455,9 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
         Set<String> beanNames = factoryCache.keySet();
         
         for (String beanName : beanNames) {
+            // Remember this bean was scanned during startup so a later re-registration of
+            // the same name does not attach duplicate listeners.
+            eventListenersScanned.add(beanName);
             try {
                 // Resolve the bean instance by name
                 Object bean = resolveByName(beanName);
@@ -469,9 +487,8 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
                             try {
                                 method.setAccessible(true);
                                 method.invoke(bean, event);
-                            } catch (Exception e) {
-                                System.err.println("Error invoking event listener: " + e.getMessage());
-                                e.printStackTrace();
+                            } catch (IllegalAccessException | InvocationTargetException e) {
+                                log.log(Logger.Level.ERROR, () -> "Error invoking event listener: " + e.getMessage(), e);
                             }
                         };
                         
@@ -479,21 +496,90 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
                         eventPublisher.addListener((Class<Object>) eventType, listener);
                     }
                 }
-            } catch (Exception e) {
+            } catch (IllegalStateException e) {
                 // Log but don't fail container initialization for listener registration errors
-                System.err.println("Failed to register event listeners for bean '" + beanName + "': " + e.getMessage());
+                log.log(Logger.Level.ERROR, () -> "Failed to register event listeners for bean '" + beanName + "': " + e.getMessage());
             }
+        }
+    }
+
+    /**
+     * Scans a single bean for {@code @EventListener} methods, used when a bean is registered
+     * after container startup through {@code register()} / {@code registerDynamic()}.
+     *
+     * <p>The bean instance is resolved lazily, when the event actually fires, so registering a
+     * bean does not force eager creation and forward references to not-yet-registered
+     * dependencies remain valid.</p>
+     *
+     * @param beanName the name of the bean to scan
+     */
+    private void registerEventListenersFor(String beanName) {
+        if (!eventListenersScanned.add(beanName)) {
+            // Already scanned (startup pass or an earlier registration of the same name).
+            return;
+        }
+        try {
+            BeanDefinition<?> definition = registry.getDefinition(beanName).orElse(null);
+            if (definition == null) {
+                return;
+            }
+            Class<?> beanClass = definition.type();
+            for (java.lang.reflect.Method method : beanClass.getDeclaredMethods()) {
+                if (!method.isAnnotationPresent(EventListener.class)) {
+                    continue;
+                }
+                // Validate method signature: must have exactly one parameter
+                java.lang.reflect.Parameter[] parameters = method.getParameters();
+                if (parameters.length != 1) {
+                    throw new IllegalStateException(
+                        "@EventListener method '" + method.getName() + "' in bean '" + 
+                        beanName + "' must have exactly one parameter"
+                    );
+                }
+
+                Class<?> eventType = parameters[0].getType();
+
+                // Register a listener that resolves the bean lazily so the container does not
+                // eagerly create beans just to inspect their listeners.
+                @SuppressWarnings("unchecked")
+                Consumer<Object> listener = (Consumer<Object>) (event) -> {
+                    try {
+                        Object bean = resolveByName(beanName);
+                        if (bean == null) {
+                            return;
+                        }
+                        method.setAccessible(true);
+                        method.invoke(bean, event);
+                    } catch (IllegalAccessException | InvocationTargetException | RuntimeException e) {
+                        log.log(Logger.Level.ERROR, () -> "Error invoking event listener: " + e.getMessage(), e);
+                    }
+                };
+                eventPublisher.addListener((Class<Object>) eventType, listener);
+            }
+        } catch (IllegalStateException e) {
+            // Log but don't fail registration for listener errors
+            log.log(Logger.Level.ERROR, () -> "Failed to register event listeners for bean '" + beanName + "': " + e.getMessage());
         }
     }
 
     /**
      * Registers a bean with compile-time factory support.
      * 
+     * <p>The bean is only registered when its {@code @Profile} and {@code @Conditional}
+     * constraints match the active profile set, mirroring the ServiceLoader discovery path.
+     * Beans that do not match are silently skipped.</p>
+     * 
      * @param <T> the bean type
      * @param definition the bean definition
      * @param factory the compile-time generated factory (if available)
      */
     public <T> void register(BeanDefinition<T> definition, CompiledFactory<T> factory) {
+        // Evaluate @Profile and @Conditional constraints before registering, exactly like
+        // the ServiceLoader discovery path, so conditions cannot be bypassed by choosing a
+        // different registration route.
+        if (!shouldRegisterBean(definition)) {
+            return;
+        }
         registry.register(definition);
         
         if (factory != null) {
@@ -512,16 +598,29 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
             isDeferred[i] = definition.isDeferredDependency(i);
         }
         dependencyGraph.registerBean(definition.name(), definition.dependencies(), isDeferred);
+        
+        // Beans registered after startup still contribute @EventListener methods: scan this
+        // bean so its listeners are attached without requiring a container restart.
+        registerEventListenersFor(definition.name());
     }
 
     /**
      * Registers a dynamic bean for JIT compilation.
      * Marks the bean as pending for lazy warmup on first resolve.
      * 
+     * <p>The bean is only registered when its {@code @Profile} and {@code @Conditional}
+     * constraints match the active profile set, mirroring the ServiceLoader discovery path.
+     * Beans that do not match are silently skipped.</p>
+     * 
      * @param <T> the bean type
      * @param definition the bean definition
      */
     public <T> void registerDynamic(BeanDefinition<T> definition) {
+        // Evaluate @Profile and @Conditional constraints, exactly like the ServiceLoader
+        // discovery path, so conditions cannot be bypassed via registerDynamic/warmup.
+        if (!shouldRegisterBean(definition)) {
+            return;
+        }
         registry.register(definition);
         
         // Register in dependency graph with deferrable dependency info
@@ -547,6 +646,9 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
         
         // Increment resolution version to invalidate any cached BeanHandles
         resolutionVersion++;
+        
+        // Beans registered after startup still contribute @EventListener methods.
+        registerEventListenersFor(definition.name());
     }
 
     /**
@@ -560,6 +662,12 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
      */
     @SuppressWarnings("unchecked")
     private <T> T resolveByName(String name) {
+        // Collection injection points are encoded markers, not bean names: there is no single
+        // bean to look up, so resolve every bean of the element type instead.
+        if (CollectionDependency.isMarker(name)) {
+            return (T) resolveCollectionDependency(name);
+        }
+
         // Single lookup: get pre-computed ResolvedBeanDefinition directly from registry
         ResolvedBeanDefinition<T> resolvedDef = registry.getResolvedOrNull(name);
         if (resolvedDef == null) {
@@ -902,7 +1010,6 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
             // When metrics enabled: record timing and resolution count
             // When metrics disabled: bare return with no overhead
             if (metricsEnabled) {
-                long startTime = System.nanoTime();
                 // Note: We can't get the definition by index easily, so skip detailed metrics
                 totalResolutions.add(1);
                 // Assume compile-time hit for indexed path (typical use case)
@@ -1066,6 +1173,45 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
     }
 
     /**
+     * Resolves a collection injection point encoded as a {@link CollectionDependency} marker.
+     *
+     * <p>Called for every dependency the annotation processor recorded as {@code List<T>},
+     * {@code Set<T>}, {@code Collection<T>} or {@code Map<String, T>}. The result is
+     * materialised as the declared injection type, so the cast performed by the generated
+     * factory succeeds for concrete types such as {@code LinkedList} or {@code TreeSet} and
+     * not only for {@code List} and {@code Set}.</p>
+     *
+     * @param marker the dependency name recorded by the annotation processor
+     * @return a container holding every bean of the element type, never {@code null}
+     */
+    @SuppressWarnings("unchecked")
+    private Object resolveCollectionDependency(String marker) {
+        CollectionDependency.Kind kind = CollectionDependency.kindOf(marker);
+        Class<?> declaredType = CollectionDependency.loadType(CollectionDependency.declaredTypeOf(marker));
+        Class<?> elementType = CollectionDependency.loadType(CollectionDependency.elementOf(marker));
+
+        Object container = CollectionDependency.newContainer(declaredType, kind);
+        if (kind == CollectionDependency.Kind.MAP) {
+            ((Map<Object, Object>) container).putAll(resolveAllAsMap(elementType));
+        } else {
+            ((Collection<Object>) container).addAll(resolveAll(elementType));
+        }
+        return container;
+    }
+
+    /**
+     * Wraps a collection injection point as a factory, so a bean whose dependency is a
+     * collection can still be wired and keep using the compile-time fast path instead of
+     * silently dropping back to reflective creation.
+     *
+     * @param marker the dependency name recorded by the annotation processor
+     * @return a factory producing the collection on each {@code create} call
+     */
+    private CompiledFactory<Object> collectionFactory(String marker) {
+        return (Object... ignored) -> resolveCollectionDependency(marker);
+    }
+
+    /**
      * Gets all registered bean names.
      */
     public Set<String> getBeanNames() {
@@ -1192,6 +1338,7 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
      * @param <T> the bean type
      */
     @SuppressWarnings("unchecked")
+    @Override
     public <T> boolean reload(String name) {
         BeanDefinition<T> definition = (BeanDefinition<T>) registry.getDefinition(name).orElse(null);
         if (definition == null) {
@@ -1316,8 +1463,8 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
      * @param handler the scope handler implementation
      */
     public void registerScope(String name, io.github.yasmramos.warmup.core.scope.ScopeHandler handler) {
-        if (registry instanceof BeanRegistryImpl) {
-            ((BeanRegistryImpl) registry).registerScope(name, handler);
+        if (registry instanceof BeanRegistryImpl beanRegistryImpl) {
+            beanRegistryImpl.registerScope(name, handler);
         }
     }
 
@@ -1328,8 +1475,8 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
      * @return the scope handler, or null if not found
      */
     public io.github.yasmramos.warmup.core.scope.ScopeHandler getScopeHandler(String name) {
-        if (registry instanceof BeanRegistryImpl) {
-            return ((BeanRegistryImpl) registry).getScopeHandler(name);
+        if (registry instanceof BeanRegistryImpl beanRegistryImpl) {
+            return beanRegistryImpl.getScopeHandler(name);
         }
         return null;
     }
@@ -1423,68 +1570,6 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
         
         return instance;
     }
-    
-    /**
-     * Overload for backward compatibility with existing call sites using BeanDefinition.
-     */
-    @SuppressWarnings("unchecked")
-    private <T> T createBean(BeanDefinition<T> definition) {
-        // Use registry's pre-computed ResolvedBeanDefinition for single lookup
-        ResolvedBeanDefinition<T> resolvedDef = registry.getResolvedOrNull(definition.name());
-        if (resolvedDef == null) {
-            // Fallback to legacy path if not found (should not happen in normal operation)
-            return createBean(getOrComputeResolvedDefinition(definition));
-        }
-        return createBean(resolvedDef);
-    }
-
-    /**
-     * Gets or creates a CompiledFactory for the given bean definition.
-     * Returns the factory directly to avoid redundant lookups in the calling code.
-     * Returns null if factory creation fails and fallback is needed.
-     */
-    @SuppressWarnings("unchecked")
-    private <T> CompiledFactory<T> getOrCreateFactory(BeanDefinition<T> definition) {
-        String name = definition.name();
-        
-        // Check if running in GraalVM native image mode - disable JIT
-        boolean nativeImage = IS_NATIVE_IMAGE;
-        
-        // Single lookup in unified factory cache
-        CompiledFactory<T> factory = (CompiledFactory<T>) factoryCache.get(name);
-        if (factory != null) {
-            // Hot path: factory already cached
-            if (metricsEnabled) {
-                // Check if compile-time by looking up ResolvedBeanDefinition
-                ResolvedBeanDefinition<?> resolvedDef = registry.getResolvedOrNull(name);
-                if (resolvedDef != null && resolvedDef.isCompileTime()) {
-                    compileTimeHits.add(1);
-                } else {
-                    jitHits.add(1);
-                }
-            }
-            return factory;
-        }
-        
-        if (!nativeImage) {
-            // Try JIT compilation and cache the result
-            try {
-                factory = jitCompiler.compile(definition.type(), getDependencyClasses(definition));
-                if (factory != null) {
-                    factoryCache.put(name, factory);
-                    if (metricsEnabled) {
-                        jitHits.add(1);
-                    }
-                    return factory;
-                }
-            } catch (CompilationException e) {
-                // Fall through to return null for fallback
-            }
-        }
-        
-        // Return null to signal fallback to reflection is needed
-        return null;
-    }
 
     /**
      * Gets or creates a ResolvedBeanDefinition wrapper with cached index and factory.
@@ -1550,20 +1635,6 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
         }
         
         return instance;
-    }
-    
-    /**
-     * Overload for backward compatibility with existing call sites using BeanDefinition.
-     */
-    @SuppressWarnings("unchecked")
-    private <T> T createBeanWithFactory(BeanDefinition<T> definition, CompiledFactory<T> factory) {
-        // Use registry's pre-computed ResolvedBeanDefinition for single lookup
-        ResolvedBeanDefinition<T> resolvedDef = registry.getResolvedOrNull(definition.name());
-        if (resolvedDef == null) {
-            // Fallback to legacy path if not found (should not happen in normal operation)
-            return createBeanWithFactory(getOrComputeResolvedDefinition(definition), factory);
-        }
-        return createBeanWithFactory(resolvedDef, factory);
     }
 
     /**
@@ -1646,6 +1717,14 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
             
             Object dep = deps[i];
             if (dep instanceof String depName) {
+                if (CollectionDependency.isMarker(depName)) {
+                    // Collection injection point: the compiled factory must pass the declared
+                    // collection type (List/Set/Deque/Map/...) to the constructor, and the
+                    // resolved value is materialised as that exact type.
+                    depClasses[depIndex++] = CollectionDependency.loadType(
+                            CollectionDependency.declaredTypeOf(depName));
+                    continue;
+                }
                 BeanDefinition<?> d = registry.getDefinitionOrNull(depName);
                 if (d == null) {
                     throw new IllegalStateException(
@@ -1849,7 +1928,7 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
                         field.setAccessible(true);
                         field.set(instance, dependency);
                         return;
-                    } catch (Exception e) {
+                    } catch (IllegalAccessException | IllegalArgumentException e) {
                         throw new RuntimeException("Failed to inject field dependency: " + field.getName(), e);
                     }
                 }
@@ -1872,7 +1951,7 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
                             method.setAccessible(true);
                             method.invoke(instance, dependency);
                             return;
-                        } catch (Exception e) {
+                        } catch (IllegalAccessException | InvocationTargetException e) {
                             throw new RuntimeException("Failed to invoke setter: " + method.getName(), e);
                         }
                     }
@@ -1956,7 +2035,7 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
                         .map(d -> d instanceof String ? d : ((Object)d).getClass().getName())
                         .toArray()
                 ), e);
-        } catch (Exception e) {
+        } catch (IllegalAccessException | IllegalArgumentException | IllegalStateException | InstantiationException | InvocationTargetException e) {
             throw new RuntimeException("Failed to create bean via reflection: " + definition.type().getName(), e);
         }
     }
@@ -2060,7 +2139,7 @@ public class HybridContainer implements HotReloadCapable, AutoCloseable {
             warmupSemaphore.release();
             // Log at debug level - this is expected during rapid bean registration
             if (System.getProperty("warmup.debug") != null) {
-                System.err.println("[Warmup] Background warmup failed for " + definition.name() + ": " + e.getMessage());
+                log.log(Logger.Level.ERROR, () -> "[Warmup] Background warmup failed for " + definition.name() + ": " + e.getMessage());
             }
         }
     }
