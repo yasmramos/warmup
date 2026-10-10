@@ -470,6 +470,154 @@ class WarmupProcessorTest {
     }
 
     /**
+     * Regression test for primitive injection points (constructor parameters, fields and
+     * setter parameters).
+     *
+     * <p>Before the fix the compile-time generator emitted a {@code CHECKCAST} to the primitive
+     * descriptor (e.g. {@code CHECKCAST I}) for every injection point. That is invalid bytecode,
+     * so any bean with a primitive injection point failed to verify with
+     * {@code Bad type on operand stack} when its generated factory was loaded. The factory must
+     * now cast the boxed dependency value to its wrapper and unbox it.</p>
+     *
+     * <p>The test loads the generated factory (which triggers JVM verification of every method,
+     * including the wired {@code get()} path) and then drives the runtime paths:
+     * {@code create(Object[])} for constructor/field/setter injection and
+     * {@code injectDeferred(Object, Object[])} for the lazy setter.</p>
+     */
+    @Test
+    void primitiveInjectionPointsGenerateValidUnboxingBytecode() throws Exception {
+        JavaFileObject source = JavaFileObjects.forSourceLines(
+            "test.PrimitiveBean",
+            "package test;",
+            "import io.github.yasmramos.warmup.annotations.*;",
+            "@Component",
+            "public class PrimitiveBean {",
+            "    private final int port;",
+            "    @Inject char code;",
+            "    private long timeout;",
+            "    private boolean enabled;",
+            "    private double ratio;",
+            "    public PrimitiveBean(int port) { this.port = port; }",
+            "    @Inject public void setTimeout(long timeout) { this.timeout = timeout; }",
+            "    @Inject public void setEnabled(boolean enabled) { this.enabled = enabled; }",
+            "    @Inject @Lazy public void setRatio(double ratio) { this.ratio = ratio; }",
+            "    public int getPort() { return port; }",
+            "    public char getCode() { return code; }",
+            "    public long getTimeout() { return timeout; }",
+            "    public boolean isEnabled() { return enabled; }",
+            "    public double getRatio() { return ratio; }",
+            "}"
+        );
+
+        Compilation compilation = compiler.compile(source);
+        assertTrue(compilation.diagnostics().stream()
+                .noneMatch(d -> d.getKind() == javax.tools.Diagnostic.Kind.ERROR),
+            "Compilation should succeed; diagnostics: " + compilation.diagnostics());
+
+        Optional<JavaFileObject> factoryOpt = compilation.generatedFile(
+            StandardLocation.CLASS_OUTPUT, "test/PrimitiveBean$$WarmupFactory.class");
+        assertTrue(factoryOpt.isPresent(), "Factory class should be generated");
+
+        JavaFileObject beanClassOpt = compilation.generatedFile(
+            StandardLocation.CLASS_OUTPUT, "test/PrimitiveBean.class").orElseThrow(
+                () -> new AssertionError("Compiled bean class should be available"));
+
+        TestClassLoader classLoader = new TestClassLoader();
+        Class<?> beanClass = classLoader.defineClass(
+            "test.PrimitiveBean", beanClassOpt.openInputStream().readAllBytes());
+        byte[] factoryBytes = factoryOpt.get().openInputStream().readAllBytes();
+        Class<?> factoryClass = classLoader.defineClass("test.PrimitiveBean$$WarmupFactory", factoryBytes);
+
+        // Instantiating triggers verification of every method of the generated factory,
+        // including the wired get() path that is not exercised below.
+        Object factory = factoryClass.getDeclaredConstructor().newInstance();
+        assertNotNull(factory);
+
+        // create(Object...) injects constructor param (int), field (char) and all setters
+        // (long, boolean, double) since the create path is the "full" wiring path.
+        Object bean = factoryClass.getMethod("create", Object[].class)
+                .invoke(factory, (Object) new Object[]{ 12345, 'X', 99L, Boolean.TRUE, 2.5d });
+        assertNotNull(bean);
+        assertEquals(12345, beanClass.getMethod("getPort").invoke(bean));
+        assertEquals('X', beanClass.getMethod("getCode").invoke(bean));
+        assertEquals(99L, beanClass.getMethod("getTimeout").invoke(bean));
+        assertEquals(Boolean.TRUE, beanClass.getMethod("isEnabled").invoke(bean));
+        assertEquals(2.5d, beanClass.getMethod("getRatio").invoke(bean));
+
+        // injectDeferred injects the lazy setter parameter (double), overriding the value
+        factoryClass.getMethod("injectDeferred", Object.class, Object[].class)
+                .invoke(factory, bean, new Object[]{ 7.5d });
+        assertEquals(7.5d, beanClass.getMethod("getRatio").invoke(bean));
+    }
+
+    /**
+     * Companion regression test for primitive {@code @Bean} method parameters, which flow
+     * through the method-factory generator rather than the class-factory generator.
+     */
+    @Test
+    void primitiveBeanMethodParametersGenerateValidUnboxingBytecode() throws Exception {
+        JavaFileObject source = JavaFileObjects.forSourceLines(
+            "test.PrimitiveConfig",
+            "package test;",
+            "import io.github.yasmramos.warmup.annotations.Factory;",
+            "import io.github.yasmramos.warmup.annotations.Bean;",
+            "@Factory",
+            "public class PrimitiveConfig {",
+            "    @Bean",
+            "    public PortHolder portHolder(int port, long timeout, boolean enabled) {",
+            "        return new PortHolder(port, timeout, enabled);",
+            "    }",
+            "    public static class PortHolder {",
+            "        private final int port;",
+            "        private final long timeout;",
+            "        private final boolean enabled;",
+            "        public PortHolder(int port, long timeout, boolean enabled) {",
+            "            this.port = port;",
+            "            this.timeout = timeout;",
+            "            this.enabled = enabled;",
+            "        }",
+            "        public int getPort() { return port; }",
+            "        public long getTimeout() { return timeout; }",
+            "        public boolean isEnabled() { return enabled; }",
+            "    }",
+            "}"
+        );
+
+        Compilation compilation = compiler.compile(source);
+        assertTrue(compilation.diagnostics().stream()
+                .noneMatch(d -> d.getKind() == javax.tools.Diagnostic.Kind.ERROR),
+            "Compilation should succeed; diagnostics: " + compilation.diagnostics());
+
+        Optional<JavaFileObject> factoryOpt = compilation.generatedFile(
+            StandardLocation.CLASS_OUTPUT, "test/PrimitiveConfig$$portHolder$$WarmupFactory.class");
+        assertTrue(factoryOpt.isPresent(), "Method factory class should be generated");
+
+        JavaFileObject configOpt = compilation.generatedFile(
+            StandardLocation.CLASS_OUTPUT, "test/PrimitiveConfig.class").orElseThrow(
+                () -> new AssertionError("Compiled @Factory class should be available"));
+        JavaFileObject holderOpt = compilation.generatedFile(
+            StandardLocation.CLASS_OUTPUT, "test/PrimitiveConfig$PortHolder.class").orElseThrow(
+                () -> new AssertionError("Compiled bean class should be available"));
+
+        TestClassLoader classLoader = new TestClassLoader();
+        classLoader.defineClass("test.PrimitiveConfig", configOpt.openInputStream().readAllBytes());
+        Class<?> holderClass = classLoader.defineClass(
+            "test.PrimitiveConfig$PortHolder", holderOpt.openInputStream().readAllBytes());
+        Class<?> factoryClass = classLoader.defineClass(
+            "test.PrimitiveConfig$$portHolder$$WarmupFactory",
+            factoryOpt.get().openInputStream().readAllBytes());
+
+        // Instantiating verifies the class; create() exercises the primitive parameter unboxing.
+        Object factory = factoryClass.getDeclaredConstructor().newInstance();
+        Object holder = factoryClass.getMethod("create", Object[].class)
+                .invoke(factory, (Object) new Object[]{ 8080, 30L, Boolean.TRUE });
+        assertNotNull(holder);
+        assertEquals(8080, holderClass.getMethod("getPort").invoke(holder));
+        assertEquals(30L, holderClass.getMethod("getTimeout").invoke(holder));
+        assertEquals(Boolean.TRUE, holderClass.getMethod("isEnabled").invoke(holder));
+    }
+
+    /**
      * Helper ClassLoader for loading generated classes during tests.
      */
     private static class TestClassLoader extends ClassLoader {

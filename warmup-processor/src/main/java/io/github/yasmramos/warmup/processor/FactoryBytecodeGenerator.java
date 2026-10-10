@@ -187,10 +187,8 @@ public class FactoryBytecodeGenerator {
             gv.visitTypeInsn(Opcodes.CHECKCAST, "io/github/yasmramos/warmup/core/jit/CompiledFactory");
             // Invoke get() to resolve the instance
             gv.visitMethodInsn(Opcodes.INVOKEINTERFACE, "io/github/yasmramos/warmup/core/jit/CompiledFactory", "get", "()Ljava/lang/Object;", true);
-            // Cast to dependency type
-            TypeMirror paramType = constructorParams.get(i).asType();
-            String paramInternalName = getInternalName(paramType);
-            gv.visitTypeInsn(Opcodes.CHECKCAST, paramInternalName);
+            // Cast to dependency type (unboxes primitive parameters)
+            emitCastToDeclaredType(gv, constructorParams.get(i).asType());
         }
 
         // Build constructor descriptor
@@ -221,10 +219,9 @@ public class FactoryBytecodeGenerator {
             gv.visitTypeInsn(Opcodes.CHECKCAST, "io/github/yasmramos/warmup/core/jit/CompiledFactory");
             // Invoke get() to resolve the instance
             gv.visitMethodInsn(Opcodes.INVOKEINTERFACE, "io/github/yasmramos/warmup/core/jit/CompiledFactory", "get", "()Ljava/lang/Object;", true);
-            // Cast to field type
+            // Cast to field type (unboxes primitive fields)
             TypeMirror fieldType = field.asType();
-            String fieldInternalName = getInternalName(fieldType);
-            gv.visitTypeInsn(Opcodes.CHECKCAST, fieldInternalName);
+            emitCastToDeclaredType(gv, fieldType);
             // Put field: instance.fieldName = value
             String fieldDescriptor = getDescriptor(fieldType);
             gv.visitFieldInsn(Opcodes.PUTFIELD, beanInternalName, fieldName, fieldDescriptor);
@@ -258,10 +255,8 @@ public class FactoryBytecodeGenerator {
                 gv.visitTypeInsn(Opcodes.CHECKCAST, "io/github/yasmramos/warmup/core/jit/CompiledFactory");
                 // Invoke get() to resolve the instance
                 gv.visitMethodInsn(Opcodes.INVOKEINTERFACE, "io/github/yasmramos/warmup/core/jit/CompiledFactory", "get", "()Ljava/lang/Object;", true);
-                // Cast to parameter type
-                TypeMirror paramType = param.asType();
-                String paramInternalName = getInternalName(paramType);
-                gv.visitTypeInsn(Opcodes.CHECKCAST, paramInternalName);
+                // Cast to parameter type (unboxes primitive parameters)
+                emitCastToDeclaredType(gv, param.asType());
                 currentParamIndex++;
             }
             
@@ -295,10 +290,8 @@ public class FactoryBytecodeGenerator {
             mv.visitLdcInsn(i);
             // Load element: dependencies[i]
             mv.visitInsn(Opcodes.AALOAD);
-            // Cast to dependency type
-            TypeMirror paramType = constructorParams.get(i).asType();
-            String paramInternalName = getInternalName(paramType);
-            mv.visitTypeInsn(Opcodes.CHECKCAST, paramInternalName);
+            // Cast to dependency type (unboxes primitive parameters)
+            emitCastToDeclaredType(mv, constructorParams.get(i).asType());
         }
 
         // Invoke constructor
@@ -318,10 +311,9 @@ public class FactoryBytecodeGenerator {
             mv.visitLdcInsn(fieldIndex);
             // Load element: dependencies[fieldIndex]
             mv.visitInsn(Opcodes.AALOAD);
-            // Cast to field type
+            // Cast to field type (unboxes primitive fields)
             TypeMirror fieldType = field.asType();
-            String fieldInternalName = getInternalName(fieldType);
-            mv.visitTypeInsn(Opcodes.CHECKCAST, fieldInternalName);
+            emitCastToDeclaredType(mv, fieldType);
             // Put field: instance.fieldName = value
             String fieldDescriptor = getDescriptor(fieldType);
             mv.visitFieldInsn(Opcodes.PUTFIELD, beanInternalName, fieldName, fieldDescriptor);
@@ -353,10 +345,8 @@ public class FactoryBytecodeGenerator {
                 mv.visitLdcInsn(currentParamIndex);
                 // Load element: dependencies[currentParamIndex]
                 mv.visitInsn(Opcodes.AALOAD);
-                // Cast to parameter type
-                TypeMirror paramType = param.asType();
-                String paramInternalName = getInternalName(paramType);
-                mv.visitTypeInsn(Opcodes.CHECKCAST, paramInternalName);
+                // Cast to parameter type (unboxes primitive parameters)
+                emitCastToDeclaredType(mv, param.asType());
                 currentParamIndex++;
             }
             
@@ -398,10 +388,9 @@ public class FactoryBytecodeGenerator {
                 idv.visitLdcInsn(lazyFieldIndex);
                 // Load element: deferredDependencies[lazyFieldIndex]
                 idv.visitInsn(Opcodes.AALOAD);
-                // Cast to field type
+                // Cast to field type (unboxes primitive fields)
                 TypeMirror fieldType = field.asType();
-                String fieldInternalName = getInternalName(fieldType);
-                idv.visitTypeInsn(Opcodes.CHECKCAST, fieldInternalName);
+                emitCastToDeclaredType(idv, fieldType);
                 // Put field: instance.fieldName = value
                 String fieldDescriptor = getDescriptor(fieldType);
                 idv.visitFieldInsn(Opcodes.PUTFIELD, beanInternalName, fieldName, fieldDescriptor);
@@ -435,10 +424,8 @@ public class FactoryBytecodeGenerator {
                     idv.visitLdcInsn(currentParamIndex);
                     // Load element: deferredDependencies[currentParamIndex]
                     idv.visitInsn(Opcodes.AALOAD);
-                    // Cast to parameter type
-                    TypeMirror paramType = param.asType();
-                    String paramInternalName = getInternalName(paramType);
-                    idv.visitTypeInsn(Opcodes.CHECKCAST, paramInternalName);
+                    // Cast to parameter type (unboxes primitive parameters)
+                    emitCastToDeclaredType(idv, param.asType());
                     currentParamIndex++;
                 }
                 
@@ -588,10 +575,8 @@ public class FactoryBytecodeGenerator {
             gv.visitTypeInsn(Opcodes.CHECKCAST, "io/github/yasmramos/warmup/core/jit/CompiledFactory");
             // Invoke get() to resolve the instance
             gv.visitMethodInsn(Opcodes.INVOKEINTERFACE, "io/github/yasmramos/warmup/core/jit/CompiledFactory", "get", "()Ljava/lang/Object;", true);
-            // Cast to parameter type
-            TypeMirror paramType = parameters.get(i).asType();
-            String paramInternalName = getInternalName(paramType);
-            gv.visitTypeInsn(Opcodes.CHECKCAST, paramInternalName);
+            // Cast to parameter type (unboxes primitive parameters)
+            emitCastToDeclaredType(gv, parameters.get(i).asType());
         }
 
         // Build method descriptor
@@ -644,9 +629,7 @@ public class FactoryBytecodeGenerator {
             mv.visitVarInsn(Opcodes.ALOAD, 1);
             mv.visitLdcInsn(i);
             mv.visitInsn(Opcodes.AALOAD);
-            TypeMirror paramType = parameters.get(i).asType();
-            String paramInternalName = getInternalName(paramType);
-            mv.visitTypeInsn(Opcodes.CHECKCAST, paramInternalName);
+            emitCastToDeclaredType(mv, parameters.get(i).asType());
         }
 
         // Invoke method
@@ -899,6 +882,68 @@ public class FactoryBytecodeGenerator {
             case BOOLEAN: return "Z";
             case FLOAT: return "F";
             case DOUBLE: return "D";
+            default: throw new IllegalArgumentException("Not a primitive: " + kind);
+        }
+    }
+
+    /**
+     * Emits a {@code CHECKCAST} that converts a boxed dependency value (always an
+     * {@code Object} in the dependency array / wired factory) to the declared injection type.
+     *
+     * <p>Reference types are cast directly. Primitive types are cast to their wrapper and then
+     * unboxed, because dependency values travel as objects. Without the unboxing a primitive
+     * injection point (constructor parameter, field or setter parameter) would emit an invalid
+     * {@code CHECKCAST I} (etc.) and the generated factory would fail to verify with
+     * {@code Bad type on operand stack}.</p>
+     *
+     * @param mv the method visitor
+     * @param type the declared injection type of the target parameter/field
+     */
+    private void emitCastToDeclaredType(MethodVisitor mv, TypeMirror type) {
+        if (type.getKind() == TypeKind.VOID) {
+            return;
+        }
+        if (type.getKind().isPrimitive()) {
+            String boxedType = boxedInternalName(type.getKind());
+            mv.visitTypeInsn(Opcodes.CHECKCAST, boxedType);
+            mv.visitMethodInsn(Opcodes.INVOKEVIRTUAL, boxedType,
+                    unboxMethodName(type.getKind()),
+                    "()" + getDescriptorForPrimitive(type.getKind()), false);
+        } else {
+            mv.visitTypeInsn(Opcodes.CHECKCAST, getInternalName(type));
+        }
+    }
+
+    /**
+     * Gets the internal name of the wrapper class for a primitive kind.
+     */
+    private String boxedInternalName(TypeKind kind) {
+        switch (kind) {
+            case INT: return "java/lang/Integer";
+            case LONG: return "java/lang/Long";
+            case SHORT: return "java/lang/Short";
+            case BYTE: return "java/lang/Byte";
+            case CHAR: return "java/lang/Character";
+            case BOOLEAN: return "java/lang/Boolean";
+            case FLOAT: return "java/lang/Float";
+            case DOUBLE: return "java/lang/Double";
+            default: throw new IllegalArgumentException("Not a primitive: " + kind);
+        }
+    }
+
+    /**
+     * Gets the name of the unboxing method for a primitive kind (e.g. {@code intValue}).
+     */
+    private String unboxMethodName(TypeKind kind) {
+        switch (kind) {
+            case INT: return "intValue";
+            case LONG: return "longValue";
+            case SHORT: return "shortValue";
+            case BYTE: return "byteValue";
+            case CHAR: return "charValue";
+            case BOOLEAN: return "booleanValue";
+            case FLOAT: return "floatValue";
+            case DOUBLE: return "doubleValue";
             default: throw new IllegalArgumentException("Not a primitive: " + kind);
         }
     }
