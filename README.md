@@ -23,7 +23,6 @@ Warmup is the evolution of traditional DI frameworks, featuring:
 | [Scopes and Lifecycle](docs/scopes-and-lifecycle.md) | SINGLETON vs PROTOTYPE, lifecycle callbacks |
 | [GraalVM Native](docs/graalvm-native.md) | Native image compilation and configuration |
 | [Benchmarks](docs/benchmarks.md) | Performance benchmarks and comparison with Avaje Inject |
-| [Minimal libcef Build](docs/cef-minimal-build.md) | Guide to compile a size-optimized libcef from source for desktop embedding |
 
 ## Architecture
 
