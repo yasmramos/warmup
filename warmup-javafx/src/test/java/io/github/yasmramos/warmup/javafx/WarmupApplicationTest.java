@@ -58,14 +58,6 @@ class WarmupApplicationTest {
     }
 
     @Test
-    void testCreateWarmupReturnsWarmupInstance() throws Exception {
-        TestWarmupApplication app = new TestWarmupApplication();
-        
-        Warmup warmup = app.createWarmup();
-        assertNotNull(warmup);
-    }
-
-    @Test
     void testOnInitCanBeOverridden() throws Exception {
         CustomInitApp app = new CustomInitApp();
         

@@ -34,7 +34,7 @@ public abstract class WarmupApplication extends Application {
     @Override
     public void init() throws Exception {
         // Initialize container via Warmup facade (or custom override)
-        warmup = createWarmup();
+        warmup = Warmup.builder().build();
         
         // Configure beans (implemented by subclass)
         configure(warmup);
@@ -62,29 +62,6 @@ public abstract class WarmupApplication extends Application {
         if (warmup != null) {
             warmup.shutdown();
         }
-    }
-
-    /**
-     * Creates and configures the Warmup container.
-     * Override for custom container configuration using the ergonomic API.
-     * 
-     * Example:
-     * <pre>{@code
-     * @Override
-     * protected Warmup createWarmup() {
-     *     return Warmup.builder()
-     *         .diagnostic(true)
-     *         .maxPendingCompilations(20)
-     *         .build();
-     * }
-     * }</pre>
-     *
-     * @return configured Warmup instance
-     */
-    protected Warmup createWarmup() {
-        // Default: use Warmup.builder().build() for simple setup
-        // ASM is now embedded in core, so no explicit JIT compiler construction needed
-        return Warmup.builder().build();
     }
 
     /**

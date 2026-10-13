@@ -295,9 +295,8 @@ public class AsmJITCompiler implements JITCompiler {
             // Load element: dependencies[i]
             wv.visitInsn(Opcodes.AALOAD);
             
-            // Cast to dependency type
-            String depInternalName = Type.getInternalName(dependencyClasses[i]);
-            wv.visitTypeInsn(Opcodes.CHECKCAST, depInternalName);
+            // Cast to (boxed) dependency type; the field is Object so primitives stay boxed
+            emitBoxedCast(wv, dependencyClasses[i]);
             
             // Store in field: this.dep{i}
             wv.visitFieldInsn(Opcodes.PUTFIELD, className, "dep" + i, "Ljava/lang/Object;");
@@ -326,8 +325,7 @@ public class AsmJITCompiler implements JITCompiler {
             gv.visitFieldInsn(Opcodes.GETFIELD, className, "dep" + i, "Ljava/lang/Object;");
             
             // Cast to dependency type (fields are stored as Object)
-            String depInternalName = Type.getInternalName(dependencyClasses[i]);
-            gv.visitTypeInsn(Opcodes.CHECKCAST, depInternalName);
+            emitUnboxingCast(gv, dependencyClasses[i]);
         }
         
         // Invoke constructor
@@ -366,8 +364,7 @@ public class AsmJITCompiler implements JITCompiler {
             mv.visitInsn(Opcodes.AALOAD);
             
             // Cast to dependency type
-            String depInternalName = Type.getInternalName(dependencyClasses[i]);
-            mv.visitTypeInsn(Opcodes.CHECKCAST, depInternalName);
+            emitUnboxingCast(mv, dependencyClasses[i]);
         }
         
         // Invoke constructor
@@ -400,5 +397,79 @@ public class AsmJITCompiler implements JITCompiler {
         cw.visitEnd();
         
         return cw.toByteArray();
+    }
+
+    /**
+     * Emits a {@code CHECKCAST} to the erased dependency type, keeping primitive dependencies
+     * boxed. Used when the value is stored in an {@code Object} slot (the {@code wire} method's
+     * fields), so a primitive is safely represented by its wrapper.
+     *
+     * @param mv the method visitor
+     * @param dependencyType the declared dependency type
+     */
+    private static void emitBoxedCast(MethodVisitor mv, Class<?> dependencyType) {
+        Class<?> castTarget = dependencyType.isPrimitive() ? boxedType(dependencyType) : dependencyType;
+        mv.visitTypeInsn(Opcodes.CHECKCAST, Type.getInternalName(castTarget));
+    }
+
+    /**
+     * Emits a {@code CHECKCAST} followed by an unboxing call when the dependency type is
+     * primitive, so the value on the stack matches the constructor parameter descriptor.
+     * Reference types are cast as-is.
+     *
+     * @param mv the method visitor
+     * @param dependencyType the declared dependency type
+     */
+    private static void emitUnboxingCast(MethodVisitor mv, Class<?> dependencyType) {
+        if (!dependencyType.isPrimitive()) {
+            mv.visitTypeInsn(Opcodes.CHECKCAST, Type.getInternalName(dependencyType));
+            return;
+        }
+        Class<?> boxed = boxedType(dependencyType);
+        mv.visitTypeInsn(Opcodes.CHECKCAST, Type.getInternalName(boxed));
+        mv.visitMethodInsn(Opcodes.INVOKEVIRTUAL, Type.getInternalName(boxed),
+                unboxMethodName(dependencyType), "()" + Type.getDescriptor(dependencyType), false);
+    }
+
+    private static Class<?> boxedType(Class<?> primitive) {
+        if (primitive == int.class) {
+            return Integer.class;
+        } else if (primitive == long.class) {
+            return Long.class;
+        } else if (primitive == short.class) {
+            return Short.class;
+        } else if (primitive == byte.class) {
+            return Byte.class;
+        } else if (primitive == char.class) {
+            return Character.class;
+        } else if (primitive == boolean.class) {
+            return Boolean.class;
+        } else if (primitive == float.class) {
+            return Float.class;
+        } else if (primitive == double.class) {
+            return Double.class;
+        }
+        throw new IllegalArgumentException("Not a primitive type: " + primitive);
+    }
+
+    private static String unboxMethodName(Class<?> primitive) {
+        if (primitive == int.class) {
+            return "intValue";
+        } else if (primitive == long.class) {
+            return "longValue";
+        } else if (primitive == short.class) {
+            return "shortValue";
+        } else if (primitive == byte.class) {
+            return "byteValue";
+        } else if (primitive == char.class) {
+            return "charValue";
+        } else if (primitive == boolean.class) {
+            return "booleanValue";
+        } else if (primitive == float.class) {
+            return "floatValue";
+        } else if (primitive == double.class) {
+            return "doubleValue";
+        }
+        throw new IllegalArgumentException("Not a primitive type: " + primitive);
     }
 }

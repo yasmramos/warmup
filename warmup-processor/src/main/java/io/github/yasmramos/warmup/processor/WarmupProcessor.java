@@ -551,7 +551,8 @@ public class WarmupProcessor extends AbstractProcessor {
         // Check for @Value annotation on parameter (configuration value, not bean reference)
         Value value = param.getAnnotation(Value.class);
         if (value != null) {
-            depNames.add(value.value()); // Store the expression as the "name"
+            String typed = typedValueMarker(param.asType(), value.value());
+            depNames.add(typed != null ? typed : value.value()); // Store the expression/marker
             providerFlags.add(false);
             return;
         }
@@ -570,7 +571,15 @@ public class WarmupProcessor extends AbstractProcessor {
             if (inject != null && !inject.value().isEmpty()) {
                 depNames.add(inject.value());
             } else {
-                depNames.add(simpleName);
+                // Collection injection points (List<T>, Set<T>, Map<String, T>) have no
+                // single bean name - encode them so the container resolves all of them.
+                String collection = collectionMarker(param.asType(), param);
+                if (collection != null) {
+                    depNames.add(collection);
+                } else {
+                    String optional = optionalMarker(param.asType(), param);
+                    depNames.add(optional != null ? optional : simpleName);
+                }
             }
         }
         providerFlags.add(isProvider);
@@ -596,7 +605,8 @@ public class WarmupProcessor extends AbstractProcessor {
         // Check for @Value annotation on field (configuration value, not bean reference)
         Value value = field.getAnnotation(Value.class);
         if (value != null) {
-            depNames.add(value.value()); // Store the expression as the "name"
+            String typed = typedValueMarker(field.asType(), value.value());
+            depNames.add(typed != null ? typed : value.value()); // Store the expression/marker
             providerFlags.add(false);
             isDeferred.add(false); // Value dependencies are not deferrable in the same way
             isFieldOrSetter.add(true);
@@ -617,7 +627,13 @@ public class WarmupProcessor extends AbstractProcessor {
             if (inject != null && !inject.value().isEmpty()) {
                 depNames.add(inject.value());
             } else {
-                depNames.add(simpleName);
+                String collection = collectionMarker(field.asType(), field);
+                if (collection != null) {
+                    depNames.add(collection);
+                } else {
+                    String optional = optionalMarker(field.asType(), field);
+                    depNames.add(optional != null ? optional : simpleName);
+                }
             }
         }
         providerFlags.add(isProvider);
@@ -662,8 +678,10 @@ public class WarmupProcessor extends AbstractProcessor {
             // Check for @Value annotation on parameter (configuration value, not bean reference)
             Value value = param.getAnnotation(Value.class);
             if (value != null) {
-                methodDepNames.add(value.value());
-                depNames.add(value.value());
+                String typed = typedValueMarker(param.asType(), value.value());
+                String valueName = typed != null ? typed : value.value();
+                methodDepNames.add(valueName);
+                depNames.add(valueName);
                 methodProviderFlags.add(false);
                 providerFlags.add(false);
                 methodValueFlags.add(true);
@@ -695,8 +713,16 @@ public class WarmupProcessor extends AbstractProcessor {
                     methodDepNames.add(inject.value());
                     depNames.add(inject.value());
                 } else {
-                    methodDepNames.add(simpleName);
-                    depNames.add(simpleName);
+                    String collection = collectionMarker(param.asType(), param);
+                    String depName;
+                    if (collection != null) {
+                        depName = collection;
+                    } else {
+                        String optional = optionalMarker(param.asType(), param);
+                        depName = optional != null ? optional : simpleName;
+                    }
+                    methodDepNames.add(depName);
+                    depNames.add(depName);
                 }
             }
             methodProviderFlags.add(isProvider);
@@ -802,8 +828,15 @@ public class WarmupProcessor extends AbstractProcessor {
                 returnTypeNameForCode = lastDot > 0 ? returnTypeStr.substring(lastDot + 1) : returnTypeStr;
                 returnTypeFqn = returnTypeStr;
             }
+        } else if (returnTypeMirror.getKind().isPrimitive()
+                && returnTypeMirror.getKind() != TypeKind.VOID) {
+            // A primitive-returning @Bean method is boxed by the generated factory, so the bean is
+            // registered as its wrapper class (e.g. @Bean int -> java.lang.Integer) rather than the
+            // primitive descriptor, which would produce an invalid class constant in the registrar.
+            returnTypeFqn = wrapperTypeName(returnTypeMirror.getKind());
+            returnTypeNameForCode = returnTypeFqn;
         } else {
-            // Fallback for primitive types or other edge cases
+            // Fallback for other edge cases (e.g. void, arrays)
             String returnType = returnTypeMirror.toString();
             int lastDot = returnType.lastIndexOf('.');
             returnTypeNameForCode = lastDot > 0 ? returnType.substring(lastDot + 1) : returnType;
@@ -963,261 +996,6 @@ public class WarmupProcessor extends AbstractProcessor {
     }
     
     /**
-     * Generates a CompiledFactory implementation for a @Bean method within a @Factory class.
-     * The factory invokes the producer method on a cached instance of the factory class.
-     */
-    private String generateFactoryForMethod(TypeElement factoryClass, ExecutableElement method, Bean beanAnnotation, Filer filer) 
-            throws IOException {
-        
-        String packageName = getPackageName(factoryClass);
-        String factoryClassNameStr = factoryClass.getSimpleName().toString();
-        String methodName = method.getSimpleName().toString();
-        String returnType = method.getReturnType().toString();
-        String factoryFullClassName = packageName.isEmpty() ? factoryClassNameStr : packageName + "." + factoryClassNameStr;
-        
-        // Get method parameters (dependencies)
-        List<? extends VariableElement> parameters = method.getParameters();
-        
-        StringBuilder code = new StringBuilder();
-        
-        // Only add package declaration if not in default package
-        if (!packageName.isEmpty()) {
-            code.append("package ").append(packageName).append(";\n\n");
-        }
-        
-        code.append("import io.github.yasmramos.warmup.core.jit.CompiledFactory;\n");
-        code.append("import java.lang.Class;\n\n");
-        
-        // Generate factory class
-        String generatedFactoryName = factoryClassNameStr + "$$" + methodName + "$$WarmupFactory";
-        code.append("/**\n");
-        code.append(" * Auto-generated factory for {@link ").append(factoryClassNameStr).append("#").append(methodName).append("()}.\n");
-        code.append(" * Produces beans of type {@link ").append(returnType).append("}.\n");
-        code.append(" * Scope: ").append(beanAnnotation.scope().name()).append("\n");
-        code.append(" * DO NOT MODIFY - generated by Warmup annotation processor\n");
-        code.append(" */\n");
-        code.append("@javax.annotation.processing.Generated(\"io.github.yasmramos.warmup.processor.WarmupProcessor\")\n");
-        code.append("public final class ").append(generatedFactoryName)
-            .append(" implements CompiledFactory<").append(returnType).append("> {\n\n");
-        
-        // Field for caching the factory instance (singleton pattern for the factory itself)
-        code.append("    private ").append(factoryFullClassName).append(" factoryInstance;\n\n");
-        
-        // Generate fields for dependency factories (if any)
-        for (int i = 0; i < parameters.size(); i++) {
-            VariableElement param = parameters.get(i);
-            String paramType = param.asType().toString();
-            code.append("    private CompiledFactory<").append(paramType)
-                .append("> factory").append(i).append(";\n");
-        }
-        
-        if (!parameters.isEmpty()) {
-            code.append("\n");
-        }
-        
-        // Generate constructor
-        code.append("    public ").append(generatedFactoryName).append("() {\n");
-        code.append("        // Factory instance will be created on first call\n");
-        code.append("        // Dependencies will be wired by container\n");
-        for (int i = 0; i < parameters.size(); i++) {
-            code.append("        this.factory").append(i).append(" = null;\n");
-        }
-        code.append("    }\n\n");
-        
-        // Generate wire method
-        if (!parameters.isEmpty()) {
-            code.append("    @Override\n");
-            code.append("    public void wire(CompiledFactory<?>[] dependencyFactories) {\n");
-            for (int i = 0; i < parameters.size(); i++) {
-                VariableElement param = parameters.get(i);
-                String paramType = param.asType().toString();
-                code.append("        this.factory").append(i)
-                    .append(" = (CompiledFactory<").append(paramType).append(">) dependencyFactories[").append(i).append("];\n");
-            }
-            code.append("    }\n\n");
-        }
-        
-        // Generate get method (wired path - no Object[] allocation)
-        if (!parameters.isEmpty()) {
-            code.append("    @Override\n");
-            code.append("    public ").append(returnType).append(" get() {\n");
-            code.append("        if (factoryInstance == null) {\n");
-            code.append("            factoryInstance = new ").append(factoryFullClassName).append("();\n");
-            code.append("        }\n");
-            code.append("        return factoryInstance.").append(methodName).append("(");
-            for (int i = 0; i < parameters.size(); i++) {
-                if (i > 0) code.append(", ");
-                code.append("factory").append(i).append(".get()");
-            }
-            code.append(");\n");
-            code.append("    }\n\n");
-        }
-        
-        // Generate create method (fallback path for backward compatibility)
-        code.append("    @Override\n");
-        code.append("    public ").append(returnType).append(" create(Object... dependencies) {\n");
-        code.append("        if (factoryInstance == null) {\n");
-        code.append("            factoryInstance = new ").append(factoryFullClassName).append("();\n");
-        code.append("        }\n");
-        
-        // Cast dependencies and invoke method
-        for (int i = 0; i < parameters.size(); i++) {
-            VariableElement param = parameters.get(i);
-            String paramType = param.asType().toString();
-            code.append("        ").append(paramType).append(" arg").append(i)
-                .append(" = (").append(paramType).append(") dependencies[").append(i).append("];\n");
-        }
-        
-        code.append("        return factoryInstance.").append(methodName).append("(");
-        for (int i = 0; i < parameters.size(); i++) {
-            if (i > 0) code.append(", ");
-            code.append("arg").append(i);
-        }
-        code.append(");\n");
-        code.append("    }\n\n");
-        
-        // Generate getBeanType method
-        code.append("    @Override\n");
-        code.append("    public Class<").append(returnType).append("> getBeanType() {\n");
-        code.append("        return ").append(returnType).append(".class;\n");
-        code.append("    }\n\n");
-        
-        // Generate getDependencyCount method
-        code.append("    @Override\n");
-        code.append("    public int getDependencyCount() {\n");
-        code.append("        return ").append(parameters.size()).append(";\n");
-        code.append("    }\n");
-        
-        code.append("}\n");
-        
-        // Write the file
-        Writer writer;
-        if (packageName.isEmpty()) {
-            writer = filer.createSourceFile(generatedFactoryName).openWriter();
-        } else {
-            writer = filer.createSourceFile(packageName + "." + generatedFactoryName).openWriter();
-        }
-        try {
-            writer.write(code.toString());
-        } finally {
-            writer.close();
-        }
-        
-        return generatedFactoryName;
-    }
-
-    /**
-     * Generates a CompiledFactory implementation for the given bean class.
-     * Returns the simple name of the generated factory class.
-     * 
-     * Handles default package: if packageName is empty, omits the package declaration
-     * and creates the source file without a package prefix.
-     */
-    private String generateFactory(TypeElement beanClass, Bean annotation, Filer filer) 
-            throws IOException {
-        
-        String packageName = getPackageName(beanClass);
-        String className = beanClass.getSimpleName().toString();
-        String factoryClassName = className + "$$WarmupFactory";
-        
-        // Find constructor and dependencies
-        ExecutableElement constructor = findInjectableConstructor(beanClass);
-        List<? extends VariableElement> parameters = constructor != null 
-            ? constructor.getParameters() 
-            : Collections.emptyList();
-        
-        StringBuilder code = new StringBuilder();
-        
-        // Only add package declaration if not in default package
-        if (!packageName.isEmpty()) {
-            code.append("package ").append(packageName).append(";\n\n");
-        }
-        
-        code.append("import io.github.yasmramos.warmup.core.jit.CompiledFactory;\n");
-        code.append("import java.lang.Class;\n\n");
-        
-        // Generate factory class
-        code.append("/**\n");
-        code.append(" * Auto-generated factory for {@link ").append(className).append("}.\n");
-        code.append(" * DO NOT MODIFY - generated by Warmup annotation processor\n");
-        code.append(" */\n");
-        code.append("@javax.annotation.processing.Generated(\"io.github.yasmramos.warmup.processor.WarmupProcessor\")\n");
-        code.append("public final class ").append(factoryClassName)
-            .append(" implements CompiledFactory<").append(className).append("> {\n\n");
-        
-        // Generate fields for dependency factories (if any)
-        for (int i = 0; i < parameters.size(); i++) {
-            VariableElement param = parameters.get(i);
-            String paramType = param.asType().toString();
-            code.append("    private final CompiledFactory<").append(paramType)
-                .append("> factory").append(i).append(";\n");
-        }
-        
-        if (!parameters.isEmpty()) {
-            code.append("\n");
-        }
-        
-        // Generate constructor
-        code.append("    public ").append(factoryClassName).append("() {\n");
-        // In a full implementation, we would inject dependency factories here
-        code.append("        // Dependencies resolved at runtime\n");
-        for (int i = 0; i < parameters.size(); i++) {
-            code.append("        this.factory").append(i).append(" = null;\n");
-        }
-        code.append("    }\n\n");
-        
-        // Generate create method
-        code.append("    @Override\n");
-        code.append("    public ").append(className).append(" create(Object... dependencies) {\n");
-        
-        // Cast dependencies
-        for (int i = 0; i < parameters.size(); i++) {
-            VariableElement param = parameters.get(i);
-            String paramType = param.asType().toString();
-            code.append("        ").append(paramType).append(" arg").append(i)
-                .append(" = (").append(paramType).append(") dependencies[").append(i).append("];\n");
-        }
-        
-        // Invoke constructor
-        code.append("        return new ").append(className).append("(");
-        for (int i = 0; i < parameters.size(); i++) {
-            if (i > 0) code.append(", ");
-            code.append("arg").append(i);
-        }
-        code.append(");\n");
-        code.append("    }\n\n");
-        
-        // Generate getBeanType method
-        code.append("    @Override\n");
-        code.append("    public Class<").append(className).append("> getBeanType() {\n");
-        code.append("        return ").append(className).append(".class;\n");
-        code.append("    }\n\n");
-        
-        // Generate getDependencyCount method
-        code.append("    @Override\n");
-        code.append("    public int getDependencyCount() {\n");
-        code.append("        return ").append(parameters.size()).append(";\n");
-        code.append("    }\n");
-        
-        code.append("}\n");
-        
-        // Write the file - handle default package
-        Writer writer;
-        if (packageName.isEmpty()) {
-            writer = filer.createSourceFile(factoryClassName).openWriter();
-        } else {
-            writer = filer.createSourceFile(packageName + "." + factoryClassName).openWriter();
-        }
-        try {
-            writer.write(code.toString());
-        } finally {
-            writer.close();
-        }
-        
-        return factoryClassName;
-    }
-
-    /**
      * Finds the constructor to use for injection.
      * Prioritizes: @Inject constructor > single public constructor > no-arg constructor
      */
@@ -1305,6 +1083,259 @@ public class WarmupProcessor extends AbstractProcessor {
         return genericType.toString();
     }
 
+    /**
+     * Detects a collection injection point and returns the marker that makes the container
+     * resolve <em>every</em> bean of the element type.
+     *
+     * <p>Without this the injection point would be reduced to a raw name such as
+     * {@code PaymentProcessor>} &mdash; the trailing bracket survives the simple-name
+     * extraction below &mdash; and resolution would fail at runtime with
+     * {@code Bean not found: PaymentProcessor>}.</p>
+     *
+     * @param type the declared type of the injection point
+     * @param injectionPoint the element reported in diagnostics when the type is malformed
+     * @return the collection marker, or {@code null} when this is not a supported collection
+     */
+    private String collectionMarker(TypeMirror type, Element injectionPoint) {
+        if (type.getKind() != TypeKind.DECLARED) {
+            return null;
+        }
+        DeclaredType declaredType = (DeclaredType) type;
+        Element rawElement = declaredType.asElement();
+        if (!(rawElement instanceof TypeElement rawType)) {
+            return null;
+        }
+
+        CollectionKind kind = collectionKindOf(rawType.getQualifiedName().toString());
+        if (kind == null) {
+            return null;
+        }
+
+        List<? extends TypeMirror> typeArguments = declaredType.getTypeArguments();
+        int targetIndex = kind == CollectionKind.MAP ? 1 : 0;
+        if (typeArguments.size() <= targetIndex) {
+            // Raw use (e.g. an unparameterised List) - nothing to resolve by element type.
+            return null;
+        }
+
+        TypeMirror target = typeArguments.get(targetIndex);
+        if (target.getKind() != TypeKind.DECLARED
+                || !(((DeclaredType) target).asElement() instanceof TypeElement elementType)) {
+            processingEnv.getMessager().printMessage(Diagnostic.Kind.ERROR,
+                    "Cannot determine the element type of collection injection point '" + type
+                            + "'. Declare a concrete element type, or resolve the beans yourself "
+                            + "with Warmup.resolveAll(...).",
+                    injectionPoint);
+            return null;
+        }
+
+        return CollectionMarker.encode(
+                kind,
+                rawType.getQualifiedName().toString(),
+                elementType.getQualifiedName().toString());
+    }
+
+    /**
+     * Maps a raw collection type name onto the kind of container the injection point needs.
+     * Returns {@code null} for types that are not collections, so that ordinary beans and
+     * already-handled types such as {@code Provider} keep their existing behaviour.
+     */
+    private CollectionKind collectionKindOf(String rawTypeName) {
+        switch (rawTypeName) {
+            case "java.util.List":
+            case "java.util.ArrayList":
+            case "java.util.LinkedList":
+            case "java.util.Vector":
+            case "java.util.Stack":
+                return CollectionKind.LIST;
+            case "java.util.Set":
+            case "java.util.HashSet":
+            case "java.util.LinkedHashSet":
+            case "java.util.SortedSet":
+            case "java.util.NavigableSet":
+            case "java.util.TreeSet":
+                return CollectionKind.SET;
+            case "java.util.Map":
+            case "java.util.HashMap":
+            case "java.util.LinkedHashMap":
+            case "java.util.TreeMap":
+            case "java.util.SortedMap":
+            case "java.util.NavigableMap":
+            case "java.util.concurrent.ConcurrentHashMap":
+                return CollectionKind.MAP;
+            case "java.util.Collection":
+            case "java.util.Queue":
+            case "java.util.Deque":
+            case "java.util.ArrayDeque":
+            case "java.util.PriorityQueue":
+            case "java.util.concurrent.CopyOnWriteArrayList":
+            case "java.util.concurrent.CopyOnWriteArraySet":
+                return CollectionKind.COLLECTION;
+            default:
+                return null;
+        }
+    }
+
+    /**
+     * The kind of container a collection injection point asks for. Mirrors the values used by
+     * the container's {@code CollectionDependency} marker parsing.
+     */
+    private enum CollectionKind {
+        LIST, SET, COLLECTION, MAP
+    }
+
+    /**
+     * Encodes the marker string that makes the container resolve every bean of the element
+     * type. This is a plain string contract shared with the container: the processor must not
+     * load container classes, because annotation processors run isolated on the
+     * {@code -processorpath} and a thin JAR would otherwise fail with
+     * {@code NoClassDefFoundError}.
+     *
+     * <p>Format: {@code $$warmup:collection:&lt;kind:lowercase&gt;:&lt;declaredFqn&gt;:&lt;elementFqn&gt;}</p>
+     */
+    private static final class CollectionMarker {
+        private static final String PREFIX = "$$warmup:collection:";
+
+        private CollectionMarker() {
+        }
+
+        static String encode(CollectionKind kind, String declaredTypeFqn, String elementFqn) {
+            return PREFIX + kind.name().toLowerCase() + ":" + declaredTypeFqn + ":" + elementFqn;
+        }
+    }
+
+    /**
+     * Encodes an {@code Optional<T>} injection point so the container resolves the element
+     * bean if present (wrapping it in {@code Optional.of}) or injects {@code Optional.empty()}
+     * when no bean of the element type exists.
+     *
+     * @param type the declared parameter/field type
+     * @param injectionPoint the element to report diagnostics against
+     * @return the marker, or {@code null} when {@code type} is not a parameterised
+     *         {@code java.util.Optional}
+     */
+    private String optionalMarker(TypeMirror type, Element injectionPoint) {
+        if (type.getKind() != TypeKind.DECLARED) {
+            return null;
+        }
+        DeclaredType declaredType = (DeclaredType) type;
+        Element rawElement = declaredType.asElement();
+        if (!(rawElement instanceof TypeElement rawType)) {
+            return null;
+        }
+        if (!rawType.getQualifiedName().contentEquals("java.util.Optional")) {
+            return null;
+        }
+
+        List<? extends TypeMirror> typeArguments = declaredType.getTypeArguments();
+        if (typeArguments.size() != 1) {
+            // Raw Optional - nothing to resolve by element type.
+            return null;
+        }
+
+        TypeMirror target = typeArguments.get(0);
+        if (target.getKind() != TypeKind.DECLARED
+                || !(((DeclaredType) target).asElement() instanceof TypeElement elementType)) {
+            processingEnv.getMessager().printMessage(Diagnostic.Kind.ERROR,
+                    "Cannot determine the element type of optional injection point '" + type
+                            + "'. Declare a concrete element type, or resolve the bean yourself "
+                            + "with Warmup.get(...).",
+                    injectionPoint);
+            return null;
+        }
+
+        return OptionalMarker.encode(elementType.getQualifiedName().toString());
+    }
+
+    /**
+     * Encodes a {@code @Value} injection point whose declared type is a parameterised
+     * collection with a non-{@code String} element type, for example
+     * {@code @Value("${app.ports}") List<Integer>}.
+     *
+     * <p>A plain {@code @Value} expression is recorded verbatim and the container derives the
+     * erased target type by reflection. That is enough for {@code List<String>}, but the
+     * element type of {@code List<Integer>} is erased, so every element would stay a String.
+     * In that case the injection point is encoded as a marker carrying the declared raw type
+     * and the element type, so the container can convert each split element.</p>
+     *
+     * @param type the declared parameter/field type
+     * @param expression the {@code @Value} placeholder expression
+     * @return the marker, or {@code null} when the plain expression should be used
+     */
+    private String typedValueMarker(TypeMirror type, String expression) {
+        if (type.getKind() != TypeKind.DECLARED) {
+            return null;
+        }
+        DeclaredType declaredType = (DeclaredType) type;
+        Element rawElement = declaredType.asElement();
+        if (!(rawElement instanceof TypeElement rawType)) {
+            return null;
+        }
+
+        String rawFqn = rawType.getQualifiedName().toString();
+        CollectionKind kind = collectionKindOf(rawFqn);
+        if (kind == null || kind == CollectionKind.MAP) {
+            // Not a supported collection, or a Map (a comma separated string cannot describe one).
+            return null;
+        }
+
+        List<? extends TypeMirror> typeArguments = declaredType.getTypeArguments();
+        if (typeArguments.size() != 1) {
+            // Raw use (e.g. an unparameterised List) - keep the plain expression.
+            return null;
+        }
+
+        TypeMirror element = typeArguments.get(0);
+        if (element.getKind() != TypeKind.DECLARED
+                || !(((DeclaredType) element).asElement() instanceof TypeElement elementType)) {
+            // Nested generics, arrays or type variables: keep the plain expression.
+            return null;
+        }
+
+        String elementFqn = elementType.getQualifiedName().toString();
+        if (elementFqn.equals("java.lang.String")) {
+            // String elements already convert correctly through the plain expression path.
+            return null;
+        }
+        return TypedValueMarker.encode(rawFqn, elementFqn, expression);
+    }
+
+    /**
+     * Encodes the marker string for a typed {@code @Value} collection injection point. Plain
+     * string contract shared with the container, mirroring {@link CollectionMarker}: the
+     * processor must not load container classes.
+     *
+     * <p>Format: {@code $$warmup:value:&lt;declaredFqn&gt;:&lt;elementFqn&gt;:&lt;expression&gt;}</p>
+     */
+    private static final class TypedValueMarker {
+        private static final String PREFIX = "$$warmup:value:";
+
+        private TypedValueMarker() {
+        }
+
+        static String encode(String declaredTypeFqn, String elementFqn, String expression) {
+            return PREFIX + declaredTypeFqn + ":" + elementFqn + ":" + expression;
+        }
+    }
+
+    /**
+     * Encodes the marker string for an {@code Optional<T>} injection point. Plain string
+     * contract shared with the container, mirroring {@link CollectionMarker}: the processor
+     * must not load container classes.
+     *
+     * <p>Format: {@code $$warmup:optional:java.util.Optional:&lt;elementFqn&gt;}</p>
+     */
+    private static final class OptionalMarker {
+        private static final String PREFIX = "$$warmup:optional:";
+
+        private OptionalMarker() {
+        }
+
+        static String encode(String elementFqn) {
+            return PREFIX + "java.util.Optional:" + elementFqn;
+        }
+    }
+
     private String getPackageName(TypeElement type) {
         // For nested classes, getPackageOf returns the package of the outermost enclosing class
         String packageName = processingEnv.getElementUtils()
@@ -1318,25 +1349,6 @@ public class WarmupProcessor extends AbstractProcessor {
      */
     private String getFullyQualifiedTypeName(TypeElement type) {
         return processingEnv.getElementUtils().getBinaryName(type).toString();
-    }
-
-    /**
-     * Derives the bean name from the type element and annotation.
-     * 
-     * Convention: If @Bean.value() is empty, uses the simple class name as-is.
-     * This matches the documentation in Bean.java: "if not specified, the simple class name is used".
-     * 
-     * For users building BeanDefinition manually: both the simple class name and the fully
-     * qualified name are registered as keys, so resolution works regardless of which name was used.
-     */
-    private String deriveBeanName(TypeElement typeElement, Bean bean) {
-        // If explicit name is provided in annotation, use it
-        if (bean != null && !bean.value().isEmpty()) {
-            return bean.value();
-        }
-        
-        // Otherwise, use simple class name as-is (no decapitalization)
-        return typeElement.getSimpleName().toString();
     }
 
     /**
@@ -1425,6 +1437,25 @@ public class WarmupProcessor extends AbstractProcessor {
             String packagePart = binaryName.substring(0, lastDollarIndex);
             String classPart = binaryName.substring(lastDollarIndex); // includes the $
             return packagePart.replace('.', '/') + classPart;
+        }
+    }
+
+    /**
+     * Returns the fully qualified name of the wrapper class for a primitive kind. Primitive values
+     * are boxed by generated factories, so a primitive bean type is represented by its wrapper.
+     */
+    private static String wrapperTypeName(TypeKind kind) {
+        switch (kind) {
+            case INT: return "java.lang.Integer";
+            case LONG: return "java.lang.Long";
+            case SHORT: return "java.lang.Short";
+            case BYTE: return "java.lang.Byte";
+            case CHAR: return "java.lang.Character";
+            case BOOLEAN: return "java.lang.Boolean";
+            case FLOAT: return "java.lang.Float";
+            case DOUBLE: return "java.lang.Double";
+            case VOID: return "java.lang.Void";
+            default: throw new IllegalArgumentException("Not a primitive: " + kind);
         }
     }
     
