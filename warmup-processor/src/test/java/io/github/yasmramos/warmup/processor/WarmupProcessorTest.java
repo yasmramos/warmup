@@ -540,6 +540,77 @@ class WarmupProcessorTest {
     }
 
     /**
+     * {@code @Order} / {@code @DependsOn} on a {@code @Bean} method must be carried into the
+     * generated BeanDefinition (via {@code setOrder} / {@code setDependsOn} calls), because the
+     * container cannot read a factory method's annotations from the bean instance alone.
+     */
+    @Test
+    void beanMethodOrderingMetadataIsEmittedIntoRegistrar() throws Exception {
+        JavaFileObject source = JavaFileObjects.forSourceLines(
+            "test.OrderedConfig",
+            "package test;",
+            "import io.github.yasmramos.warmup.annotations.Bean;",
+            "import io.github.yasmramos.warmup.annotations.Factory;",
+            "import io.github.yasmramos.warmup.annotations.Order;",
+            "import io.github.yasmramos.warmup.annotations.DependsOn;",
+            "@Factory",
+            "public class OrderedConfig {",
+            "    @Bean",
+            "    @Order(7)",
+            "    @DependsOn({\"tracker\"})",
+            "    public String ordered() { return \"ordered\"; }",
+            "}"
+        );
+
+        Compilation compilation = compiler.compile(source);
+        assertTrue(compilation.diagnostics().stream()
+                .noneMatch(d -> d.getKind() == javax.tools.Diagnostic.Kind.ERROR),
+            "Compilation should succeed; diagnostics: " + compilation.diagnostics());
+
+        Optional<JavaFileObject> registrarOpt = compilation.generatedFile(
+            StandardLocation.CLASS_OUTPUT, "test/GeneratedFactoryRegistrar.class");
+        assertTrue(registrarOpt.isPresent(), "Registrar class should be generated");
+        byte[] registrarBytes = registrarOpt.get().openInputStream().readAllBytes();
+        String registrarText = new String(registrarBytes, java.nio.charset.StandardCharsets.UTF_8);
+        assertTrue(registrarText.contains("setOrder"),
+            "@Order on a @Bean method must emit a setOrder call, registrar bytes were: " + registrarText);
+        assertTrue(registrarText.contains("setDependsOn"),
+            "@DependsOn on a @Bean method must emit a setDependsOn call, registrar bytes were: " + registrarText);
+        assertTrue(registrarText.contains("tracker"),
+            "The @DependsOn bean name must be present in the registrar, bytes were: " + registrarText);
+    }
+
+    /**
+     * A {@code @Bean} method without ordering annotations must not emit {@code setOrder} /
+     * {@code setDependsOn} calls (keeps the registrar minimal and existing beans unaffected).
+     */
+    @Test
+    void plainBeanMethodEmitsNoOrderingMetadata() throws Exception {
+        JavaFileObject source = JavaFileObjects.forSourceLines(
+            "test.PlainConfig",
+            "package test;",
+            "import io.github.yasmramos.warmup.annotations.Bean;",
+            "import io.github.yasmramos.warmup.annotations.Factory;",
+            "@Factory",
+            "public class PlainConfig {",
+            "    @Bean",
+            "    public String plain() { return \"plain\"; }",
+            "}"
+        );
+
+        Compilation compilation = compiler.compile(source);
+        Optional<JavaFileObject> registrarOpt = compilation.generatedFile(
+            StandardLocation.CLASS_OUTPUT, "test/GeneratedFactoryRegistrar.class");
+        assertTrue(registrarOpt.isPresent(), "Registrar class should be generated");
+        byte[] registrarBytes = registrarOpt.get().openInputStream().readAllBytes();
+        String registrarText = new String(registrarBytes, java.nio.charset.StandardCharsets.UTF_8);
+        assertFalse(registrarText.contains("setOrder"),
+            "A plain @Bean method must not emit setOrder, registrar bytes were: " + registrarText);
+        assertFalse(registrarText.contains("setDependsOn"),
+            "A plain @Bean method must not emit setDependsOn, registrar bytes were: " + registrarText);
+    }
+
+    /**
      * Regression test for primitive injection points (constructor parameters, fields and
      * setter parameters).
      *
