@@ -4,12 +4,14 @@ import io.github.yasmramos.warmup.annotations.Singleton;
 import io.github.yasmramos.warmup.annotations.Inject;
 
 /**
- * Bean with five dependencies for Warmup compile-time benchmark.
- * Equivalent to AvajeBeanWithFiveDependencies and ResolutionBenchmark.BeanWithFiveDependencies.
- * Used for fair comparison between Warmup compile-time path and Avaje.
+ * Bean with five dependencies for Warmup compile-time benchmark. Equivalent to
+ * AvajeBeanWithFiveDependencies and
+ * ResolutionBenchmark.BeanWithFiveDependencies. Used for fair comparison
+ * between Warmup compile-time path and Avaje.
  */
 @Singleton
 public class WarmupBeanWithFiveDependencies {
+
     private final WarmupSimpleBean d1, d2, d3, d4, d5;
 
     @Inject
@@ -23,9 +25,23 @@ public class WarmupBeanWithFiveDependencies {
         this.d5 = d5;
     }
 
-    public WarmupSimpleBean getD1() { return d1; }
-    public WarmupSimpleBean getD2() { return d2; }
-    public WarmupSimpleBean getD3() { return d3; }
-    public WarmupSimpleBean getD4() { return d4; }
-    public WarmupSimpleBean getD5() { return d5; }
+    public WarmupSimpleBean getD1() {
+        return d1;
+    }
+
+    public WarmupSimpleBean getD2() {
+        return d2;
+    }
+
+    public WarmupSimpleBean getD3() {
+        return d3;
+    }
+
+    public WarmupSimpleBean getD4() {
+        return d4;
+    }
+
+    public WarmupSimpleBean getD5() {
+        return d5;
+    }
 }

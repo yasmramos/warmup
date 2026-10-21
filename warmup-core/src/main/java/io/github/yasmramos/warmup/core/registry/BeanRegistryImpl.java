@@ -3,7 +3,6 @@ package io.github.yasmramos.warmup.core.registry;
 import io.github.yasmramos.warmup.core.exception.AmbiguousBeanException;
 import io.github.yasmramos.warmup.core.jit.CompiledFactory;
 import io.github.yasmramos.warmup.core.lifecycle.LifecycleCallbacks;
-import io.github.yasmramos.warmup.core.scope.Scope;
 import io.github.yasmramos.warmup.core.scope.ScopeHandler;
 
 import java.util.concurrent.ConcurrentHashMap;
@@ -12,15 +11,14 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.lang.invoke.VarHandle;
 import java.lang.invoke.MethodHandles;
 import java.util.Optional;
-import java.util.Map;
 import java.util.Set;
 import java.util.List;
 import java.util.ArrayList;
-import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
+import java.util.function.Supplier;
 
 /**
  * Thread-safe implementation of BeanRegistry using lock-free data structures.
@@ -66,7 +64,7 @@ public class BeanRegistryImpl implements BeanRegistry {
     static {
         try {
             ARRAY_ELEMENT_HANDLE = MethodHandles.arrayElementVarHandle(Object[].class);
-        } catch (Exception e) {
+        } catch (IllegalArgumentException e) {
             throw new RuntimeException("Failed to initialize VarHandle", e);
         }
     }
@@ -235,7 +233,7 @@ public class BeanRegistryImpl implements BeanRegistry {
 
     @Override
     @SuppressWarnings("unchecked")
-    public <T> T getInstance(String name, java.util.function.Supplier<T> factory) {
+    public <T> T getInstance(String name, Supplier<T> factory) {
         BeanDefinition<?> definition = definitionsByName.get(name);
         if (definition == null) {
             throw new IllegalStateException("Bean not found: " + name);
@@ -246,7 +244,7 @@ public class BeanRegistryImpl implements BeanRegistry {
 
     @Override
     @SuppressWarnings("unchecked")
-    public <T> T getInstance(BeanDefinition<T> definition, java.util.function.Supplier<T> factory) {
+    public <T> T getInstance(BeanDefinition<T> definition, Supplier<T> factory) {
         String name = definition.name();
 
         return switch (definition.scope()) {
@@ -684,6 +682,7 @@ public class BeanRegistryImpl implements BeanRegistry {
      * @param index the bean index
      * @param instance the singleton instance
      */
+    @Override
     public void setInstanceByIndex(int index, Object instance) {
         if (index >= 0 && index < singletonInstancesByIndex.length) {
             ARRAY_ELEMENT_HANDLE.setRelease(singletonInstancesByIndex, index, instance);

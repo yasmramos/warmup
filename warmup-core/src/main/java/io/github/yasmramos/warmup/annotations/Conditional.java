@@ -1,7 +1,6 @@
 package io.github.yasmramos.warmup.annotations;
 
-import io.github.yasmramos.warmup.annotations.condition.Condition;
-
+import io.github.yasmramos.warmup.core.condition.Condition;
 import java.lang.annotation.ElementType;
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;

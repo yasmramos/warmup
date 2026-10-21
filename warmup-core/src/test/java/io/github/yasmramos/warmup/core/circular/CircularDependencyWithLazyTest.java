@@ -8,6 +8,7 @@ import io.github.yasmramos.warmup.core.Warmup;
 import io.github.yasmramos.warmup.core.lifecycle.LifecycleCallbacks;
 import io.github.yasmramos.warmup.core.registry.BeanDefinition;
 import io.github.yasmramos.warmup.core.scope.Scope;
+import java.lang.reflect.InvocationTargetException;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -128,7 +129,7 @@ class CircularDependencyWithLazyTest {
                         try {
                             method.setAccessible(true);
                             method.invoke(instance);
-                        } catch (Exception e) {
+                        } catch (IllegalAccessException | InvocationTargetException e) {
                             throw new RuntimeException("Failed to invoke @PostConstruct method", e);
                         }
                     });

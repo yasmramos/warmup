@@ -9,7 +9,7 @@ import java.lang.annotation.Target;
 /**
  * Marks API elements that are intended for internal use only and are not part of the stable public API.
  * 
- * <p>Methods or classes annotated with {@code @InternalApi} may change or be removed without notice
+ * <p>Methods or classes annotated with {@code @Internal} may change or be removed without notice
  * in future releases. They should not be used by application code outside of the warmup project itself.</p>
  * 
  * <p>This annotation is typically used for:</p>
@@ -26,5 +26,5 @@ import java.lang.annotation.Target;
 @Documented
 @Retention(RetentionPolicy.RUNTIME)
 @Target({ElementType.METHOD, ElementType.TYPE, ElementType.CONSTRUCTOR})
-public @interface InternalApi {
+public @interface Internal {
 }

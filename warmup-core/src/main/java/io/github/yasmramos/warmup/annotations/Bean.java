@@ -1,5 +1,6 @@
 package io.github.yasmramos.warmup.annotations;
 
+import io.github.yasmramos.warmup.core.scope.Scope;
 import java.lang.annotation.ElementType;
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
@@ -51,9 +52,4 @@ public @interface Bean {
      */
     String scopeName() default "";
 
-    enum Scope {
-        SINGLETON,
-        PROTOTYPE,
-        CUSTOM
-    }
 }

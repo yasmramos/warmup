@@ -1,6 +1,6 @@
 package io.github.yasmramos.warmup.annotations;
 
-import io.github.yasmramos.warmup.annotations.Bean;
+import io.github.yasmramos.warmup.core.scope.Scope;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -15,7 +15,7 @@ class BeanScopeTest {
 
     @Test
     void testSingletonScope() {
-        Bean.Scope singleton = Bean.Scope.SINGLETON;
+        Scope singleton = Scope.SINGLETON;
         
         assertEquals("SINGLETON", singleton.name());
         assertEquals(0, singleton.ordinal());
@@ -23,7 +23,7 @@ class BeanScopeTest {
 
     @Test
     void testPrototypeScope() {
-        Bean.Scope prototype = Bean.Scope.PROTOTYPE;
+        Scope prototype = Scope.PROTOTYPE;
         
         assertEquals("PROTOTYPE", prototype.name());
         assertEquals(1, prototype.ordinal());
@@ -31,7 +31,7 @@ class BeanScopeTest {
 
     @Test
     void testCustomScope() {
-        Bean.Scope custom = Bean.Scope.CUSTOM;
+        Scope custom = Scope.CUSTOM;
         
         assertEquals("CUSTOM", custom.name());
         assertEquals(2, custom.ordinal());
@@ -39,36 +39,36 @@ class BeanScopeTest {
 
     @Test
     void testAllScopesValues() {
-        Bean.Scope[] allScopes = Bean.Scope.values();
+        Scope[] allScopes = Scope.values();
         
         assertEquals(3, allScopes.length);
-        assertEquals(Bean.Scope.SINGLETON, allScopes[0]);
-        assertEquals(Bean.Scope.PROTOTYPE, allScopes[1]);
-        assertEquals(Bean.Scope.CUSTOM, allScopes[2]);
+        assertEquals(Scope.SINGLETON, allScopes[0]);
+        assertEquals(Scope.PROTOTYPE, allScopes[1]);
+        assertEquals(Scope.CUSTOM, allScopes[2]);
     }
 
     @Test
     void testValueOfSingleton() {
-        Bean.Scope scope = Bean.Scope.valueOf("SINGLETON");
-        assertEquals(Bean.Scope.SINGLETON, scope);
+        Scope scope = Scope.valueOf("SINGLETON");
+        assertEquals(Scope.SINGLETON, scope);
     }
 
     @Test
     void testValueOfPrototype() {
-        Bean.Scope scope = Bean.Scope.valueOf("PROTOTYPE");
-        assertEquals(Bean.Scope.PROTOTYPE, scope);
+        Scope scope = Scope.valueOf("PROTOTYPE");
+        assertEquals(Scope.PROTOTYPE, scope);
     }
 
     @Test
     void testValueOfCustom() {
-        Bean.Scope scope = Bean.Scope.valueOf("CUSTOM");
-        assertEquals(Bean.Scope.CUSTOM, scope);
+        Scope scope = Scope.valueOf("CUSTOM");
+        assertEquals(Scope.CUSTOM, scope);
     }
 
     @Test
     void testValueOfInvalidThrowsException() {
         assertThrows(IllegalArgumentException.class, () -> {
-            Bean.Scope.valueOf("INVALID");
+            Scope.valueOf("INVALID");
         });
     }
 
@@ -77,7 +77,7 @@ class BeanScopeTest {
         // Note: valueOf(null) throws NullPointerException, not IllegalArgumentException
         // This is the standard Java Enum behavior
         assertThrows(NullPointerException.class, () -> {
-            Bean.Scope.valueOf(null);
+            Scope.valueOf(null);
         });
     }
 }

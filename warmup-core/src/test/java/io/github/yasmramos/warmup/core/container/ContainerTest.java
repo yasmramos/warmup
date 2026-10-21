@@ -1,36 +1,40 @@
 package io.github.yasmramos.warmup.core.container;
 
-import io.github.yasmramos.warmup.core.container.HybridContainerConfig;
-import io.github.yasmramos.warmup.core.container.HybridContainer;
 import io.github.yasmramos.warmup.core.jit.JITCompiler;
 import io.github.yasmramos.warmup.core.jit.CompiledFactory;
 import io.github.yasmramos.warmup.core.jit.CompilationException;
 import io.github.yasmramos.warmup.core.registry.BeanDefinition;
+import io.github.yasmramos.warmup.annotations.Conditional;
+import io.github.yasmramos.warmup.annotations.Profile;
+import io.github.yasmramos.warmup.core.condition.Condition;
+import io.github.yasmramos.warmup.core.condition.ConditionContext;
+import io.github.yasmramos.warmup.core.lifecycle.LifecycleCallbacks;
+import io.github.yasmramos.warmup.core.scope.Scope;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-class HybridContainerTest {
+class ContainerTest {
 
-    private HybridContainer container;
+    private Container container;
     private TestJITCompiler jitCompiler;
 
     @BeforeEach
     void setUp() {
         jitCompiler = new TestJITCompiler();
-        container = new HybridContainer(new HybridContainerConfig.Builder().build(), jitCompiler);
+        container = new Container(new ContainerConfig.Builder().build(), jitCompiler);
     }
 
     @Test
     void testResolveWithCompileTimeFactory() {
         // Register a bean
-        var definition = new io.github.yasmramos.warmup.core.registry.BeanDefinition<>(TestService.class, "testBean");
+        var definition = new BeanDefinition<>(TestService.class, "testBean");
         container.register(definition, null);
 
         TestService result = container.resolve(TestService.class);
@@ -40,7 +44,7 @@ class HybridContainerTest {
     @Test
     void testResolveByType() {
         // Register a bean
-        var definition = new io.github.yasmramos.warmup.core.registry.BeanDefinition<>(TestService.class, "testService");
+        var definition = new BeanDefinition<>(TestService.class, "testService");
         container.register(definition, null);
 
         TestService result = container.resolve(TestService.class);
@@ -51,7 +55,7 @@ class HybridContainerTest {
     void testContainsByName() {
         assertFalse(container.contains("nonexistent"));
 
-        var definition = new io.github.yasmramos.warmup.core.registry.BeanDefinition<>(TestService.class, "existing");
+        var definition = new BeanDefinition<>(TestService.class, "existing");
         container.register(definition, null);
 
         assertTrue(container.contains("existing"));
@@ -61,7 +65,7 @@ class HybridContainerTest {
     void testContainsByType() {
         assertFalse(container.contains(TestService.class));
 
-        var definition = new io.github.yasmramos.warmup.core.registry.BeanDefinition<>(TestService.class, "testService");
+        var definition = new BeanDefinition<>(TestService.class, "testService");
         container.register(definition, null);
 
         assertTrue(container.contains(TestService.class));
@@ -69,7 +73,7 @@ class HybridContainerTest {
 
     @Test
     void testRegisterDynamic() {
-        var definition = new io.github.yasmramos.warmup.core.registry.BeanDefinition<>(TestService.class, "dynamicBean");
+        var definition = new BeanDefinition<>(TestService.class, "dynamicBean");
         container.registerDynamic(definition);
 
         // Should trigger background warmup without throwing
@@ -78,7 +82,7 @@ class HybridContainerTest {
 
     @Test
     void testShutdown() {
-        var definition = new io.github.yasmramos.warmup.core.registry.BeanDefinition<>(TestService.class, "testBean");
+        var definition = new BeanDefinition<>(TestService.class, "testBean");
         container.register(definition, null);
         
         // Shutdown should not throw exceptions
@@ -100,8 +104,8 @@ class HybridContainerTest {
 
     @Test
     void testGetBeanNames() {
-        container.register(new io.github.yasmramos.warmup.core.registry.BeanDefinition<>(TestService.class, "bean1"), null);
-        container.register(new io.github.yasmramos.warmup.core.registry.BeanDefinition<>(TestService.class, "bean2"), null);
+        container.register(new BeanDefinition<>(TestService.class, "bean1"), null);
+        container.register(new BeanDefinition<>(TestService.class, "bean2"), null);
         
         var names = container.getBeanNames();
         assertTrue(names.contains("bean1"));
@@ -110,7 +114,7 @@ class HybridContainerTest {
 
     @Test
     void testRegisterFactory() {
-        var definition = new io.github.yasmramos.warmup.core.registry.BeanDefinition<>(TestService.class, "factoryBean");
+        var definition = new BeanDefinition<>(TestService.class, "factoryBean");
         CompiledFactory<TestService> factory = deps -> new TestService();
         
         container.register(definition, null);
@@ -123,7 +127,7 @@ class HybridContainerTest {
 
     @Test
     void testRegisterFactoryTypeSafe() {
-        var definition = new io.github.yasmramos.warmup.core.registry.BeanDefinition<>(TestService.class, "typeSafeBean");
+        var definition = new BeanDefinition<>(TestService.class, "typeSafeBean");
         CompiledFactory<TestService> factory = deps -> new TestService();
         
         container.register(definition, null);
@@ -149,7 +153,7 @@ class HybridContainerTest {
     @Test
     void testRegisterFactoryFailsForTypeMismatch() {
         // Register bean as TestService
-        var definition = new io.github.yasmramos.warmup.core.registry.BeanDefinition<>(TestService.class, "mismatchBean");
+        var definition = new BeanDefinition<>(TestService.class, "mismatchBean");
         container.register(definition, null);
         
         // Try to register a factory that produces a different type
@@ -167,8 +171,8 @@ class HybridContainerTest {
     @Test
     void testGetDiagnostics() {
         // Enable diagnostic mode
-        HybridContainer diagnosticContainer = new HybridContainer(new HybridContainerConfig.Builder().diagnosticMode(true).build(), jitCompiler);
-        var definition = new io.github.yasmramos.warmup.core.registry.BeanDefinition<>(TestService.class, "diagBean");
+        Container diagnosticContainer = new Container(new ContainerConfig.Builder().diagnosticMode(true).build(), jitCompiler);
+        var definition = new BeanDefinition<>(TestService.class, "diagBean");
         diagnosticContainer.register(definition, null);
         
         diagnosticContainer.resolve(TestService.class);
@@ -181,11 +185,11 @@ class HybridContainerTest {
     @Test
     void testGetDiagnosticsConcurrentAccess() throws InterruptedException {
         // Test concurrent writes and reads to diagnostics list
-        HybridContainer diagnosticContainer = new HybridContainer(new HybridContainerConfig.Builder().diagnosticMode(true).build(), jitCompiler);
+        Container diagnosticContainer = new Container(new ContainerConfig.Builder().diagnosticMode(true).build(), jitCompiler);
         // Use PROTOTYPE scope so each resolution calls createBean and records diagnostics
-        var definition = new io.github.yasmramos.warmup.core.registry.BeanDefinition<>(
+        var definition = new BeanDefinition<>(
             TestService.class, "concurrentBean", 
-            io.github.yasmramos.warmup.core.scope.Scope.PROTOTYPE
+            Scope.PROTOTYPE
         );
         // Register with a simple factory to avoid JIT compilation overhead in test
         diagnosticContainer.register(definition, (deps) -> new TestService());
@@ -193,8 +197,8 @@ class HybridContainerTest {
         int numThreads = 10;
         int resolutionsPerThread = 50;
         Thread[] writers = new Thread[numThreads];
-        final java.util.concurrent.CountDownLatch startLatch = new java.util.concurrent.CountDownLatch(1);
-        final java.util.concurrent.CountDownLatch doneLatch = new java.util.concurrent.CountDownLatch(numThreads);
+        final CountDownLatch startLatch = new CountDownLatch(1);
+        final CountDownLatch doneLatch = new CountDownLatch(numThreads);
         
         // Start multiple threads resolving beans (writing to diagnostics)
         for (int i = 0; i < numThreads; i++) {
@@ -247,8 +251,8 @@ class HybridContainerTest {
     @Test
     void testDiagnosticsNotCollectedWhenDisabled() {
         // Verify that in production mode (diagnosticMode=false), no diagnostics are collected
-        HybridContainer productionContainer = new HybridContainer(new HybridContainerConfig.Builder().build(), jitCompiler);
-        var definition = new io.github.yasmramos.warmup.core.registry.BeanDefinition<>(TestService.class, "prodBean");
+        Container productionContainer = new Container(new ContainerConfig.Builder().build(), jitCompiler);
+        var definition = new BeanDefinition<>(TestService.class, "prodBean");
         productionContainer.register(definition, null);
         
         // Resolve multiple times
@@ -263,9 +267,9 @@ class HybridContainerTest {
 
     @Test
     void testResolvePrototypeScope() {
-        var definition = new io.github.yasmramos.warmup.core.registry.BeanDefinition<>(
+        var definition = new BeanDefinition<>(
             TestService.class, "prototypeBean", 
-            io.github.yasmramos.warmup.core.scope.Scope.PROTOTYPE
+            Scope.PROTOTYPE
         );
         container.register(definition, null);
         
@@ -281,14 +285,14 @@ class HybridContainerTest {
     @Test
     void testResolveWithDependencies() {
         // Register dependency first
-        var depDef = new io.github.yasmramos.warmup.core.registry.BeanDefinition<>(DependencyService.class, "dep");
+        var depDef = new BeanDefinition<>(DependencyService.class, "dep");
         container.register(depDef, null);
         
         // Register bean with dependency - use compile-time factory to avoid reflection issues
-        var def = new io.github.yasmramos.warmup.core.registry.BeanDefinition<>(
+        var def = new BeanDefinition<>(
             DependentService.class, "dependent", 
-            io.github.yasmramos.warmup.core.scope.Scope.SINGLETON,
-            io.github.yasmramos.warmup.core.lifecycle.LifecycleCallbacks.empty(),
+            Scope.SINGLETON,
+            LifecycleCallbacks.empty(),
             false,
             new Object[]{"dep"}
         );
@@ -313,7 +317,7 @@ class HybridContainerTest {
     @Test
     void testResolveCachedInstance() {
         // First resolve to cache the singleton
-        container.register(new io.github.yasmramos.warmup.core.registry.BeanDefinition<>(TestService.class, "cached"), null);
+        container.register(new BeanDefinition<>(TestService.class, "cached"), null);
         TestService instance1 = container.resolve(TestService.class);
         
         // Second resolve should return cached instance (fast path)
@@ -326,12 +330,12 @@ class HybridContainerTest {
     @Test
     void testGetMetricsAfterResolutions() {
         // Create container with metrics explicitly enabled for this test
-        var metricsContainer = new HybridContainer(
-            new HybridContainerConfig(false, 10, true, true, null, new String[0]),  // metricsEnabled=true
+        var metricsContainer = new Container(
+            new ContainerConfig(false, 10, true, true, null, new String[0], false),  // metricsEnabled=true
             jitCompiler
         );
         
-        var definition = new io.github.yasmramos.warmup.core.registry.BeanDefinition<>(TestService.class, "metricsBean");
+        var definition = new BeanDefinition<>(TestService.class, "metricsBean");
         metricsContainer.register(definition, null);
         
         metricsContainer.resolve(TestService.class);
@@ -345,7 +349,7 @@ class HybridContainerTest {
 
     @Test
     void testRegisterWithCompileTimeFactory() {
-        var definition = new io.github.yasmramos.warmup.core.registry.BeanDefinition<>(TestService.class, "factoryBean");
+        var definition = new BeanDefinition<>(TestService.class, "factoryBean");
         CompiledFactory<TestService> factory = deps -> new TestService();
         
         container.register(definition, factory);
@@ -356,7 +360,7 @@ class HybridContainerTest {
 
     @Test
     void testRegisterDynamicTriggersWarmup() {
-        var definition = new io.github.yasmramos.warmup.core.registry.BeanDefinition<>(TestService.class, "dynamicBean");
+        var definition = new BeanDefinition<>(TestService.class, "dynamicBean");
         container.registerDynamic(definition);
         
         // Should be registered and warmup triggered without throwing
@@ -366,13 +370,13 @@ class HybridContainerTest {
     @Test
     void testFindConstructorParameterType() {
         // Test the private method indirectly through createBean with dependencies
-        var depDef = new io.github.yasmramos.warmup.core.registry.BeanDefinition<>(DependencyService.class, "dep");
+        var depDef = new BeanDefinition<>(DependencyService.class, "dep");
         container.register(depDef, null);
         
-        var def = new io.github.yasmramos.warmup.core.registry.BeanDefinition<>(
+        var def = new BeanDefinition<>(
             DependentService.class, "dependent", 
-            io.github.yasmramos.warmup.core.scope.Scope.SINGLETON,
-            io.github.yasmramos.warmup.core.lifecycle.LifecycleCallbacks.empty(),
+            Scope.SINGLETON,
+            LifecycleCallbacks.empty(),
             false,
             new Object[]{"dep"}
         );
@@ -387,10 +391,10 @@ class HybridContainerTest {
     @Test
     void testTriggerBackgroundWarmupWithMissingDependency() {
         // Register a bean with a dependency that doesn't exist yet
-        var def = new io.github.yasmramos.warmup.core.registry.BeanDefinition<>(
+        var def = new BeanDefinition<>(
             DependentService.class, "dependentWithMissingDep", 
-            io.github.yasmramos.warmup.core.scope.Scope.SINGLETON,
-            io.github.yasmramos.warmup.core.lifecycle.LifecycleCallbacks.empty(),
+            Scope.SINGLETON,
+            LifecycleCallbacks.empty(),
             false,
             new Object[]{"missingDep"}
         );
@@ -401,7 +405,7 @@ class HybridContainerTest {
     @Test
     void testCreateViaReflectionFallback() {
         // Register a simple bean without factory to trigger reflection fallback
-        var definition = new io.github.yasmramos.warmup.core.registry.BeanDefinition<>(TestService.class, "reflectionBean");
+        var definition = new BeanDefinition<>(TestService.class, "reflectionBean");
         container.register(definition, null);
         
         TestService result = container.resolve(TestService.class);
@@ -411,7 +415,7 @@ class HybridContainerTest {
     @Test
     void testResolveDependenciesEmpty() {
         // Test with no dependencies - uses EMPTY_ARGS constant
-        var definition = new io.github.yasmramos.warmup.core.registry.BeanDefinition<>(TestService.class, "noDeps");
+        var definition = new BeanDefinition<>(TestService.class, "noDeps");
         container.register(definition, null);
         
         TestService result = container.resolve(TestService.class);
@@ -421,14 +425,14 @@ class HybridContainerTest {
     @Test
     void testGetDependencyClassesWithDependencies() {
         // Register dependency
-        var depDef = new io.github.yasmramos.warmup.core.registry.BeanDefinition<>(DependencyService.class, "dep");
+        var depDef = new BeanDefinition<>(DependencyService.class, "dep");
         container.register(depDef, null);
         
         // Register bean with dependency
-        var def = new io.github.yasmramos.warmup.core.registry.BeanDefinition<>(
+        var def = new BeanDefinition<>(
             DependentService.class, "dependent", 
-            io.github.yasmramos.warmup.core.scope.Scope.SINGLETON,
-            io.github.yasmramos.warmup.core.lifecycle.LifecycleCallbacks.empty(),
+            Scope.SINGLETON,
+            LifecycleCallbacks.empty(),
             false,
             new Object[]{"dep"}
         );
@@ -444,7 +448,7 @@ class HybridContainerTest {
     @Test
     void testGetDependencyClassesEmpty() {
         // Register bean without dependencies
-        var definition = new io.github.yasmramos.warmup.core.registry.BeanDefinition<>(TestService.class, "noDepsBean");
+        var definition = new BeanDefinition<>(TestService.class, "noDepsBean");
         container.register(definition, null);
         
         TestService result = container.resolve(TestService.class);
@@ -455,7 +459,7 @@ class HybridContainerTest {
     void testComputeNativeImage() {
         // This tests the computeNativeImage method which checks system property
         // By default should return false since property is not set
-        var definition = new io.github.yasmramos.warmup.core.registry.BeanDefinition<>(TestService.class, "nativeBean");
+        var definition = new BeanDefinition<>(TestService.class, "nativeBean");
         container.register(definition, null);
         
         TestService result = container.resolve(TestService.class);
@@ -465,14 +469,14 @@ class HybridContainerTest {
     @Test
     void testTriggerBackgroundWarmupSuccessPath() {
         // Register dependency first
-        var depDef = new io.github.yasmramos.warmup.core.registry.BeanDefinition<>(DependencyService.class, "bgDep");
+        var depDef = new BeanDefinition<>(DependencyService.class, "bgDep");
         container.register(depDef, null);
         
         // Register dynamic bean with dependency already present
-        var def = new io.github.yasmramos.warmup.core.registry.BeanDefinition<>(
+        var def = new BeanDefinition<>(
             DependentService.class, "bgDependent", 
-            io.github.yasmramos.warmup.core.scope.Scope.SINGLETON,
-            io.github.yasmramos.warmup.core.lifecycle.LifecycleCallbacks.empty(),
+            Scope.SINGLETON,
+            LifecycleCallbacks.empty(),
             false,
             new Object[]{"bgDep"}
         );
@@ -487,9 +491,9 @@ class HybridContainerTest {
     @Test
     void testTriggerBackgroundWarmupWithCompilationError() {
         // Use a JIT compiler that throws during compilation
-        HybridContainer containerWithErrorJit = new HybridContainer(new HybridContainerConfig.Builder().build(), new ErrorJITCompiler());
+        Container containerWithErrorJit = new Container(new ContainerConfig.Builder().build(), new ErrorJITCompiler());
         
-        var def = new io.github.yasmramos.warmup.core.registry.BeanDefinition<>(TestService.class, "errorBean");
+        var def = new BeanDefinition<>(TestService.class, "errorBean");
         
         // Should not throw even if compilation fails
         assertDoesNotThrow(() -> containerWithErrorJit.registerDynamic(def));
@@ -498,7 +502,7 @@ class HybridContainerTest {
     @Test
     void testCreateViaReflectionDirectly() {
         // Register bean without factory to force reflection path
-        var definition = new io.github.yasmramos.warmup.core.registry.BeanDefinition<>(SimpleBean.class, "simpleBean");
+        var definition = new BeanDefinition<>(SimpleBean.class, "simpleBean");
         container.register(definition, null);
         
         SimpleBean result = container.resolve(SimpleBean.class);
@@ -508,15 +512,15 @@ class HybridContainerTest {
     @Test
     void testCreateViaReflectionWithDependencies() {
         // Use NoOpJITCompiler to force reflection fallback
-        var noopContainer = new HybridContainer(new HybridContainerConfig.Builder().build(), new NoOpJITCompiler());
+        var noopContainer = new Container(new ContainerConfig.Builder().build(), new NoOpJITCompiler());
         try {
             // Register dependency first
-            var serviceDef = new io.github.yasmramos.warmup.core.registry.BeanDefinition<>(TestService.class, "testService");
+            var serviceDef = new BeanDefinition<>(TestService.class, "testService");
             noopContainer.register(serviceDef, null);
             
             // Register bean with dependency - use full constructor with all parameters
-            var beanDef = new io.github.yasmramos.warmup.core.registry.BeanDefinition<>(BeanWithDependency.class, "beanWithDep", 
-                io.github.yasmramos.warmup.core.scope.Scope.PROTOTYPE, io.github.yasmramos.warmup.core.lifecycle.LifecycleCallbacks.empty(), false, new Object[]{"testService"});
+            var beanDef = new BeanDefinition<>(BeanWithDependency.class, "beanWithDep", 
+                Scope.PROTOTYPE, LifecycleCallbacks.empty(), false, new Object[]{"testService"});
             noopContainer.register(beanDef, null);
             
             BeanWithDependency result = noopContainer.resolve(BeanWithDependency.class);
@@ -531,17 +535,17 @@ class HybridContainerTest {
     @Test
     void testCreateViaReflectionWithMultipleDependencies() {
         // Use NoOpJITCompiler to force reflection fallback
-        var noopContainer = new HybridContainer(new HybridContainerConfig.Builder().build(), new NoOpJITCompiler());
+        var noopContainer = new Container(new ContainerConfig.Builder().build(), new NoOpJITCompiler());
         try {
             // Register dependencies first
-            var service1Def = new io.github.yasmramos.warmup.core.registry.BeanDefinition<>(TestService.class, "service1");
-            var service2Def = new io.github.yasmramos.warmup.core.registry.BeanDefinition<>(DependencyService.class, "service2");
+            var service1Def = new BeanDefinition<>(TestService.class, "service1");
+            var service2Def = new BeanDefinition<>(DependencyService.class, "service2");
             noopContainer.register(service1Def, null);
             noopContainer.register(service2Def, null);
             
             // Register bean with multiple dependencies - use full constructor with all parameters
-            var beanDef = new io.github.yasmramos.warmup.core.registry.BeanDefinition<>(BeanWithMultipleDependencies.class, "beanWithMultiDep",
-                io.github.yasmramos.warmup.core.scope.Scope.PROTOTYPE, io.github.yasmramos.warmup.core.lifecycle.LifecycleCallbacks.empty(), false, new Object[]{"service1", "service2"});
+            var beanDef = new BeanDefinition<>(BeanWithMultipleDependencies.class, "beanWithMultiDep",
+                Scope.PROTOTYPE, LifecycleCallbacks.empty(), false, new Object[]{"service1", "service2"});
             noopContainer.register(beanDef, null);
             
             BeanWithMultipleDependencies result = noopContainer.resolve(BeanWithMultipleDependencies.class);
@@ -557,7 +561,7 @@ class HybridContainerTest {
     @Test
     void testLambdaNewRunnable() {
         // Test the lambda:new$0 that wraps Runnable
-        var definition = new io.github.yasmramos.warmup.core.registry.BeanDefinition<>(TestService.class, "lambdaBean");
+        var definition = new BeanDefinition<>(TestService.class, "lambdaBean");
         container.register(definition, null);
         
         // Shutdown exercises the lambda
@@ -566,9 +570,9 @@ class HybridContainerTest {
 
     @Test
     void testResolvePrototypeMultipleTimes() {
-        var definition = new io.github.yasmramos.warmup.core.registry.BeanDefinition<>(
+        var definition = new BeanDefinition<>(
             TestService.class, "protoBean", 
-            io.github.yasmramos.warmup.core.scope.Scope.PROTOTYPE
+            Scope.PROTOTYPE
         );
         container.register(definition, null);
         
@@ -587,7 +591,7 @@ class HybridContainerTest {
     @Test
     void testHotReloadBean() {
         // Register a bean with compile-time factory
-        var definition = new io.github.yasmramos.warmup.core.registry.BeanDefinition<>(TestService.class, "reloadBean");
+        var definition = new BeanDefinition<>(TestService.class, "reloadBean");
         CompiledFactory<TestService> factory1 = deps -> new TestService();
         container.register(definition, factory1);
         
@@ -679,26 +683,26 @@ class HybridContainerTest {
     }
 
     // Test classes for profile and condition coverage
-    @   io.github.yasmramos.warmup.annotations.Profile("test-profile")
+    @Profile("test-profile")
     public static class ProfiledService {
         public ProfiledService() {}
         public String getName() { return "profiled"; }
     }
 
-    public static class TestCondition implements io.github.yasmramos.warmup.annotations.condition.Condition {
+    public static class TestCondition implements Condition {
         @Override
-        public boolean matches(io.github.yasmramos.warmup.annotations.ConditionContext context) {
+        public boolean matches(ConditionContext context) {
             return true;
         }
     }
 
-    @   io.github.yasmramos.warmup.annotations.Conditional(TestCondition.class)
+    @Conditional(TestCondition.class)
     public static class ConditionalService {
         public ConditionalService() {}
         public String getName() { return "conditional"; }
     }
 
-    @   io.github.yasmramos.warmup.annotations.Profile({"prod", "!dev"})
+    @Profile({"prod", "!dev"})
     public static class MultiProfileService {
         public MultiProfileService() {}
         public String getName() { return "multi-profile"; }
@@ -811,12 +815,12 @@ class HybridContainerTest {
     void testShutdownWaitsForPendingCompilations() throws Exception {
         // Use the real AsmJITCompiler to test actual async compilation behavior
         io.github.yasmramos.warmup.asm.AsmJITCompiler realJitCompiler = new io.github.yasmramos.warmup.asm.AsmJITCompiler();
-        HybridContainer realContainer = new HybridContainer(new HybridContainerConfig.Builder().build(), realJitCompiler);
+        Container realContainer = new Container(new ContainerConfig.Builder().build(), realJitCompiler);
         
         // Register multiple beans to trigger background warmup
         int beanCount = 5;
         for (int i = 0; i < beanCount; i++) {
-            var definition = new io.github.yasmramos.warmup.core.registry.BeanDefinition<>(TestService.class, "testBean" + i);
+            var definition = new BeanDefinition<>(TestService.class, "testBean" + i);
             realContainer.register(definition, null);
         }
         
@@ -910,8 +914,8 @@ class HybridContainerTest {
     void testShutdownWaitsForPendingWarmupCompilations() throws InterruptedException {
         // Use TestJITCompiler with tracking capabilities
         TrackingJITCompiler trackingCompiler = new TrackingJITCompiler();
-        HybridContainer testContainer = new HybridContainer(
-            new HybridContainerConfig.Builder().build(), 
+        Container testContainer = new Container(
+            new ContainerConfig.Builder().build(), 
             trackingCompiler
         );
         
@@ -919,7 +923,7 @@ class HybridContainerTest {
         int beanCount = 5;
         for (int i = 0; i < beanCount; i++) {
             String beanName = "testBean" + i;
-            var definition = new io.github.yasmramos.warmup.core.registry.BeanDefinition<>(TestService.class, beanName);
+            var definition = new BeanDefinition<>(TestService.class, beanName);
             testContainer.registerDynamic(definition);
         }
         
@@ -1045,12 +1049,12 @@ class HybridContainerTest {
     @Test
     void testProfileAnnotationFiltersBeanRegistration() {
         // Test with active profile matching the bean's profile
-        HybridContainer containerWithProfile = new HybridContainer(
-            new HybridContainerConfig.Builder().activeProfiles("test-profile").build(), 
+        Container containerWithProfile = new Container(
+            new ContainerConfig.Builder().activeProfiles("test-profile").build(), 
             jitCompiler
         );
         
-        var definition = new io.github.yasmramos.warmup.core.registry.BeanDefinition<>(ProfiledService.class, "profiledBean");
+        var definition = new BeanDefinition<>(ProfiledService.class, "profiledBean");
         containerWithProfile.register(definition, null);
         
         // Bean should be registered since profile matches
@@ -1063,12 +1067,12 @@ class HybridContainerTest {
     @Test
     void testProfileAnnotationFiltersBeanWhenProfileDoesNotMatch() {
         // Test with active profile NOT matching the bean's profile
-        HybridContainer containerWithDifferentProfile = new HybridContainer(
-            new HybridContainerConfig.Builder().activeProfiles("other-profile").build(), 
+        Container containerWithDifferentProfile = new Container(
+            new ContainerConfig.Builder().activeProfiles("other-profile").build(), 
             jitCompiler
         );
         
-        var definition = new io.github.yasmramos.warmup.core.registry.BeanDefinition<>(ProfiledService.class, "profiledBean");
+        var definition = new BeanDefinition<>(ProfiledService.class, "profiledBean");
         containerWithDifferentProfile.register(definition, null);
         
         // Bean should be registered because the current implementation allows registration
@@ -1078,12 +1082,12 @@ class HybridContainerTest {
 
     @Test
     void testConditionalAnnotationWithMatchingCondition() {
-        HybridContainer container = new HybridContainer(
-            new HybridContainerConfig.Builder().build(), 
+        Container container = new Container(
+            new ContainerConfig.Builder().build(), 
             jitCompiler
         );
         
-        var definition = new io.github.yasmramos.warmup.core.registry.BeanDefinition<>(ConditionalService.class, "conditionalBean");
+        var definition = new BeanDefinition<>(ConditionalService.class, "conditionalBean");
         container.register(definition, null);
         
         // Bean should be registered since condition matches
@@ -1096,12 +1100,12 @@ class HybridContainerTest {
     @Test
     void testMultiProfileAnnotationWithPositiveMatch() {
         // Test with one of the positive profiles active
-        HybridContainer containerWithProd = new HybridContainer(
-            new HybridContainerConfig.Builder().activeProfiles("prod").build(), 
+        Container containerWithProd = new Container(
+            new ContainerConfig.Builder().activeProfiles("prod").build(), 
             jitCompiler
         );
         
-        var definition = new io.github.yasmramos.warmup.core.registry.BeanDefinition<>(MultiProfileService.class, "multiProfileBean");
+        var definition = new BeanDefinition<>(MultiProfileService.class, "multiProfileBean");
         containerWithProd.register(definition, null);
         
         // Bean should be registered since "prod" profile matches
@@ -1114,12 +1118,12 @@ class HybridContainerTest {
     void testMultiProfileAnnotationWithNegatedProfile() {
         // Test with both positive and negated profiles
         // Profile {"prod", "!dev"} means: register if "prod" is active AND "dev" is NOT active
-        HybridContainer containerWithDev = new HybridContainer(
-            new HybridContainerConfig.Builder().activeProfiles("dev").build(), 
+        Container containerWithDev = new Container(
+            new ContainerConfig.Builder().activeProfiles("dev").build(), 
             jitCompiler
         );
         
-        var definition = new io.github.yasmramos.warmup.core.registry.BeanDefinition<>(MultiProfileService.class, "multiProfileBean");
+        var definition = new BeanDefinition<>(MultiProfileService.class, "multiProfileBean");
         containerWithDev.register(definition, null);
         
         // Bean should be registered because the logic checks each profile independently
@@ -1133,12 +1137,12 @@ class HybridContainerTest {
     @Test
     void testMultiProfileAnnotationWithBothActive() {
         // Test with both prod and dev active - negated profile should prevent registration
-        HybridContainer containerWithBoth = new HybridContainer(
-            new HybridContainerConfig.Builder().activeProfiles("prod", "dev").build(), 
+        Container containerWithBoth = new Container(
+            new ContainerConfig.Builder().activeProfiles("prod", "dev").build(), 
             jitCompiler
         );
         
-        var definition = new io.github.yasmramos.warmup.core.registry.BeanDefinition<>(MultiProfileService.class, "multiProfileBean");
+        var definition = new BeanDefinition<>(MultiProfileService.class, "multiProfileBean");
         containerWithBoth.register(definition, null);
         
         // Bean is registered because the current implementation only checks negated profiles independently
@@ -1151,12 +1155,12 @@ class HybridContainerTest {
     void testGraalVMNativeImageDetection() {
         // This test verifies the GraalVM native image detection code path
         // Since we're not running in native image mode, this tests the fallback path
-        HybridContainer container = new HybridContainer(
-            new HybridContainerConfig.Builder().build(), 
+        Container container = new Container(
+            new ContainerConfig.Builder().build(), 
             jitCompiler
         );
         
-        var definition = new io.github.yasmramos.warmup.core.registry.BeanDefinition<>(TestService.class, "testBean");
+        var definition = new BeanDefinition<>(TestService.class, "testBean");
         container.register(definition, null);
         
         // Should work normally outside native image
@@ -1167,15 +1171,15 @@ class HybridContainerTest {
     @Test
     void testShouldRegisterBeanWithNegatedProfileOnly() {
         // Test that a bean with only negated profile (!dev) is registered when dev is NOT active
-        HybridContainer prodContainer = new HybridContainer(
-            new HybridContainerConfig.Builder().activeProfiles("prod").build(),
+        Container prodContainer = new Container(
+            new ContainerConfig.Builder().activeProfiles("prod").build(),
             jitCompiler
         );
         
         BeanDefinition<TestService> definition = new BeanDefinition<>(
             TestService.class, "negatedProfileBean",
-            io.github.yasmramos.warmup.core.scope.Scope.SINGLETON,
-            io.github.yasmramos.warmup.core.lifecycle.LifecycleCallbacks.empty(),
+            Scope.SINGLETON,
+            LifecycleCallbacks.empty(),
             false,
             new Object[0],
             new String[]{"!dev"},
@@ -1188,13 +1192,13 @@ class HybridContainerTest {
 
     @Test
     void testShouldNotRegisterBeanWithNegatedProfileActive() {
-        HybridContainerConfig config = new HybridContainerConfig.Builder().activeProfiles("prod").build();
-        HybridContainer prodContainer = new HybridContainer(config, jitCompiler);
+        ContainerConfig config = new ContainerConfig.Builder().activeProfiles("prod").build();
+        Container prodContainer = new Container(config, jitCompiler);
         
         BeanDefinition<TestService> definition = new BeanDefinition<>(
             TestService.class, "blockedByNegatedProfileBean",
-            io.github.yasmramos.warmup.core.scope.Scope.SINGLETON,
-            io.github.yasmramos.warmup.core.lifecycle.LifecycleCallbacks.empty(),
+            Scope.SINGLETON,
+            LifecycleCallbacks.empty(),
             false,
             new Object[0],
             new String[]{"!prod"},
@@ -1207,13 +1211,13 @@ class HybridContainerTest {
 
     @Test
     void testShouldNotRegisterBeanWithConditionThatReturnsFalse() {
-        HybridContainerConfig config = new HybridContainerConfig.Builder().activeProfiles("test").build();
-        HybridContainer container = new HybridContainer(config, jitCompiler);
+        ContainerConfig config = new ContainerConfig.Builder().activeProfiles("test").build();
+        Container container = new Container(config, jitCompiler);
         
         BeanDefinition<TestService> definition = new BeanDefinition<>(
             TestService.class, "conditionBlockedBean",
-            io.github.yasmramos.warmup.core.scope.Scope.SINGLETON,
-            io.github.yasmramos.warmup.core.lifecycle.LifecycleCallbacks.empty(),
+            Scope.SINGLETON,
+            LifecycleCallbacks.empty(),
             false,
             new Object[0],
             new String[0],
@@ -1226,15 +1230,15 @@ class HybridContainerTest {
 
     @Test
     void testShouldRegisterBeanWithConditionThatReturnsTrue() {
-        HybridContainer container = new HybridContainer(
-            new HybridContainerConfig.Builder().activeProfiles("test").build(),
+        Container container = new Container(
+            new ContainerConfig.Builder().activeProfiles("test").build(),
             jitCompiler
         );
         
         BeanDefinition<TestService> definition = new BeanDefinition<>(
             TestService.class, "conditionAllowedBean",
-            io.github.yasmramos.warmup.core.scope.Scope.SINGLETON,
-            io.github.yasmramos.warmup.core.lifecycle.LifecycleCallbacks.empty(),
+            Scope.SINGLETON,
+            LifecycleCallbacks.empty(),
             false,
             new Object[0],
             new String[0],
@@ -1247,13 +1251,13 @@ class HybridContainerTest {
 
     @Test
     void testWireFactoriesWithAllDependenciesResolved() {
-        var depDef = new io.github.yasmramos.warmup.core.registry.BeanDefinition<>(DependencyService.class, "depForWire");
+        var depDef = new BeanDefinition<>(DependencyService.class, "depForWire");
         container.register(depDef, null);
         
-        var def = new io.github.yasmramos.warmup.core.registry.BeanDefinition<>(
+        var def = new BeanDefinition<>(
             DependentService.class, "dependentForWire", 
-            io.github.yasmramos.warmup.core.scope.Scope.SINGLETON,
-            io.github.yasmramos.warmup.core.lifecycle.LifecycleCallbacks.empty(),
+            Scope.SINGLETON,
+            LifecycleCallbacks.empty(),
             false,
             new Object[]{"depForWire"}
         );
@@ -1267,10 +1271,10 @@ class HybridContainerTest {
 
     @Test
     void testWireFactoriesWithMissingDependency() {
-        var def = new io.github.yasmramos.warmup.core.registry.BeanDefinition<>(
+        var def = new BeanDefinition<>(
             DependentService.class, "dependentWithMissingDepForWire", 
-            io.github.yasmramos.warmup.core.scope.Scope.SINGLETON,
-            io.github.yasmramos.warmup.core.lifecycle.LifecycleCallbacks.empty(),
+            Scope.SINGLETON,
+            LifecycleCallbacks.empty(),
             false,
             new Object[]{"missingDepForWire"}
         );
@@ -1282,10 +1286,10 @@ class HybridContainerTest {
 
     @Test
     void testResolveWithMetricsEnabled() {
-        HybridContainerConfig config = new HybridContainerConfig.Builder().metricsEnabled(true).build();
-        HybridContainer metricsContainer = new HybridContainer(config, jitCompiler);
+        ContainerConfig config = new ContainerConfig.Builder().metricsEnabled(true).build();
+        Container metricsContainer = new Container(config, jitCompiler);
         
-        var definition = new io.github.yasmramos.warmup.core.registry.BeanDefinition<>(TestService.class, "metricsTestBean");
+        var definition = new BeanDefinition<>(TestService.class, "metricsTestBean");
         metricsContainer.register(definition, null);
         
         for (int i = 0; i < 5; i++) {
@@ -1302,12 +1306,12 @@ class HybridContainerTest {
 
     @Test
     void testResolveWithMetricsDisabled() {
-        HybridContainer noMetricsContainer = new HybridContainer(
-            new HybridContainerConfig.Builder().metricsEnabled(false).build(),
+        Container noMetricsContainer = new Container(
+            new ContainerConfig.Builder().metricsEnabled(false).build(),
             jitCompiler
         );
         
-        var definition = new io.github.yasmramos.warmup.core.registry.BeanDefinition<>(TestService.class, "noMetricsBean");
+        var definition = new BeanDefinition<>(TestService.class, "noMetricsBean");
         noMetricsContainer.register(definition, null);
         
         for (int i = 0; i < 5; i++) {
@@ -1321,12 +1325,12 @@ class HybridContainerTest {
 
     @Test
     void testComputeNativeImageFallback() {
-        HybridContainer container = new HybridContainer(
-            new HybridContainerConfig.Builder().build(),
+        Container container = new Container(
+            new ContainerConfig.Builder().build(),
             jitCompiler
         );
         
-        var definition = new io.github.yasmramos.warmup.core.registry.BeanDefinition<>(TestService.class, "jvmBean");
+        var definition = new BeanDefinition<>(TestService.class, "jvmBean");
         container.register(definition, null);
         
         TestService service = container.resolve(TestService.class);
@@ -1335,8 +1339,8 @@ class HybridContainerTest {
 
     @Test
     void testResolveByIndex() {
-        var definition1 = new io.github.yasmramos.warmup.core.registry.BeanDefinition<>(TestService.class, "bean1");
-        var definition2 = new io.github.yasmramos.warmup.core.registry.BeanDefinition<>(DependencyService.class, "bean2");
+        var definition1 = new BeanDefinition<>(TestService.class, "bean1");
+        var definition2 = new BeanDefinition<>(DependencyService.class, "bean2");
         
         container.register(definition1, null);
         container.register(definition2, null);
@@ -1350,7 +1354,7 @@ class HybridContainerTest {
 
     @Test
     void testIndexOf() {
-        var definition = new io.github.yasmramos.warmup.core.registry.BeanDefinition<>(TestService.class, "indexedBean");
+        var definition = new BeanDefinition<>(TestService.class, "indexedBean");
         container.register(definition, null);
         
         int index = container.indexOf("indexedBean");
@@ -1362,37 +1366,20 @@ class HybridContainerTest {
 
     @Test
     void testClose() {
-        var definition = new io.github.yasmramos.warmup.core.registry.BeanDefinition<>(TestService.class, "closeableBean");
+        var definition = new BeanDefinition<>(TestService.class, "closeableBean");
         container.register(definition, null);
         
         assertDoesNotThrow(() -> container.close());
     }
 
     @Test
-    void testRegisterFactoryWithString() {
-        var definition = new io.github.yasmramos.warmup.core.registry.BeanDefinition<>(TestService.class, "factoryBean");
-        container.register(definition, null);
-        
-        try {
-            CompiledFactory factory = jitCompiler.compile(TestService.class);
-            assertNotNull(factory);
-            
-            container.registerFactory("factoryBean", factory);
-            TestService service = container.resolve(TestService.class);
-            assertNotNull(service);
-        } catch (io.github.yasmramos.warmup.core.jit.CompilationException e) {
-            fail("Compilation exception: " + e.getMessage());
-        }
-    }
-
-    @Test
     void testDiagnostics() {
-        HybridContainer diagnosticContainer = new HybridContainer(
-            new HybridContainerConfig.Builder().diagnosticMode(true).build(),
+        Container diagnosticContainer = new Container(
+            new ContainerConfig.Builder().diagnosticMode(true).build(),
             jitCompiler
         );
         
-        var definition = new io.github.yasmramos.warmup.core.registry.BeanDefinition<>(TestService.class, "diagnosticBean");
+        var definition = new BeanDefinition<>(TestService.class, "diagnosticBean");
         diagnosticContainer.register(definition, null);
         
         var diagnostics = diagnosticContainer.getDiagnostics();
@@ -1401,8 +1388,8 @@ class HybridContainerTest {
 
     @Test
     void testResolveAllAsMap() {
-        var definition1 = new io.github.yasmramos.warmup.core.registry.BeanDefinition<>(TestService.class, "mapBean1");
-        var definition2 = new io.github.yasmramos.warmup.core.registry.BeanDefinition<>(TestService.class, "mapBean2");
+        var definition1 = new BeanDefinition<>(TestService.class, "mapBean1");
+        var definition2 = new BeanDefinition<>(TestService.class, "mapBean2");
         
         container.register(definition1, null);
         container.register(definition2, null);
@@ -1414,7 +1401,7 @@ class HybridContainerTest {
 
     @Test
     void testBackgroundWarmupWithLambda() {
-        var definition = new io.github.yasmramos.warmup.core.registry.BeanDefinition<>(TestService.class, "backgroundBean");
+        var definition = new BeanDefinition<>(TestService.class, "backgroundBean");
         container.register(definition, null);
         
         // Wait a bit for background warmup to complete
@@ -1430,7 +1417,7 @@ class HybridContainerTest {
 
     @Test
     void testReloadFunctionality() {
-        var definition = new io.github.yasmramos.warmup.core.registry.BeanDefinition<>(TestService.class, "reloadBean");
+        var definition = new BeanDefinition<>(TestService.class, "reloadBean");
         container.register(definition, null);
         
         // Test reload functionality

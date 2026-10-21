@@ -28,7 +28,7 @@ import java.util.concurrent.TimeUnit;
  * To compare scalability, one would need to generate N bean classes at compile-time
  * for both frameworks, which is beyond the scope of this benchmark.
  */
-@State(org.openjdk.jmh.annotations.Scope.Benchmark)
+@State(Scope.Benchmark)
 @BenchmarkMode(Mode.AverageTime)
 @OutputTimeUnit(TimeUnit.MILLISECONDS)
 public class AvajeStartupBenchmark {

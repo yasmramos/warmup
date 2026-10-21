@@ -1,6 +1,5 @@
 package io.github.yasmramos.warmup.core.registry;
 
-import io.github.yasmramos.warmup.core.registry.BeanDefinition;
 import io.github.yasmramos.warmup.core.lifecycle.LifecycleCallbacks;
 import io.github.yasmramos.warmup.core.scope.Scope;
 import org.junit.jupiter.api.Test;
