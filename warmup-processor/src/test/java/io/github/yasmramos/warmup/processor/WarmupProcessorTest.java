@@ -1715,4 +1715,40 @@ class WarmupProcessorTest {
         assertTrue(compilation.generatedFile(StandardLocation.CLASS_OUTPUT, "test/ContainerClass$NestedService$$WarmupFactory.class").isPresent(),
             "Should generate factory for static nested class with @Singleton");
     }
+
+    @Test
+    void testProcessFxControllerAnnotation() {
+        // Stub of the annotation from warmup-javafx so this module stays decoupled:
+        // the processor discovers it purely by qualified name.
+        JavaFileObject fxControllerAnnotation = JavaFileObjects.forSourceLines(
+            "io.github.yasmramos.warmup.javafx.FxController",
+            "package io.github.yasmramos.warmup.javafx;",
+            "import java.lang.annotation.ElementType;",
+            "import java.lang.annotation.Retention;",
+            "import java.lang.annotation.RetentionPolicy;",
+            "import java.lang.annotation.Target;",
+            "@Retention(RetentionPolicy.RUNTIME)",
+            "@Target(ElementType.TYPE)",
+            "public @interface FxController {",
+            "    String fxml() default \"\";",
+            "    Scope scope() default Scope.PROTOTYPE;",
+            "    enum Scope { SINGLETON, PROTOTYPE, CUSTOM }",
+            "}"
+        );
+        JavaFileObject controller = JavaFileObjects.forSourceLines(
+            "test.MyFxController",
+            "package test;",
+            "import io.github.yasmramos.warmup.javafx.FxController;",
+            "",
+            "@FxController(fxml = \"/test/view.fxml\")",
+            "public class MyFxController {",
+            "    public MyFxController() {}",
+            "}"
+        );
+
+        Compilation compilation = compiler.compile(fxControllerAnnotation, controller);
+
+        assertTrue(compilation.generatedFile(StandardLocation.CLASS_OUTPUT, "test/MyFxController$$WarmupFactory.class").isPresent(),
+            "Should generate a factory for @FxController classes");
+    }
 }

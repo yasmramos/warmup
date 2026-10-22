@@ -75,7 +75,7 @@ import java.util.*;
     "io.github.yasmramos.warmup.annotations.Profile",
     "io.github.yasmramos.warmup.annotations.Conditional",
     "io.github.yasmramos.warmup.annotations.EventListener",
-    "io.github.yasmramos.warmup.javafx.WarmupFxController"
+    "io.github.yasmramos.warmup.javafx.FxController"
 })
 @SupportedSourceVersion(SourceVersion.RELEASE_17)
 public class WarmupProcessor extends AbstractProcessor {
@@ -185,7 +185,7 @@ public class WarmupProcessor extends AbstractProcessor {
         // These imply @Bean with a specific scope
         processClassStereotypes(roundEnv, filer, messager);
         
-        // Process @WarmupFxController annotation (by qualified name to avoid coupling)
+        // Process @FxController annotation (by qualified name to avoid coupling)
         processFxControllers(roundEnv, filer, messager);
         
         // Process @Factory classes with @Bean methods
@@ -340,32 +340,32 @@ public class WarmupProcessor extends AbstractProcessor {
     }
     
     /**
-     * Processes classes annotated with @WarmupFxController.
+     * Processes classes annotated with @FxController.
      * This annotation is discovered by qualified name to avoid coupling warmup-processor to warmup-javafx.
      * If the annotation class is not found (JavaFX module not on classpath), processing is silently skipped.
      */
     private void processFxControllers(RoundEnvironment roundEnv, Filer filer, Messager messager) {
         // Try to get the annotation type element by qualified name
         TypeElement annotationTypeElement = processingEnv.getElementUtils()
-            .getTypeElement("io.github.yasmramos.warmup.javafx.WarmupFxController");
+            .getTypeElement("io.github.yasmramos.warmup.javafx.FxController");
         
         // If null, the JavaFX module is not on the classpath - skip silently
         if (annotationTypeElement == null) {
             return;
         }
         
-        // Process all elements annotated with @WarmupFxController
+        // Process all elements annotated with @FxController
         for (Element element : roundEnv.getElementsAnnotatedWith(annotationTypeElement)) {
             if (element.getKind() != ElementKind.CLASS) {
                 messager.printMessage(Diagnostic.Kind.ERROR, 
-                    "@WarmupFxController only applies to classes", element);
+                    "@FxController only applies to classes", element);
                 continue;
             }
             
             TypeElement typeElement = (TypeElement) element;
             
             // Validate nested class: must be static
-            if (!validateNestedClass(typeElement, messager, "@WarmupFxController")) {
+            if (!validateNestedClass(typeElement, messager, "@FxController")) {
                 continue;
             }
             
@@ -387,7 +387,7 @@ public class WarmupProcessor extends AbstractProcessor {
     
     /**
      * Extracts the scope value from an annotation mirror.
-     * Default is PROTOTYPE for @WarmupFxController.
+     * Default is PROTOTYPE for @FxController.
      */
     private String extractScopeFromAnnotationMirror(Element element, TypeElement annotationType) {
         for (AnnotationMirror mirror : element.getAnnotationMirrors()) {
@@ -417,7 +417,7 @@ public class WarmupProcessor extends AbstractProcessor {
                 for (Map.Entry<? extends ExecutableElement, ? extends AnnotationValue> entry : mirror.getElementValues().entrySet()) {
                     if (entry.getKey().getSimpleName().toString().equals("value") || 
                         entry.getKey().getSimpleName().toString().equals("fxml")) {
-                        // For @WarmupFxController, there's no 'value' attribute for bean name
+                        // For @FxController, there's no 'value' attribute for bean name
                         // The fxml attribute is separate, bean name uses default behavior
                         return "";
                     }
