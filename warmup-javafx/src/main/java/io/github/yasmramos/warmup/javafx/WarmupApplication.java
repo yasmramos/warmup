@@ -141,13 +141,39 @@ public abstract class WarmupApplication extends Application {
     }
 
     /**
+     * Register a loaded view for hot-reload. When the view's FXML changes, the
+     * stage's scene root is replaced with the newly loaded root.
+     *
+     * <p>Several stages/views can be tracked independently with this overload;
+     * prefer it over {@link #registerSceneForHotReload(Stage, Parent)}.</p>
+     *
+     * @param stage the stage displaying the view
+     * @param view the loaded view (from {@code fxLoader.loadView(...)})
+     */
+    protected void registerSceneForHotReload(Stage stage, FxView<?> view) {
+        if (fxLoader == null || stage == null || view == null) {
+            return;
+        }
+        fxLoader.registerRootReplacer(view.fxmlPath(), newRoot -> Platform.runLater(() -> {
+            if (stage.getScene() == null) {
+                stage.setScene(new Scene(newRoot));
+            } else {
+                stage.getScene().setRoot(newRoot);
+            }
+        }));
+    }
+
+    /**
      * Register the current scene root for hot-reload support. This allows the
      * FxLoader to replace the scene root when FXML is reloaded.
+     *
+     * <p>This registers a global replacer: only the last call wins. Use
+     * {@link #registerSceneForHotReload(Stage, FxView)} to track several views
+     * independently.</p>
      *
      * @param stage the primary stage containing the scene
      * @param root the current root node of the scene
      */
-    //TODO: Deveriamos poder permitir añadir mas escenas sin necesidad de elimnar la que ya existe asi el hotreload seria por escena registrada no por la ultima q se registro
     protected void registerSceneForHotReload(Stage stage, Parent root) {
         if (fxLoader == null) {
             return;

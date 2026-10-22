@@ -91,11 +91,73 @@ class FxLoaderTest extends ApplicationTest {
     }
 
     @Test
+    void testLoadViewReturnsControllerForPrototype() throws Exception {
+        warmup.register("testService", TestService.class, TestService::new, Scope.SINGLETON);
+        warmup.register("testControllerWithFxml", TestControllerWithFxml.class, () -> {
+            TestControllerWithFxml controller = new TestControllerWithFxml();
+            controller.service = warmup.resolve(TestService.class);
+            return controller;
+        }, Scope.PROTOTYPE);
+
+        FxView<TestControllerWithFxml> view = fxLoader.loadView(TestControllerWithFxml.class);
+
+        assertNotNull(view.root(), "View root should be loaded");
+        assertNotNull(view.controller(), "Prototype controllers must be returned with the view");
+        assertEquals("TestService", view.controller().getService().getName());
+        assertEquals(TestControllerWithFxml.class, view.controllerClass());
+        assertNotNull(view.resourceBundle(), "bundle() from @FxController should be loaded automatically");
+        assertTrue(view.root().getStylesheets().stream().anyMatch(uri -> uri.endsWith("test.css")),
+                "css() from @FxController should be applied to the root");
+    }
+
+    @Test
+    void testRootReplacersAreScopedPerFxml() throws Exception {
+        warmup.register("secondController", SecondController.class, SecondController::new, Scope.PROTOTYPE);
+        warmup.register("testService", TestService.class, TestService::new, Scope.SINGLETON);
+        warmup.register("testControllerWithFxml", TestControllerWithFxml.class, () -> {
+            TestControllerWithFxml controller = new TestControllerWithFxml();
+            controller.service = warmup.resolve(TestService.class);
+            return controller;
+        }, Scope.PROTOTYPE);
+
+        assertNotNull(fxLoader.loadController(TestControllerWithFxml.class));
+        assertNotNull(fxLoader.loadController(SecondController.class));
+
+        AtomicInteger firstReloads = new AtomicInteger();
+        AtomicInteger secondReloads = new AtomicInteger();
+        fxLoader.registerRootReplacer(TestControllerWithFxml.class.getAnnotation(FxController.class).fxml(),
+                root -> firstReloads.incrementAndGet());
+        fxLoader.registerRootReplacer(SecondController.class.getAnnotation(FxController.class).fxml(),
+                root -> secondReloads.incrementAndGet());
+
+        fxLoader.reloadController(TestControllerWithFxml.class);
+
+        assertEquals(1, firstReloads.get(), "Replacer for the reloaded FXML should fire");
+        assertEquals(0, secondReloads.get(), "Replacer for a different FXML must not fire");
+    }
+
+    @Test
+    void testReloadAllReloadsEveryTrackedView() throws Exception {
+        warmup.register("secondController", SecondController.class, SecondController::new, Scope.PROTOTYPE);
+        warmup.register("testService", TestService.class, TestService::new, Scope.SINGLETON);
+        warmup.register("testControllerWithFxml", TestControllerWithFxml.class, () -> {
+            TestControllerWithFxml controller = new TestControllerWithFxml();
+            controller.service = warmup.resolve(TestService.class);
+            return controller;
+        }, Scope.PROTOTYPE);
+
+        fxLoader.loadController(TestControllerWithFxml.class);
+        fxLoader.loadController(SecondController.class);
+
+        assertEquals(2, fxLoader.reloadAll().size(), "reloadAll() should reload each distinct FXML once");
+    }
+
+    @Test
     void testLoadControllerWithoutAnnotation_ThrowsIllegalArgumentException() {
         // UnregisteredController is NOT annotated with @FxController
         assertThrows(IllegalArgumentException.class, () -> {
             fxLoader.loadController(UnregisteredController.class);
-        }, "Should throw IllegalArgumentException for controller without @WarmupFxController");
+        }, "Should throw IllegalArgumentException for controller without @FxController");
     }
 
     @Test
@@ -372,7 +434,10 @@ class FxLoaderTest extends ApplicationTest {
         }
     }
 
-    @FxController(fxml = "/io/github/yasmramos/warmup/javafx/test.fxml")
+    @FxController(
+            fxml = "/io/github/yasmramos/warmup/javafx/test.fxml",
+            bundle = "io.github.yasmramos.warmup.javafx.test-messages",
+            css = "/io/github/yasmramos/warmup/javafx/test.css")
     public static class TestControllerWithFxml {
 
         @Inject
@@ -382,6 +447,11 @@ class FxLoaderTest extends ApplicationTest {
         public TestService getService() {
             return service;
         }
+    }
+
+    @FxController(fxml = "/io/github/yasmramos/warmup/javafx/test2.fxml")
+    public static class SecondController {
+        // Used to verify that hot-reload tracking is scoped per FXML
     }
 
     @FxController(fxml = "")
