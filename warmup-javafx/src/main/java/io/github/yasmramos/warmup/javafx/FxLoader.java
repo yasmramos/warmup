@@ -307,14 +307,42 @@ public class FxLoader {
         // Set controller factory for DI - all controllers are resolved from container
         loader.setControllerFactory(this::createController);
 
-        Platform.runLater(() -> {
+        // FXMLLoader creates scene nodes, so loading must run on the JavaFX
+        // Application Thread. When we are already on it, load synchronously;
+        // otherwise dispatch and wait so the caller still gets the loaded root
+        // (previously this returned before load() had run, leaving root null).
+        if (Platform.isFxApplicationThread()) {
+            // Load FXML - let FXMLLoader handle the stream internally to avoid file handle leaks
+            loader.load();
+        } else {
+            CompletableFuture<Void> loaded = new CompletableFuture<>();
+            Platform.runLater(() -> {
+                try {
+                    loader.load();
+                    loaded.complete(null);
+                } catch (Throwable t) {
+                    loaded.completeExceptionally(t);
+                }
+            });
             try {
-                // Load FXML - let FXMLLoader handle the stream internally to avoid file handle leaks
-                loader.load();
-            } catch (IOException ex) {
-                System.getLogger(FxLoader.class.getName()).log(System.Logger.Level.ERROR, (String) null, ex);
+                loaded.get();
+            } catch (InterruptedException ex) {
+                Thread.currentThread().interrupt();
+                throw new IOException("Interrupted while loading FXML: " + fxmlPath, ex);
+            } catch (ExecutionException ex) {
+                Throwable cause = ex.getCause();
+                if (cause instanceof IOException ioException) {
+                    throw ioException;
+                }
+                if (cause instanceof RuntimeException runtimeException) {
+                    throw runtimeException;
+                }
+                if (cause instanceof Error error) {
+                    throw error;
+                }
+                throw new IOException("Failed to load FXML: " + fxmlPath, cause);
             }
-        });
+        }
 
         Parent root = loader.getRoot();
 

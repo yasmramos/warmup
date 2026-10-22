@@ -281,12 +281,57 @@ class FxLoaderTest extends ApplicationTest {
     }
 
     @Test
-    void testCssLoadAndTracking() {
-        // Load a CSS file (using a non-existent path to test tracking)
-        String cssUrl = fxLoader.loadCss("/io/github/yasmramos/warmup/javafx/test.css");
+    void testLoadControllerPropagatesControllerFactoryFailure() {
+        // A failing controller factory must surface to the caller instead of
+        // being swallowed (and must not leave a null root behind).
+        warmup.register("testControllerWithFxml", TestControllerWithFxml.class, () -> {
+            throw new IllegalStateException("controller creation failed");
+        }, Scope.PROTOTYPE);
 
-        // Since the CSS doesn't exist, it should return null
-        assertNull(cssUrl);
+        // FXMLLoader wraps parsing/controller failures in LoadException (an IOException).
+        IOException failure = assertThrows(IOException.class,
+                () -> fxLoader.loadController(TestControllerWithFxml.class),
+                "Controller factory failures should propagate");
+
+        Throwable current = failure;
+        boolean foundCause = false;
+        while (current != null) {
+            if (current instanceof IllegalStateException && "controller creation failed".equals(current.getMessage())) {
+                foundCause = true;
+                break;
+            }
+            current = current.getCause();
+        }
+        assertTrue(foundCause, "Expected the original IllegalStateException in the cause chain");
+    }
+
+    @Test
+    void testCssLoadAndTracking() {
+        // An existing stylesheet is resolved and tracked for hot-reload
+        String cssUrl = fxLoader.loadCss("/io/github/yasmramos/warmup/javafx/test.css");
+        assertNotNull(cssUrl, "Existing stylesheet should resolve to a URL");
+
+        // A missing stylesheet resolves to null
+        assertNull(fxLoader.loadCss("/io/github/yasmramos/warmup/javafx/missing.css"));
+    }
+
+    @Test
+    void testRegisterAndUnregisterScene() {
+        interact(() -> {
+            javafx.scene.layout.StackPane root = new javafx.scene.layout.StackPane();
+            javafx.scene.Scene scene = new javafx.scene.Scene(root);
+
+            fxLoader.registerScene(scene);
+            fxLoader.registerScene(scene); // duplicate registrations are ignored
+            fxLoader.registerScene(null);  // nulls are ignored
+            fxLoader.unregisterScene(scene);
+        });
+    }
+
+    @Test
+    void testLoadFxmlWithMissingResourceThrowsIOException() {
+        assertThrows(IOException.class,
+                () -> fxLoader.loadFxml("/io/github/yasmramos/warmup/javafx/missing.fxml"));
     }
 
     @Test
