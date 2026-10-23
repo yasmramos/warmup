@@ -311,6 +311,60 @@ public class Warmup implements AutoCloseable {
     public int indexOf(String name) {
         return container.indexOf(name);
     }
+
+    /**
+     * Resolves a bean by integer index (experimental fast path). Bypasses
+     * String hashing and ClassValue lookup via direct array access. The
+     * behavior is scope-aware: cached singletons are returned directly (null
+     * if not yet created), while prototypes produce a new instance through the
+     * container's compiled factory on every call.
+     *
+     * <p>
+     * Intended for benchmarks and performance-critical internal paths, not
+     * daily application code. Pair with {@link #indexOf(String)}.</p>
+     *
+     * @param <T> the bean type
+     * @param index the bean index (obtained via {@link #indexOf(String)})
+     * @return the cached singleton instance (or null if not present), or a
+     *         newly created prototype instance
+     * @experimental Internal API for performance-critical paths
+     */
+    public <T> T resolveByIndex(int index) {
+        return container.resolveByIndex(index);
+    }
+
+    /**
+     * Returns the compiled factory the container actually uses for the given
+     * type (same instance as on the production resolution path). Forces JIT
+     * compilation if the factory has not been computed yet; returns null if
+     * no bean definition exists for the type.
+     *
+     * <p>
+     * Intended for diagnostics and benchmarks that must measure the real
+     * container-managed factory instead of a standalone compiler instance.</p>
+     *
+     * @param <T> the bean type
+     * @param type the bean class
+     * @return the container's compiled factory, or null if the type is unknown
+     * @see Container#getCompiledFactory(Class)
+     */
+    public <T> CompiledFactory<T> getCompiledFactory(Class<T> type) {
+        return container.getCompiledFactory(type);
+    }
+
+    /**
+     * Returns the internal container backing this facade. Intended strictly for
+     * benchmarks and diagnostics that need container-level APIs not exposed on
+     * the public facade (e.g. name-based resolution of ambiguous types).
+     *
+     * <p><strong>Do not use in application code.</strong> Prefer the facade
+     * methods ({@link #resolve(Class)}, {@link #handle(Class)}, etc.).</p>
+     *
+     * @return the internal container instance
+     */
+    public Container getContainer() {
+        return container;
+    }
     
     public CompletableFuture<?> warmupAsync(){
         throw new UnsupportedOperationException("Not supported yet");

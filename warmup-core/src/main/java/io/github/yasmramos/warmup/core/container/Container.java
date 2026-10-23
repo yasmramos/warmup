@@ -1053,14 +1053,21 @@ public class Container implements HotReloadCapable, AutoCloseable {
     }
 
     /**
-     * Resolves a singleton bean by integer index (experimental fast path). This
-     * method bypasses String hashing and Map lookup, using direct array access.
-     * Only works for cached singletons; returns null if the bean is not yet
-     * cached.
+     * Resolves a bean by integer index (experimental fast path). This method
+     * bypasses String hashing and Map lookup, using direct array access. The
+     * behavior is scope-aware:
+     * <ul>
+     *   <li>SINGLETON: returns the cached instance directly, or null if the
+     *       singleton has not been created yet.</li>
+     *   <li>PROTOTYPE: creates a new instance through the container's compiled
+     *       factory (the same wired fast path used by name-based resolution),
+     *       so prototypes never return null.</li>
+     * </ul>
      *
      * @param <T> the bean type
      * @param index the bean index (obtained via {@link #indexOf(String)})
-     * @return the cached singleton instance, or null if not present
+     * @return the singleton instance (or null if not yet created), or a newly
+     *         created prototype instance
      * @experimental Internal API for performance-critical paths
      */
     @SuppressWarnings("unchecked")
@@ -1078,6 +1085,28 @@ public class Container implements HotReloadCapable, AutoCloseable {
             }
             return cachedInstance;
         }
+
+        // Not a cached singleton. Look up the definition via the index-parallel
+        // array to distinguish prototypes (never cached) from missing beans.
+        if (registry instanceof BeanRegistryImpl impl) {
+            ResolvedBeanDefinition<T> resolvedDef = impl.getResolvedByIndex(index);
+            if (resolvedDef != null && resolvedDef.isPrototype()) {
+                CompiledFactory<T> factory = resolvedDef.getOrComputeFactory(factoryCache);
+                T instance;
+                if (factory != null) {
+                    instance = createPrototypeBeanWithFactory(resolvedDef, factory);
+                } else {
+                    instance = createViaReflectionWithoutDeferredInjection(resolvedDef);
+                }
+                if (resolvedDef.lifecycle().onInit() != null) {
+                    resolvedDef.lifecycle().onInit().onInit(instance);
+                }
+                if (metricsEnabled) {
+                    totalResolutions.add(1);
+                }
+                return instance;
+            }
+        }
         return null;
     }
 
@@ -1090,6 +1119,32 @@ public class Container implements HotReloadCapable, AutoCloseable {
      */
     public int indexOf(String name) {
         return registry.indexOf(name);
+    }
+
+    /**
+     * Returns the compiled factory the container actually uses for the given
+     * type, forcing JIT compilation if it has not been computed yet. This is
+     * the exact {@link CompiledFactory} instance used on the production
+     * resolution path (same generation, same hidden class).
+     *
+     * <p>
+     * Intended for diagnostics and benchmarks that must measure the real
+     * container-managed factory instead of a standalone compiler instance.
+     * Returns {@code null} if no bean definition exists for the type.</p>
+     *
+     * @param <T> the bean type
+     * @param type the bean class
+     * @return the container's compiled factory, or null if the type is unknown
+     * @see #resolveByIndex(int)
+     */
+    @SuppressWarnings("unchecked")
+    public <T> CompiledFactory<T> getCompiledFactory(Class<T> type) {
+        ResolvedBeanDefinition<T> resolvedDef =
+                (ResolvedBeanDefinition<T>) resolvedDefinitionsByClassValue.get(type);
+        if (resolvedDef.isNotFound()) {
+            return null;
+        }
+        return resolvedDef.getOrComputeFactory(factoryCache);
     }
 
     /**
