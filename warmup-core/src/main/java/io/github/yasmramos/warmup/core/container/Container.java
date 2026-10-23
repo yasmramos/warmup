@@ -476,6 +476,86 @@ public class Container implements HotReloadCapable, AutoCloseable {
                 }
             }
         }
+
+        // Flatten constructor dependency indices so the hot wiring loop can
+        // skip string marker checks and name lookups (see
+        // resolveNonDeferredDependencies). Runs after wiring because it relies
+        // on the same "all deps are plain bean names" condition.
+        flattenConstructorDependencies();
+    }
+
+    /**
+     * Pre-computes, for every registered bean whose constructor dependencies
+     * are all plain bean-name references (no {@code @Value} placeholders, no
+     * collection/optional markers, no deferred injections), the registry index
+     * of each dependency and stores it on the {@link ResolvedBeanDefinition}.
+     *
+     * <p>
+     * This is the startup half of the wiring-loop optimization: the creation
+     * path then reads these indices directly instead of re-running
+     * {@code isMarker(...)} string checks and {@code indexOf(...)} lookups on
+     * every prototype instantiation. Beans that do not qualify keep a
+     * {@code null} flat array and stay on the generic resolution loop.</p>
+     */
+    private void flattenConstructorDependencies() {
+        for (String name : registry.getAllNames()) {
+            ResolvedBeanDefinition<?> resolvedDef = registry.getResolvedOrNull(name);
+            if (resolvedDef == null) {
+                continue;
+            }
+            BeanDefinition<?> definition = resolvedDef.getDefinition();
+            Object[] dependencies = definition.dependencies();
+            if (dependencies.length == 0) {
+                continue;
+            }
+            // Deferred dependencies need null placeholders / post-construct
+            // injection; keep those beans on the generic loop.
+            boolean hasDeferred = false;
+            for (int i = 0; i < dependencies.length; i++) {
+                if (definition.isDeferredDependency(i)) {
+                    hasDeferred = true;
+                    break;
+                }
+            }
+            if (hasDeferred) {
+                continue;
+            }
+            int[] flatIndices = new int[dependencies.length];
+            boolean allPlainBeans = true;
+            boolean hasNonSingletonDep = false;
+            for (int i = 0; i < dependencies.length; i++) {
+                Object dep = dependencies[i];
+                if (!(dep instanceof String depName)
+                        || CollectionDependency.isMarker(depName)
+                        || OptionalDependency.isMarker(depName)
+                        || TypedValueDependency.isMarker(depName)
+                        || isValueExpression(depName)) {
+                    allPlainBeans = false;
+                    break;
+                }
+                int idx = registry.indexOf(depName);
+                if (idx < 0) {
+                    // Forward reference: leave unflattened; the generic loop
+                    // resolves by name and caches the index lazily.
+                    allPlainBeans = false;
+                    break;
+                }
+                flatIndices[i] = idx;
+                // Track whether any slot is a non-singleton dependency so the
+                // hot wiring loop knows it must fall back to per-slot name
+                // resolution instead of assuming an indexed cache hit.
+                ResolvedBeanDefinition<?> depDef =
+                        ((BeanRegistryImpl) registry).getResolvedByIndex(idx);
+                if (depDef == null || depDef.isPrototype()
+                        || registry.getIfPresent(idx) == null) {
+                    hasNonSingletonDep = true;
+                }
+            }
+            if (allPlainBeans) {
+                resolvedDef.setFlatDepIndices(flatIndices);
+                resolvedDef.setFlatDepHasNonSingleton(hasNonSingletonDep);
+            }
+        }
     }
 
     /**
@@ -1366,11 +1446,21 @@ public class Container implements HotReloadCapable, AutoCloseable {
      * @param resolvedDef the bean about to be created
      */
     private void ensureDependsOn(ResolvedBeanDefinition<?> resolvedDef) {
-        BeanDefinition<?> definition = resolvedDef.getDefinition();
-        String[] names = effectiveDependsOn(definition);
+        // Fast path: use the pre-computed effective @DependsOn list when the
+        // flattening pass already ran. This avoids a reflective annotation
+        // scan on every bean creation (prototypes re-enter this method on
+        // each resolve). An empty cached array means "no declared deps":
+        // return immediately without touching the cycle-detection set.
+        String[] names = resolvedDef.getDependsOnCache();
+        if (names == null) {
+            BeanDefinition<?> definition = resolvedDef.getDefinition();
+            names = effectiveDependsOn(definition);
+            resolvedDef.setDependsOnCache(names);
+        }
         if (names.length == 0) {
             return;
         }
+        BeanDefinition<?> definition = resolvedDef.getDefinition();
         String self = definition.name();
         if (!dependsOnInProgress.add(self)) {
             throw new IllegalStateException(
@@ -2131,9 +2221,66 @@ public class Container implements HotReloadCapable, AutoCloseable {
             return EMPTY_ARGS;
         }
 
+        // FLATTENED FAST PATH: when the dependency-flattening pass has run,
+        // every constructor slot is a plain bean reference with a pre-resolved
+        // registry index. The hot loop then reduces to an array load plus a
+        // direct indexed cache read: no string marker checks, no indexOf
+        // lookups, no per-dependency fallback dispatch. This is the dominant
+        // cost in prototype re-resolution (~150 ns per dependency before this
+        // optimization).
+        int[] flatIndices = null;
+        ResolvedBeanDefinition<?> resolvedDef = registry.getResolvedOrNull(definition.name());
+        if (resolvedDef != null && nonDeferredCount == dependencies.length) {
+            flatIndices = resolvedDef.getFlatDepIndices();
+            if (flatIndices != null && flatIndices.length == dependencies.length) {
+                boolean allPlainBeans = true;
+                for (int i = 0; i < flatIndices.length; i++) {
+                    if (flatIndices[i] < 0) {
+                        allPlainBeans = false;
+                        break;
+                    }
+                }
+                if (allPlainBeans) {
+                    Object[] deps = new Object[nonDeferredCount];
+                    // When every flattened slot is a cached singleton, the
+                    // indexed read always hits and no per-slot fallback or
+                    // scope check is needed. The flag lets the loop skip both.
+                    boolean allSingletonDeps = !resolvedDef.hasFlatDepNonSingleton();
+                    for (int i = 0; i < flatIndices.length; i++) {
+                        Object instance = registry.getIfPresent(flatIndices[i]);
+                        // Cached singleton hit: done without any string work.
+                        if (instance != null) {
+                            deps[i] = instance;
+                        } else if (allSingletonDeps) {
+                            // A dependency that was cached at flattening time
+                            // became uncached (hot reload / reset). Re-run the
+                            // flattening classification once so subsequent
+                            // creations take the correct branch, then resolve
+                            // this slot by name.
+                            resolvedDef.setFlatDepHasNonSingleton(true);
+                            allSingletonDeps = false;
+                            deps[i] = resolveByName((String) dependencies[i]);
+                        } else {
+                            // Prototype dependency: create a fresh instance via
+                            // the scope-aware index path (no string hashing);
+                            // everything else falls back to name resolution.
+                            ResolvedBeanDefinition<?> depDef =
+                                    ((BeanRegistryImpl) registry).getResolvedByIndex(flatIndices[i]);
+                            if (depDef != null && depDef.isPrototype()) {
+                                deps[i] = resolveByIndex(flatIndices[i]);
+                            } else {
+                                deps[i] = resolveByName((String) dependencies[i]);
+                            }
+                        }
+                    }
+                    return deps;
+                }
+            }
+        }
+
         Object[] deps = new Object[nonDeferredCount];
         int depIndex = 0;
-        int[] depIndices = definition.dependencyIndices();
+        int[] depIndices = flatIndices != null ? flatIndices : definition.dependencyIndices();
 
         for (int i = 0; i < dependencies.length; i++) {
             // Skip deferred dependencies (marked as @Lazy on field/setter)
