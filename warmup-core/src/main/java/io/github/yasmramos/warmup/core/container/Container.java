@@ -399,9 +399,15 @@ public class Container implements HotReloadCapable, AutoCloseable {
      * Wires all registered factories with their dependency factories. Called
      * after all factories are registered to enable direct factory-to-factory
      * calls.
+     *
+     * <p>
+     * Exposed publicly so callers that register compile-time factories after
+     * container construction (for example benchmarks or hot-reload tooling) can
+     * replicate the wiring pass that the ServiceLoader discovery path performs
+     * during startup, keeping those beans on the wired fast path.</p>
      */
     @SuppressWarnings("unchecked")
-    private void wireFactories() {
+    public void wireFactories() {
         for (Map.Entry<String, CompiledFactory<?>> entry : factoryCache.entrySet()) {
             String beanName = entry.getKey();
             CompiledFactory<?> factory = entry.getValue();

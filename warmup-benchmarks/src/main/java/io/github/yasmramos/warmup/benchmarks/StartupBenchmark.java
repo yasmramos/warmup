@@ -4,6 +4,7 @@ import io.github.yasmramos.warmup.asm.AsmJITCompiler;
 import io.github.yasmramos.warmup.core.Warmup;
 import io.github.yasmramos.warmup.core.container.Container;
 import io.github.yasmramos.warmup.core.container.ContainerConfig;
+import io.github.yasmramos.warmup.core.jit.CompiledFactory;
 import io.github.yasmramos.warmup.core.registry.BeanDefinition;
 import io.github.yasmramos.warmup.core.scope.Scope;
 import org.openjdk.jmh.annotations.Benchmark;
@@ -26,21 +27,54 @@ import java.util.concurrent.TimeUnit;
  * counts.
  *
  * <p>
- * This benchmark compares two registration strategies:</p>
+ * This benchmark compares two registration strategies using honest, symmetric
+ * paths:</p>
  * <ul>
- * <li>{@code startupWithBeansDynamic}: Uses {@code registerDynamic()} which
- * triggers JIT compilation</li>
- * <li>{@code startupWithBeansCompileTime}: Uses compile-time factories via
- * auto-discovery (no JIT overhead)</li>
+ * <li>{@code startupWithBeansDynamic}: Uses {@code registerDynamic()}, which
+ * marks each bean for lazy JIT compilation. All beans are then resolved inside
+ * the measured region so the ASM compilation cost is paid within the benchmark
+ * (full startup), not deferred to container shutdown.</li>
+ * <li>{@code startupWithBeansCompileTime}: Registers the same number of beans
+ * through the compile-time path only: a {@link BeanDefinition} plus a
+ * pre-compiled {@link CompiledFactory} wired via
+ * {@code Container.register(definition, factory)} - the exact mechanism the
+ * annotation processor uses through ServiceLoader-discovered
+ * {@code FactoryRegistrar}s. No JIT compilation and no background warmup ever
+ * occur on this path.</li>
  * </ul>
  *
  * <p>
- * Scenarios: 10, 100, 1000 beans</p>
+ * Both benchmarks force resolution of every registered bean inside the
+ * measured region, so they measure "registration + instantiation" on their
+ * respective paths, making the per-bean comparison fair. Divide the reported
+ * average by {@code beanCount} to obtain the per-bean startup cost.</p>
  *
  * <p>
-Note: This benchmark uses explicit Container construction to measure
-raw startup performance. For production usage, prefer
-Warmup.builder().build().</p>
+ * Fixes applied relative to previous versions of this benchmark:</p>
+ * <ul>
+ * <li>The compile-time benchmark previously called {@code registerDynamic()}
+ * (the dynamic/JIT path), which made the "compile-time vs dynamic" comparison
+ * tautological and produced flat numbers regardless of {@code beanCount}. It
+ * now exercises only the real compile-time registration API.</li>
+ * <li>{@code diagnostic(true)} was previously enabled only on the compile-time
+ * benchmark, penalizing it unfairly against the dynamic path. Diagnostic mode
+ * is now disabled in both paths (production-representative).</li>
+ * <li>Neither benchmark resolved any bean, so JIT/ASM compilation costs were
+ * either never paid or silently deferred to {@code close()}. Resolution of all
+ * beans is now forced inside the measured region.</li>
+ * <li>Containers are closed at {@code Level.Invocation} because each invocation
+ * builds a fresh container; leaving them open would accumulate thread pools and
+ * saturate GC between iterations. {@code close()} is idempotent, so
+ * double-closing is safe.</li>
+ * </ul>
+ *
+ * <p>
+ * Note: This benchmark uses explicit {@link Container} construction (with an
+ * isolated {@link AsmJITCompiler} per container) to measure raw startup
+ * performance. For production usage, prefer {@code Warmup.builder().build()}.</p>
+ *
+ * <p>
+ * Scenarios: 10, 100, 1000 beans.</p>
  *
  * @see AvajeStartupBenchmark for Avaje Inject startup comparison
  */
@@ -49,10 +83,38 @@ Warmup.builder().build().</p>
 @OutputTimeUnit(TimeUnit.MILLISECONDS)
 public class StartupBenchmark {
 
+    /**
+     * Trivial bean type used to isolate registration/startup overhead from
+     * constructor cost. The compile-time factory below instantiates it directly,
+     * mirroring what the annotation processor generates for a dependency-free
+     * bean. Using a dedicated type (instead of {@code Object.class}) avoids
+     * ambiguous-by-type lookups and reflects a realistic generated factory.
+     */
+    public static final class StartupBean {
+        public StartupBean() {
+        }
+    }
+
+    /**
+     * Pre-compiled factory representing the compile-time (annotation-processor)
+     * path: creates the bean directly, without reflection or JIT compilation.
+     */
+    private static final class StartupBeanFactory implements CompiledFactory<StartupBean> {
+        @Override
+        public StartupBean create(Object... dependencies) {
+            return new StartupBean();
+        }
+
+        @Override
+        public Class<StartupBean> getBeanType() {
+            return StartupBean.class;
+        }
+    }
+
     @Param({"10", "100", "1000"})
     private int beanCount;
 
-    private List<Warmup> containersToClose;
+    private List<Container> containersToClose;
 
     @Setup(Level.Iteration)
     public void setupIteration() {
@@ -61,9 +123,11 @@ public class StartupBenchmark {
 
     @TearDown(Level.Invocation)
     public void tearDownInvocation() {
-        // Clean up containers after each invocation to prevent thread pool accumulation
+        // Each invocation creates its own container; close it immediately to
+        // prevent thread-pool accumulation across invocations. close() is
+        // idempotent, so closing twice is harmless.
         if (containersToClose != null) {
-            for (Warmup container : containersToClose) {
+            for (Container container : containersToClose) {
                 container.close();
             }
             containersToClose.clear();
@@ -71,22 +135,37 @@ public class StartupBenchmark {
     }
 
     /**
+     * Builds a fresh container with production-representative defaults:
+     * auto-discovery of compile-time factories enabled, diagnostics and metrics
+     * disabled (identical configuration for both benchmark paths so the
+     * comparison is fair).
+     */
+    private Container newContainer() {
+        ContainerConfig config = ContainerConfig.builder()
+                .autoDiscoverFactories(true)
+                .diagnosticMode(false)
+                .metricsEnabled(false)
+                .build();
+        // A fresh JIT compiler per container keeps ASM state isolated across
+        // invocations, matching what Warmup.builder().build() does internally.
+        return new Container(config, new AsmJITCompiler());
+    }
+
+    /**
      * Measures startup time using dynamic registration (JIT path). Each bean is
-     * registered via {@code registerDynamic()}, which triggers background JIT
-     * compilation.
-     *
-     * <p>
-     * Note: Uses Object.class beans for minimal registration overhead. For
-     * realistic ASM compilation costs, see benchmarks with real bean types.</p>
+     * registered via {@code registerDynamic()}, which marks it for lazy JIT
+     * compilation. Every bean is then resolved inside the measured region so
+     * the ASM compilation cost is paid during startup measurement rather than
+     * being deferred to {@code close()}.
      */
     @Benchmark
-    public Warmup startupWithBeansDynamic(Blackhole blackhole) {
+    public Container startupWithBeansDynamic(Blackhole blackhole) {
 
-        Warmup container = Warmup.builder().build();
+        Container container = newContainer();
 
         containersToClose.add(container);
 
-        // Register beans dynamically - triggers JIT warmup
+        // Register beans dynamically - marks each bean for lazy JIT warmup
         for (int i = 0; i < beanCount; i++) {
             String beanName = "bean" + i;
             BeanDefinition<Object> definition = new BeanDefinition<>(
@@ -95,53 +174,61 @@ public class StartupBenchmark {
             container.registerDynamic(definition);
         }
 
+        // Force resolution of every bean so JIT/ASM compilation happens here,
+        // inside the measured region (true full startup cost).
+        for (int i = 0; i < beanCount; i++) {
+            blackhole.consume(container.resolve("bean" + i));
+        }
+
         blackhole.consume(container);
         return container;
     }
 
     /**
-     * Measures startup time using compile-time factory discovery. Beans are
-     * pre-registered via annotation processing and discovered at startup
-     * through ServiceLoader
-     * (META-INF/services/io.github.yasmramos.warmup.core.jit.FactoryRegistrar).
+     * Measures startup time using the compile-time factory path. Beans are
+     * registered with an explicit pre-compiled {@link CompiledFactory} (the same
+     * mechanism the annotation processor uses via ServiceLoader-discovered
+     * {@code FactoryRegistrar}s), so no JIT compilation or background warmup
+     * ever occurs. Every bean is resolved inside the measured region, exactly
+     * like the dynamic benchmark, so both paths pay instantiation cost.
      *
      * <p>
-     * This method registers {@code beanCount} beans using their compile-time
-     * factories to ensure the benchmark scales with the parameter and provides
-     * honest measurements.</p>
-     *
-     * <p>
-     * Note: The actual compile-time factories are discovered via ServiceLoader,
-     * but we explicitly register beanCount beans to make the benchmark scale
-     * properly.</p>
+     * Unlike the previous version of this benchmark, this method does NOT call
+     * {@code registerDynamic()}; it exercises only the compile-time registration
+     * API.</p>
      */
     @Benchmark
-    public Warmup startupWithBeansCompileTime(Blackhole blackhole) {
+    public Container startupWithBeansCompileTime(Blackhole blackhole) {
 
-        Warmup container = Warmup.builder()
-                .diagnostic(true)
-                .maxPendingCompilations(10)
-                .autoDiscoverFactories(true)
-                .metrics(false)
-                .propertyResolver(null)
-                .profiles(new String[0])
-                .build();
+        Container container = newContainer();
 
         containersToClose.add(container);
 
-        // Register additional beanCount beans using registerFactory() with compile-time factories
-        // This ensures the benchmark scales with beanCount parameter by registering N factories
-        // We use the already-discovered factories from ServiceLoader via container.registerFactory()
+        // Reusable pre-compiled factory: one instance is enough since it is
+        // stateless, exactly like a generated per-class factory.
+        CompiledFactory<StartupBean> factory = new StartupBeanFactory();
+
+        // Compile-time registration path: definition + pre-compiled factory.
+        // register() wires the factory immediately (no pendingWarmup, no JIT).
         for (int i = 0; i < beanCount; i++) {
             String beanName = "bean" + i;
-            // Use registerFactory() which leverages compile-time factories directly
-            // This is fundamentally different from registerDynamic() which triggers JIT compilation
-            // Each iteration registers a new factory, exercising the compile-time path
-            BeanDefinition<Object> definition = new BeanDefinition<>(
-                    Object.class, beanName, Scope.SINGLETON
+            BeanDefinition<StartupBean> definition = new BeanDefinition<>(
+                    StartupBean.class, beanName, Scope.SINGLETON
             );
+            container.register(definition, factory);
+        }
 
-            container.registerDynamic(definition);
+        // Explicitly wire the freshly registered factories, replicating the
+        // second pass that the ServiceLoader discovery path performs at build
+        // time (Container.discoverAndRegisterFactories -> wireFactories()).
+        // Without this, beans registered after construction would fall back to
+        // the non-wired create(Object...) path instead of the wired fast path.
+        container.wireFactories();
+
+        // Force resolution of every bean so instantiation happens inside the
+        // measured region, symmetric with the dynamic benchmark.
+        for (int i = 0; i < beanCount; i++) {
+            blackhole.consume(container.resolve("bean" + i));
         }
 
         blackhole.consume(container);
