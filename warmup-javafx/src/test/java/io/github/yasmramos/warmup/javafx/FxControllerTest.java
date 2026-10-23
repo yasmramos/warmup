@@ -1,38 +1,39 @@
 package io.github.yasmramos.warmup.javafx;
 
+import io.github.yasmramos.warmup.core.scope.Scope;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * Tests for WarmupFxController annotation.
+ * Tests for FxController annotation.
  */
-class WarmupFxControllerTest {
+class FxControllerTest {
 
     @Test
     void testAnnotationExists() {
         // Verify the annotation can be referenced
-        Class<?> annotationClass = WarmupFxController.class;
-        assertEquals("io.github.yasmramos.warmup.javafx.WarmupFxController", annotationClass.getName());
+        Class<?> annotationClass = FxController.class;
+        assertEquals("io.github.yasmramos.warmup.javafx.FxController", annotationClass.getName());
     }
 
     @Test
     void testDefaultFxmlValue() throws NoSuchMethodException {
-        var method = WarmupFxController.class.getMethod("fxml");
+        var method = FxController.class.getMethod("fxml");
         assertNotNull(method);
         assertEquals(String.class, method.getReturnType());
     }
 
     @Test
     void testDefaultScopeValue() throws NoSuchMethodException {
-        var method = WarmupFxController.class.getMethod("scope");
+        var method = FxController.class.getMethod("scope");
         assertNotNull(method);
-        assertEquals(io.github.yasmramos.warmup.core.scope.Scope.class, method.getReturnType());
+        assertEquals(Scope.class, method.getReturnType());
     }
 
     @Test
     void testAnnotationRetention() throws NoSuchMethodException {
-        var retention = WarmupFxController.class.getAnnotation(
+        var retention = FxController.class.getAnnotation(
             java.lang.annotation.Retention.class
         );
         assertNotNull(retention);
@@ -41,7 +42,7 @@ class WarmupFxControllerTest {
 
     @Test
     void testAnnotationTarget() throws NoSuchMethodException {
-        var target = WarmupFxController.class.getAnnotation(
+        var target = FxController.class.getAnnotation(
             java.lang.annotation.Target.class
         );
         assertNotNull(target);
@@ -56,16 +57,16 @@ class WarmupFxControllerTest {
         TestController controller = new TestController();
         
         // Verify it has the annotation
-        assertTrue(controller.getClass().isAnnotationPresent(WarmupFxController.class));
+        assertTrue(controller.getClass().isAnnotationPresent(FxController.class));
         
-        WarmupFxController annotation = 
-            controller.getClass().getAnnotation(WarmupFxController.class);
+        FxController annotation = 
+            controller.getClass().getAnnotation(FxController.class);
         
         assertEquals("", annotation.fxml());
-        assertEquals(io.github.yasmramos.warmup.core.scope.Scope.PROTOTYPE, annotation.scope());
+        assertEquals(Scope.PROTOTYPE, annotation.scope());
     }
 
-    @WarmupFxController
+    @FxController
     private static class TestController {
         // Test controller class
     }

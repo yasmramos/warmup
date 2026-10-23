@@ -1,7 +1,5 @@
 package io.github.yasmramos.warmup.core.scope;
 
-import io.github.yasmramos.warmup.core.scope.RequestScopeHandler;
-import io.github.yasmramos.warmup.core.scope.SessionScopeHandler;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.AfterEach;

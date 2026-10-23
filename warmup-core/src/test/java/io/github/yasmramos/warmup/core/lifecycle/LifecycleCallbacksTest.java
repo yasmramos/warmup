@@ -1,8 +1,5 @@
 package io.github.yasmramos.warmup.core.lifecycle;
 
-import io.github.yasmramos.warmup.core.lifecycle.LifecycleCallbacks;
-import io.github.yasmramos.warmup.core.lifecycle.DestroyCallback;
-import io.github.yasmramos.warmup.core.lifecycle.InitCallback;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.*;

@@ -1,13 +1,13 @@
 package io.github.yasmramos.warmup.benchmarks;
 
+import io.github.yasmramos.warmup.asm.AsmJITCompiler;
 import io.github.yasmramos.warmup.core.Warmup;
+import io.github.yasmramos.warmup.core.container.BeanHandle;
 import io.github.yasmramos.warmup.core.container.ContainerMetrics;
-import io.github.yasmramos.warmup.core.container.HybridContainer;
 import io.github.yasmramos.warmup.core.jit.CompiledFactory;
 import io.github.yasmramos.warmup.core.registry.BeanDefinition;
 import io.github.yasmramos.warmup.core.scope.Scope;
 import org.openjdk.jmh.annotations.*;
-import org.openjdk.jmh.infra.Blackhole;
 
 import java.util.concurrent.TimeUnit;
 
@@ -71,7 +71,7 @@ import java.util.concurrent.TimeUnit;
  * - Throughput (resolutions per second)
  * 
  * Note: Public API benchmarks use {@code Warmup.builder().build()} and {@code resolve()}.
- * Internal benchmarks access {@code HybridContainer} directly for maximum performance measurement.
+ * Internal benchmarks access {@code Container} directly for maximum performance measurement.
  */
 @State(org.openjdk.jmh.annotations.Scope.Benchmark)
 @BenchmarkMode(Mode.AverageTime)
@@ -100,7 +100,6 @@ public class ResolutionBenchmark {
 
     // Benchmark state
     private Warmup warmup;
-    private HybridContainer internalContainer;  // For internal-only benchmarks
     private CompiledFactory<SimpleBean> simpleFactory;
     private CompiledFactory<PrototypeBean> prototypeFactory;
     private CompiledFactory<PrototypeBeanWithOneDependency> prototypeWithOneDepFactory;
@@ -131,18 +130,15 @@ public class ResolutionBenchmark {
     public void setup() throws Exception {
         // Create Warmup instance using public facade API for comparable benchmarks
         // Note: metricsEnabled=false to measure bare fast-path overhead without instrumentation
-        io.github.yasmramos.warmup.asm.AsmJITCompiler jitCompiler = new io.github.yasmramos.warmup.asm.AsmJITCompiler();
+        AsmJITCompiler jitCompiler = new AsmJITCompiler();
+        
         warmup = Warmup.builder()
-            .jitCompiler(jitCompiler)
             .diagnostic(false)
             .maxPendingCompilations(10)
             .autoDiscoverFactories(false)  // Manual registration for this benchmark
             .metrics(false)
             .build();
         
-        // Get internal container for indexed resolution benchmark (internal API only)
-        internalContainer = warmup.unsafeContainer();
-
         // Register simple bean with JIT compilation (SINGLETON) via public API
         BeanDefinition<SimpleBean> singletonDef = new BeanDefinition<>(
             SimpleBean.class, "simpleBean", Scope.SINGLETON
@@ -150,7 +146,7 @@ public class ResolutionBenchmark {
         warmup.registerDynamic(singletonDef);
         
         // Get the index for indexed resolution benchmark (internal API)
-        simpleBeanIndex = internalContainer.indexOf("simpleBean");
+        simpleBeanIndex = warmup.indexOf("simpleBean");
 
         // Register prototype bean to measure creation overhead via public API
         BeanDefinition<PrototypeBean> prototypeDef = new BeanDefinition<>(
@@ -211,12 +207,12 @@ public class ResolutionBenchmark {
      * not exposed in the public API. Results are lower-bound measurements and NOT
      * directly comparable with Avaje Inject benchmarks.</p>
      */
-    @Benchmark
-    public Object warmupSingletonResolveIndexed() {
-        Object result = internalContainer.resolveByIndex(simpleBeanIndex);
-        // Fallback to name-based resolve if not yet cached (shouldn't happen after warmup)
-        return result != null ? result : warmup.resolve(SimpleBean.class);
-    }
+//    @Benchmark
+//    public Object warmupSingletonResolveIndexed() {
+//        Object result = internalContainer.resolveByIndex(simpleBeanIndex);
+//        // Fallback to name-based resolve if not yet cached (shouldn't happen after warmup)
+//        return result != null ? result : warmup.resolve(SimpleBean.class);
+//    }
 
     /**
      * Measures resolve() for a PROTOTYPE bean, including full creation cost.
@@ -256,7 +252,7 @@ public class ResolutionBenchmark {
      */
     @Benchmark
     public Object warmupSingletonResolveViaHandle() {
-        io.github.yasmramos.warmup.core.container.BeanHandle<SimpleBean> handle = warmup.handle(SimpleBean.class);
+        BeanHandle<SimpleBean> handle = warmup.handle(SimpleBean.class);
         return handle.get();
     }
 
@@ -279,8 +275,8 @@ public class ResolutionBenchmark {
      */
     @TearDown(Level.Iteration)
     public void tearDown() {
-        if (internalContainer != null) {
-            ContainerMetrics metrics = internalContainer.getMetrics();
+        if (warmup != null) {
+            ContainerMetrics metrics = warmup.getMetrics();
             System.out.println("\n=== Container Metrics ===");
             System.out.println("Total Resolutions: " + metrics.totalResolutions());
             System.out.println("Compile-time Hits: " + metrics.compileTimeHits());

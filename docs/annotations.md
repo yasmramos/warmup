@@ -385,10 +385,11 @@ Both naming conventions work because the processor registers factories under bot
 - [Compile-Time Processing](compile-time-processing.md) - How the processor works
 - [Scopes and Lifecycle](scopes-and-lifecycle.md) - Detailed lifecycle documentation
 
-## `@WarmupFxController`
+## `@FxController`
 
 JavaFX-specific annotation that marks a controller class as a bean managed by the Warmup container.
-This annotation is processed by the annotation processor to generate a zero-overhead factory, similar to `@Prototype` or `@Component`.
+The annotation processor generates a zero-overhead factory, exactly like it does for
+`@Prototype` or `@Component`.
 
 ### Definition
 
@@ -396,7 +397,6 @@ This annotation is processed by the annotation processor to generate a zero-over
 package io.github.yasmramos.warmup.javafx;
 
 import io.github.yasmramos.warmup.core.scope.Scope;
-import javafx.fxml.Initializable;
 import java.lang.annotation.ElementType;
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
@@ -404,8 +404,10 @@ import java.lang.annotation.Target;
 
 @Target(ElementType.TYPE)
 @Retention(RetentionPolicy.RUNTIME)
-public @interface WarmupFxController {
+public @interface FxController {
     String fxml() default "";
+    String bundle() default "";
+    String[] css() default {};
     Scope scope() default Scope.PROTOTYPE;
 }
 ```
@@ -414,41 +416,47 @@ public @interface WarmupFxController {
 
 | Attribute | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `fxml()` | `String` | `""` | Optional FXML file path for auto-loading. |
+| `fxml()` | `String` | `""` | FXML path used by `FxLoader#loadView(Class)`. |
+| `bundle()` | `String` | `""` | Base name of a `ResourceBundle` loaded automatically. |
+| `css()` | `String[]` | `{}` | Stylesheets applied to the loaded root. |
 | `scope()` | `Scope` | `PROTOTYPE` | Lifecycle scope of the controller bean. |
 
 ### Key Features
 
-- **Bean Registration**: Controllers annotated with `@WarmupFxController` are automatically registered as beans by the annotation processor.
-- **Dependency Injection**: Full constructor and field injection support via the container (no manual reflection in `FxLoader`).
-- **Scope Support**: Default is `PROTOTYPE` (new instance per FXML load), but can be changed to `SINGLETON` if needed.
-- **No Module Coupling**: The annotation processor discovers this annotation by qualified name, so `warmup-processor` does not depend on `warmup-javafx`.
+- **Bean Registration**: Controllers annotated with `@FxController` are automatically registered by the annotation processor.
+- **Dependency Injection**: Constructor and field injection are performed by the generated factory. (`@Inject` fields must not be `private`.)
+- **Scope Support**: Defaults to `PROTOTYPE` (a fresh controller per FXML load); can be `SINGLETON`.
+- **Typed views**: `FxLoader#loadView(Class<T>)` returns an `FxView<T>` with both the root and the controller.
+- **No Module Coupling**: The processor discovers the annotation by qualified name, so `warmup-processor` does not depend on `warmup-javafx`.
 
 ### Example
 
 ```java
 package com.example.ui;
 
-import io.github.yasmramos.warmup.javafx.WarmupFxController;
 import io.github.yasmramos.warmup.annotations.Inject;
+import io.github.yasmramos.warmup.javafx.FxController;
 import javafx.fxml.Initializable;
 import java.net.URL;
 import java.util.ResourceBundle;
 
-@WarmupFxController
+@FxController(
+        fxml = "/views/main.fxml",
+        bundle = "com.example.ui.messages",
+        css = "/views/main.css")
 public class MainController implements Initializable {
-    
+
+    // Package-private: the generated factory writes this field directly.
     @Inject
-    private UserService userService;
-    
+    UserService userService;
+
     @Override
     public void initialize(URL url, ResourceBundle rb) {
         // userService is already injected by the container
         loadData();
     }
-    
+
     private void loadData() {
-        // Use injected service
         var users = userService.getAllUsers();
     }
 }
@@ -456,27 +464,30 @@ public class MainController implements Initializable {
 
 ### Integration with FxLoader
 
-The `FxLoader` class uses the container to resolve controllers:
-
 ```java
 Warmup warmup = Warmup.builder().build();
 FxLoader fxLoader = new FxLoader(warmup);
 
-// Load FXML - controller is created and injected by the container
-Parent root = fxLoader.loadFxml("/views/main.fxml");
+// Strongly typed: root + controller
+FxView<MainController> view = fxLoader.loadView(MainController.class);
+Parent root = view.root();
+MainController controller = view.controller();
+
+// Path-based (controller type is Object)
+Parent otherRoot = fxLoader.loadFxml("/views/other.fxml");
 ```
 
-**Important**: Controllers must be annotated with `@WarmupFxController` (or registered manually as beans) to be resolved by the container. The `FxLoader` no longer performs manual field injection via reflection�all injection is handled by the container when the bean is created.
+**Important**: Controllers must be annotated with `@FxController` (or registered manually as beans) to be resolved by the container. All injection is handled by the container when the bean is created; `FXMLLoader` only performs the usual `@FXML` injection afterwards.
 
 ### Processor Behavior
 
-When the annotation processor encounters `@WarmupFxController`:
+When the annotation processor encounters `@FxController`:
 
-1. It generates a `XXX$$WarmupFactory` class for the controller (same as `@Prototype`)
-2. Registers the factory in `GeneratedFactoryRegistrar`
-3. The container uses this factory to create and inject the controller instance
+1. It generates a `XXX$$WarmupFactory` class for the controller (same as `@Prototype`).
+2. Registers the factory in `GeneratedFactoryRegistrar`.
+3. The container uses this factory to create and inject the controller instance.
 
-If the `warmup-javafx` module is not on the classpath during compilation, the processor silently skips `@WarmupFxController` processing (no errors).
+If the `warmup-javafx` module is not on the classpath during compilation, the processor silently skips `@FxController` processing (no errors).
 
 ### See Also
 

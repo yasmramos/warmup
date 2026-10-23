@@ -16,6 +16,7 @@
         <module>warmup-core</module>
         <module>warmup-processor</module>
         <module>warmup-javafx</module>
+        <module>warmup-javafx-demo</module>
         <module>warmup-benchmarks</module>
     </modules>
 
@@ -41,6 +42,11 @@
             <dependency>
                 <groupId>${project.groupId}</groupId>
                 <artifactId>warmup-processor</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>${project.groupId}</groupId>
+                <artifactId>warmup-javafx</artifactId>
                 <version>${project.version}</version>
             </dependency>
 

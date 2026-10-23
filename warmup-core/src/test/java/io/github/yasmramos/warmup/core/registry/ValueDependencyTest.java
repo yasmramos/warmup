@@ -1,7 +1,7 @@
 package io.github.yasmramos.warmup.core.registry;
 
-import io.github.yasmramos.warmup.core.registry.BeanDefinition;
-import io.github.yasmramos.warmup.core.registry.ValueDependency;
+import io.github.yasmramos.warmup.core.lifecycle.LifecycleCallbacks;
+import io.github.yasmramos.warmup.core.scope.Scope;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -107,8 +107,8 @@ class ValueDependencyTest {
         BeanDefinition<TestService> definition = new BeanDefinition<>(
             TestService.class, 
             "testBean",
-            io.github.yasmramos.warmup.core.scope.Scope.SINGLETON,
-            io.github.yasmramos.warmup.core.lifecycle.LifecycleCallbacks.empty(),
+            Scope.SINGLETON,
+            LifecycleCallbacks.empty(),
             false,
             new Object[] { valueDep }
         );

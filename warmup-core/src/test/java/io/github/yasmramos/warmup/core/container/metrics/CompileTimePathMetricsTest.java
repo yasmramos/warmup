@@ -2,8 +2,8 @@ package io.github.yasmramos.warmup.core.container.metrics;
 
 import io.github.yasmramos.warmup.asm.AsmJITCompiler;
 import io.github.yasmramos.warmup.core.container.ContainerMetrics;
-import io.github.yasmramos.warmup.core.container.HybridContainer;
-import io.github.yasmramos.warmup.core.container.HybridContainerConfig;
+import io.github.yasmramos.warmup.core.container.Container;
+import io.github.yasmramos.warmup.core.container.ContainerConfig;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -24,18 +24,18 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class CompileTimePathMetricsTest {
 
-    private static HybridContainer containerWithMetrics() {
-        HybridContainerConfig config = new HybridContainerConfig.Builder()
+    private static Container containerWithMetrics() {
+        ContainerConfig config = new ContainerConfig.Builder()
                 .autoDiscoverFactories(true)
                 .metricsEnabled(true)
                 .build();
-        return new HybridContainer(config, new AsmJITCompiler());
+        return new Container(config, new AsmJITCompiler());
     }
 
     @Test
     @DisplayName("ServiceLoader-discovered compile-time factory is registered and wired")
     void serviceLoaderRegistrarIsDiscovered() {
-        HybridContainer container = containerWithMetrics();
+        Container container = containerWithMetrics();
 
         assertTrue(container.getBeanNames().contains(CompileTimeMetricsTestRegistrar.BEAN_NAME),
                 "Expected the test registrar to be discovered via ServiceLoader");
@@ -44,7 +44,7 @@ class CompileTimePathMetricsTest {
     @Test
     @DisplayName("Resolving a compile-time bean records a COMPILE_TIME hit")
     void compileTimeHitIsRecordedForDiscoveredFactory() {
-        HybridContainer container = containerWithMetrics();
+        Container container = containerWithMetrics();
 
         CompileTimeMetricsTestBean bean =
                 container.resolve(CompileTimeMetricsTestBean.class);
@@ -59,7 +59,7 @@ class CompileTimePathMetricsTest {
     @Test
     @DisplayName("Compile-time resolution does not fall back to JIT")
     void compileTimeHitDoesNotFallBackToJit() {
-        HybridContainer container = containerWithMetrics();
+        Container container = containerWithMetrics();
 
         container.resolve(CompileTimeMetricsTestBean.class);
 
@@ -73,7 +73,7 @@ class CompileTimePathMetricsTest {
     @Test
     @DisplayName("Singleton is created exactly once regardless of repeated resolutions")
     void singletonIsCachedAcrossResolutions() {
-        HybridContainer container = containerWithMetrics();
+        Container container = containerWithMetrics();
 
         CompileTimeMetricsTestBean first = container.resolve(CompileTimeMetricsTestBean.class);
         CompileTimeMetricsTestBean second = container.resolve(CompileTimeMetricsTestBean.class);

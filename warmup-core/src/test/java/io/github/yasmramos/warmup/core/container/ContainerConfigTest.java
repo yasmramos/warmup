@@ -1,22 +1,24 @@
 package io.github.yasmramos.warmup.core.container;
 
-import io.github.yasmramos.warmup.core.container.HybridContainerConfig;
+import io.github.yasmramos.warmup.core.container.ContainerConfig;
 import io.github.yasmramos.warmup.core.config.PropertyResolver;
+import io.github.yasmramos.warmup.core.config.SystemEnvironmentPropertySource;
+import io.github.yasmramos.warmup.core.config.SystemPropertiesPropertySource;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * Unit tests for HybridContainerConfig record and Builder.
+ * Unit tests for ContainerConfig record and Builder.
  */
 @DisplayName("HybridContainerConfig Tests")
-class HybridContainerConfigTest {
+class ContainerConfigTest {
 
     @Test
     @DisplayName("DEFAULT configuration has correct values")
     void testDefaultConfiguration() {
-        HybridContainerConfig config = HybridContainerConfig.DEFAULT;
+        ContainerConfig config = ContainerConfig.DEFAULT;
 
         assertFalse(config.diagnosticMode(), 
             "Diagnostic mode should be false by default");
@@ -35,20 +37,20 @@ class HybridContainerConfigTest {
     @Test
     @DisplayName("No-arg constructor uses DEFAULT values")
     void testNoArgsConstructorUsesDefaults() {
-        HybridContainerConfig config = new HybridContainerConfig();
+        ContainerConfig config = new ContainerConfig();
 
-        assertEquals(HybridContainerConfig.DEFAULT.diagnosticMode(), config.diagnosticMode());
-        assertEquals(HybridContainerConfig.DEFAULT.maxPendingCompilations(), config.maxPendingCompilations());
-        assertEquals(HybridContainerConfig.DEFAULT.autoDiscoverFactories(), config.autoDiscoverFactories());
-        assertEquals(HybridContainerConfig.DEFAULT.metricsEnabled(), config.metricsEnabled());
-        assertEquals(HybridContainerConfig.DEFAULT.propertyResolver(), config.propertyResolver());
-        assertArrayEquals(HybridContainerConfig.DEFAULT.activeProfiles(), config.activeProfiles());
+        assertEquals(ContainerConfig.DEFAULT.diagnosticMode(), config.diagnosticMode());
+        assertEquals(ContainerConfig.DEFAULT.maxPendingCompilations(), config.maxPendingCompilations());
+        assertEquals(ContainerConfig.DEFAULT.autoDiscoverFactories(), config.autoDiscoverFactories());
+        assertEquals(ContainerConfig.DEFAULT.metricsEnabled(), config.metricsEnabled());
+        assertEquals(ContainerConfig.DEFAULT.propertyResolver(), config.propertyResolver());
+        assertArrayEquals(ContainerConfig.DEFAULT.activeProfiles(), config.activeProfiles());
     }
 
     @Test
     @DisplayName("Builder creates config with default values")
     void testBuilderWithDefaultValues() {
-        HybridContainerConfig config = HybridContainerConfig.builder().build();
+        ContainerConfig config = ContainerConfig.builder().build();
 
         assertFalse(config.diagnosticMode());
         assertEquals(10, config.maxPendingCompilations());
@@ -61,7 +63,7 @@ class HybridContainerConfigTest {
     @Test
     @DisplayName("Builder sets diagnosticMode correctly")
     void testBuilderDiagnosticMode() {
-        HybridContainerConfig config = HybridContainerConfig.builder()
+        ContainerConfig config = ContainerConfig.builder()
             .diagnosticMode(true)
             .build();
 
@@ -73,7 +75,7 @@ class HybridContainerConfigTest {
     @DisplayName("Builder sets maxPendingCompilations correctly")
     void testBuilderMaxPendingCompilations() {
         int expectedMax = 25;
-        HybridContainerConfig config = HybridContainerConfig.builder()
+        ContainerConfig config = ContainerConfig.builder()
             .maxPendingCompilations(expectedMax)
             .build();
 
@@ -84,7 +86,7 @@ class HybridContainerConfigTest {
     @Test
     @DisplayName("Builder disables autoDiscoverFactories correctly")
     void testBuilderAutoDiscoverFactories() {
-        HybridContainerConfig config = HybridContainerConfig.builder()
+        ContainerConfig config = ContainerConfig.builder()
             .autoDiscoverFactories(false)
             .build();
 
@@ -95,7 +97,7 @@ class HybridContainerConfigTest {
     @Test
     @DisplayName("Builder enables metrics correctly")
     void testBuilderMetricsEnabled() {
-        HybridContainerConfig config = HybridContainerConfig.builder()
+        ContainerConfig config = ContainerConfig.builder()
             .metricsEnabled(true)
             .build();
 
@@ -110,7 +112,7 @@ class HybridContainerConfigTest {
         mockResolver.addPropertySource(new io.github.yasmramos.warmup.core.config.SystemPropertiesPropertySource());
         mockResolver.addPropertySource(new io.github.yasmramos.warmup.core.config.SystemEnvironmentPropertySource());
         
-        HybridContainerConfig config = HybridContainerConfig.builder()
+        ContainerConfig config = ContainerConfig.builder()
             .propertyResolver(mockResolver)
             .build();
 
@@ -122,7 +124,7 @@ class HybridContainerConfigTest {
     @DisplayName("Builder sets activeProfiles correctly")
     void testBuilderActiveProfiles() {
         String[] expectedProfiles = {"dev", "test"};
-        HybridContainerConfig config = HybridContainerConfig.builder()
+        ContainerConfig config = ContainerConfig.builder()
             .activeProfiles(expectedProfiles)
             .build();
 
@@ -133,8 +135,8 @@ class HybridContainerConfigTest {
     @Test
     @DisplayName("Builder handles null activeProfiles")
     void testBuilderNullActiveProfiles() {
-        HybridContainerConfig config = HybridContainerConfig.builder()
-            .activeProfiles(null)
+        ContainerConfig config = ContainerConfig.builder()
+            .activeProfiles(new String[0])
             .build();
 
         assertNotNull(config.activeProfiles(),
@@ -146,11 +148,11 @@ class HybridContainerConfigTest {
     @Test
     @DisplayName("Builder supports fluent chaining")
     void testBuilderFluentChaining() {
-        io.github.yasmramos.warmup.core.config.PropertyResolver resolver = new io.github.yasmramos.warmup.core.config.PropertyResolver();
-        resolver.addPropertySource(new io.github.yasmramos.warmup.core.config.SystemPropertiesPropertySource());
-        resolver.addPropertySource(new io.github.yasmramos.warmup.core.config.SystemEnvironmentPropertySource());
+        PropertyResolver resolver = new PropertyResolver();
+        resolver.addPropertySource(new SystemPropertiesPropertySource());
+        resolver.addPropertySource(new SystemEnvironmentPropertySource());
         
-        HybridContainerConfig config = HybridContainerConfig.builder()
+        ContainerConfig config = ContainerConfig.builder()
             .diagnosticMode(true)
             .maxPendingCompilations(20)
             .autoDiscoverFactories(false)
@@ -170,12 +172,12 @@ class HybridContainerConfigTest {
     @Test
     @DisplayName("Multiple builder instances are independent")
     void testMultipleBuilderInstancesIndependence() {
-        HybridContainerConfig config1 = HybridContainerConfig.builder()
+        ContainerConfig config1 = ContainerConfig.builder()
             .diagnosticMode(true)
             .metricsEnabled(true)
             .build();
 
-        HybridContainerConfig config2 = HybridContainerConfig.builder()
+        ContainerConfig config2 = ContainerConfig.builder()
             .diagnosticMode(false)
             .metricsEnabled(false)
             .build();
@@ -189,7 +191,7 @@ class HybridContainerConfigTest {
     @Test
     @DisplayName("Builder can override DEFAULT partially")
     void testBuilderPartialOverride() {
-        HybridContainerConfig config = HybridContainerConfig.builder()
+        ContainerConfig config = ContainerConfig.builder()
             .metricsEnabled(true)
             .build();
 
@@ -205,12 +207,12 @@ class HybridContainerConfigTest {
     @Test
     @DisplayName("Record equality works correctly")
     void testRecordEquality() {
-        HybridContainerConfig config1 = HybridContainerConfig.builder()
+        ContainerConfig config1 = ContainerConfig.builder()
             .diagnosticMode(true)
             .metricsEnabled(true)
             .build();
 
-        HybridContainerConfig config2 = HybridContainerConfig.builder()
+        ContainerConfig config2 = ContainerConfig.builder()
             .diagnosticMode(true)
             .metricsEnabled(true)
             .build();
@@ -224,11 +226,11 @@ class HybridContainerConfigTest {
     @Test
     @DisplayName("Record inequality works correctly")
     void testRecordInequality() {
-        HybridContainerConfig config1 = HybridContainerConfig.builder()
+        ContainerConfig config1 = ContainerConfig.builder()
             .diagnosticMode(true)
             .build();
 
-        HybridContainerConfig config2 = HybridContainerConfig.builder()
+        ContainerConfig config2 = ContainerConfig.builder()
             .diagnosticMode(false)
             .build();
 
@@ -239,7 +241,7 @@ class HybridContainerConfigTest {
     @Test
     @DisplayName("toString produces meaningful output")
     void testToString() {
-        HybridContainerConfig config = HybridContainerConfig.builder()
+        ContainerConfig config = ContainerConfig.builder()
             .diagnosticMode(true)
             .metricsEnabled(true)
             .activeProfiles("test")
@@ -247,7 +249,7 @@ class HybridContainerConfigTest {
 
         String toString = config.toString();
         assertNotNull(toString);
-        assertTrue(toString.contains("HybridContainerConfig"),
+        assertTrue(toString.contains("ContainerConfig"),
             "toString should contain class name");
         assertTrue(toString.contains("diagnosticMode"),
             "toString should contain field names");
@@ -256,7 +258,7 @@ class HybridContainerConfigTest {
     @Test
     @DisplayName("Single profile can be set")
     void testSingleProfile() {
-        HybridContainerConfig config = HybridContainerConfig.builder()
+        ContainerConfig config = ContainerConfig.builder()
             .activeProfiles("development")
             .build();
 
@@ -267,17 +269,11 @@ class HybridContainerConfigTest {
     @Test
     @DisplayName("Empty profiles array can be set explicitly")
     void testEmptyProfilesArray() {
-        HybridContainerConfig config = HybridContainerConfig.builder()
+        ContainerConfig config = ContainerConfig.builder()
             .activeProfiles(new String[0])
             .build();
 
         assertEquals(0, config.activeProfiles().length);
     }
 
-    /**
-     * Simple PropertyResolver implementation for testing.
-     */
-    private static class PropertyResolver {
-        // Minimal implementation for testing purposes
-    }
 }

@@ -1,8 +1,8 @@
 package io.github.yasmramos.warmup.core.container;
 
-import io.github.yasmramos.warmup.core.container.HybridContainerConfig;
+import io.github.yasmramos.warmup.core.container.ContainerConfig;
 import io.github.yasmramos.warmup.core.container.BeanHandle;
-import io.github.yasmramos.warmup.core.container.HybridContainer;
+import io.github.yasmramos.warmup.core.container.Container;
 import io.github.yasmramos.warmup.annotations.Component;
 import io.github.yasmramos.warmup.annotations.Singleton;
 import io.github.yasmramos.warmup.core.Warmup;
@@ -22,14 +22,14 @@ import static org.junit.jupiter.api.Assertions.*;
  */
 class BeanHandleTest {
     
-    private HybridContainer container;
+    private Container container;
     private JITCompiler jitCompiler;
     
     @BeforeEach
     void setUp() {
         io.github.yasmramos.warmup.asm.AsmJITCompiler jitCompiler = new io.github.yasmramos.warmup.asm.AsmJITCompiler();
-        HybridContainerConfig config = new HybridContainerConfig.Builder().build();
-        container = new HybridContainer(config, jitCompiler);
+        ContainerConfig config = new ContainerConfig.Builder().build();
+        container = new Container(config, jitCompiler);
     }
     
     @Component("testService")

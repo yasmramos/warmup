@@ -27,7 +27,7 @@ public final class BeanHandle<T> {
     /**
      * The container used for resolution.
      */
-    private final HybridContainer container;
+    private final Container container;
     
     /**
      * Expected version counter at last successful resolution.
@@ -41,7 +41,7 @@ public final class BeanHandle<T> {
      * @param resolvedDef the resolved bean definition
      * @param container the container for resolution
      */
-    BeanHandle(ResolvedBeanDefinition<T> resolvedDef, HybridContainer container) {
+    BeanHandle(ResolvedBeanDefinition<T> resolvedDef, Container container) {
         this.resolvedDef = resolvedDef;
         this.container = container;
         this.expectedVersion = container.getResolutionVersion();

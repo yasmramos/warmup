@@ -13,6 +13,8 @@ import io.github.yasmramos.warmup.annotations.Profile;
 import io.github.yasmramos.warmup.annotations.Conditional;
 import io.github.yasmramos.warmup.annotations.EventListener;
 import io.github.yasmramos.warmup.annotations.Lazy;
+import io.github.yasmramos.warmup.annotations.Order;
+import io.github.yasmramos.warmup.annotations.DependsOn;
 
 import javax.annotation.processing.*;
 import javax.lang.model.SourceVersion;
@@ -73,7 +75,7 @@ import java.util.*;
     "io.github.yasmramos.warmup.annotations.Profile",
     "io.github.yasmramos.warmup.annotations.Conditional",
     "io.github.yasmramos.warmup.annotations.EventListener",
-    "io.github.yasmramos.warmup.javafx.WarmupFxController"
+    "io.github.yasmramos.warmup.javafx.FxController"
 })
 @SupportedSourceVersion(SourceVersion.RELEASE_17)
 public class WarmupProcessor extends AbstractProcessor {
@@ -128,6 +130,12 @@ public class WarmupProcessor extends AbstractProcessor {
         final List<Boolean> isDeferredDependency;
         final List<Boolean> isFieldOrSetterDependency;
 
+        /** Explicit {@code @Order} on the bean class or {@code @Bean} method; MAX_VALUE when absent. */
+        int order = Integer.MAX_VALUE;
+
+        /** {@code @DependsOn} bean names on the bean class or {@code @Bean} method; never null. */
+        List<String> dependsOn = new ArrayList<>();
+
         BeanInfo(String packageName, String className, String beanName, String factoryClassName, String scope, String scopeName,
                 List<String> dependencyNames, List<Boolean> isProviderDependency, List<Boolean> isValueDependency, 
                 List<String> valueExpressions, boolean isPrimary, List<InjectMethodInfo> injectMethods,
@@ -177,7 +185,7 @@ public class WarmupProcessor extends AbstractProcessor {
         // These imply @Bean with a specific scope
         processClassStereotypes(roundEnv, filer, messager);
         
-        // Process @WarmupFxController annotation (by qualified name to avoid coupling)
+        // Process @FxController annotation (by qualified name to avoid coupling)
         processFxControllers(roundEnv, filer, messager);
         
         // Process @Factory classes with @Bean methods
@@ -332,32 +340,32 @@ public class WarmupProcessor extends AbstractProcessor {
     }
     
     /**
-     * Processes classes annotated with @WarmupFxController.
+     * Processes classes annotated with @FxController.
      * This annotation is discovered by qualified name to avoid coupling warmup-processor to warmup-javafx.
      * If the annotation class is not found (JavaFX module not on classpath), processing is silently skipped.
      */
     private void processFxControllers(RoundEnvironment roundEnv, Filer filer, Messager messager) {
         // Try to get the annotation type element by qualified name
         TypeElement annotationTypeElement = processingEnv.getElementUtils()
-            .getTypeElement("io.github.yasmramos.warmup.javafx.WarmupFxController");
+            .getTypeElement("io.github.yasmramos.warmup.javafx.FxController");
         
         // If null, the JavaFX module is not on the classpath - skip silently
         if (annotationTypeElement == null) {
             return;
         }
         
-        // Process all elements annotated with @WarmupFxController
+        // Process all elements annotated with @FxController
         for (Element element : roundEnv.getElementsAnnotatedWith(annotationTypeElement)) {
             if (element.getKind() != ElementKind.CLASS) {
                 messager.printMessage(Diagnostic.Kind.ERROR, 
-                    "@WarmupFxController only applies to classes", element);
+                    "@FxController only applies to classes", element);
                 continue;
             }
             
             TypeElement typeElement = (TypeElement) element;
             
             // Validate nested class: must be static
-            if (!validateNestedClass(typeElement, messager, "@WarmupFxController")) {
+            if (!validateNestedClass(typeElement, messager, "@FxController")) {
                 continue;
             }
             
@@ -379,7 +387,7 @@ public class WarmupProcessor extends AbstractProcessor {
     
     /**
      * Extracts the scope value from an annotation mirror.
-     * Default is PROTOTYPE for @WarmupFxController.
+     * Default is PROTOTYPE for @FxController.
      */
     private String extractScopeFromAnnotationMirror(Element element, TypeElement annotationType) {
         for (AnnotationMirror mirror : element.getAnnotationMirrors()) {
@@ -409,7 +417,7 @@ public class WarmupProcessor extends AbstractProcessor {
                 for (Map.Entry<? extends ExecutableElement, ? extends AnnotationValue> entry : mirror.getElementValues().entrySet()) {
                     if (entry.getKey().getSimpleName().toString().equals("value") || 
                         entry.getKey().getSimpleName().toString().equals("fxml")) {
-                        // For @WarmupFxController, there's no 'value' attribute for bean name
+                        // For @FxController, there's no 'value' attribute for bean name
                         // The fxml attribute is separate, bean name uses default behavior
                         return "";
                     }
@@ -534,9 +542,35 @@ public class WarmupProcessor extends AbstractProcessor {
             }
         }
         
-        processedBeans.add(new BeanInfo(packageName, className, beanName, factoryClassName, scope, scopeName, depNames, providerFlags, new ArrayList<>(), new ArrayList<>(), isPrimary, injectMethods, profiles, conditionClassNames, isDeferred, isFieldOrSetter));
+        BeanInfo beanInfo = new BeanInfo(packageName, className, beanName, factoryClassName, scope, scopeName, depNames, providerFlags, new ArrayList<>(), new ArrayList<>(), isPrimary, injectMethods, profiles, conditionClassNames, isDeferred, isFieldOrSetter);
+        applyOrderingMetadata(beanInfo, typeElement, null);
+        processedBeans.add(beanInfo);
     }
-    
+
+    /**
+     * Copies {@code @Order} / {@code @DependsOn} from the bean class or {@code @Bean} method
+     * onto the bean metadata, so the container can order collections and force initialisation
+     * order. Method-level annotations win over class-level ones.
+     *
+     * @param beanInfo the bean metadata to update
+     * @param classElement the bean class, or {@code null} for {@code @Bean} methods
+     * @param methodElement the {@code @Bean} method, or {@code null} for component classes
+     */
+    private void applyOrderingMetadata(BeanInfo beanInfo, TypeElement classElement, ExecutableElement methodElement) {
+        Element source = methodElement != null ? methodElement : classElement;
+        if (source == null) {
+            return;
+        }
+        Order order = source.getAnnotation(Order.class);
+        if (order != null) {
+            beanInfo.order = order.value();
+        }
+        DependsOn dependsOn = source.getAnnotation(DependsOn.class);
+        if (dependsOn != null) {
+            beanInfo.dependsOn = new ArrayList<>(Arrays.asList(dependsOn.value()));
+        }
+    }
+
     /**
      * Extracts dependency info from a parameter element.
      */
@@ -855,7 +889,9 @@ public class WarmupProcessor extends AbstractProcessor {
             isFieldOrSetter.add(false);
         }
         
-        processedBeans.add(new BeanInfo(packageName, classNameForRegistration, beanName, factoryClassName, scope, "", depNames, providerFlags, new ArrayList<>(), new ArrayList<>(), isPrimary, new ArrayList<>(), profiles, conditionClassNames, isDeferred, isFieldOrSetter));
+        BeanInfo methodBeanInfo = new BeanInfo(packageName, classNameForRegistration, beanName, factoryClassName, scope, "", depNames, providerFlags, new ArrayList<>(), new ArrayList<>(), isPrimary, new ArrayList<>(), profiles, conditionClassNames, isDeferred, isFieldOrSetter);
+        applyOrderingMetadata(methodBeanInfo, null, method);
+        processedBeans.add(methodBeanInfo);
     }
     
     /**
@@ -1570,6 +1606,26 @@ public class WarmupProcessor extends AbstractProcessor {
             // Constructor descriptor: (Ljava/lang/Class;Ljava/lang/String;Lio/github/yasmramos/warmup/core/scope/Scope;Lio/github/yasmramos/warmup/core/lifecycle/LifecycleCallbacks;Z[Ljava/lang/Object;[Ljava/lang/String;[Ljava/lang/String;)V
             StringBuilder beanDefCtorDesc = new StringBuilder("(Ljava/lang/Class;Ljava/lang/String;Lio/github/yasmramos/warmup/core/scope/Scope;Lio/github/yasmramos/warmup/core/lifecycle/LifecycleCallbacks;Z[Ljava/lang/Object;[Ljava/lang/String;[Ljava/lang/String;)V");
             mv.visitMethodInsn(org.objectweb.asm.Opcodes.INVOKESPECIAL, beanDefInternal, "<init>", beanDefCtorDesc.toString(), false);
+            
+            // Apply @Order so collection injection can order this bean (lower value first).
+            if (beanInfo.order != Integer.MAX_VALUE) {
+                mv.visitInsn(org.objectweb.asm.Opcodes.DUP);
+                mv.visitLdcInsn(beanInfo.order);
+                mv.visitMethodInsn(org.objectweb.asm.Opcodes.INVOKEVIRTUAL, beanDefInternal, "setOrder", "(I)V", false);
+            }
+            // Apply @DependsOn so the container creates the named beans before this one.
+            if (!beanInfo.dependsOn.isEmpty()) {
+                mv.visitInsn(org.objectweb.asm.Opcodes.DUP);
+                mv.visitLdcInsn(beanInfo.dependsOn.size());
+                mv.visitTypeInsn(org.objectweb.asm.Opcodes.ANEWARRAY, "java/lang/String");
+                for (int i = 0; i < beanInfo.dependsOn.size(); i++) {
+                    mv.visitInsn(org.objectweb.asm.Opcodes.DUP);
+                    mv.visitLdcInsn(i);
+                    mv.visitLdcInsn(beanInfo.dependsOn.get(i));
+                    mv.visitInsn(org.objectweb.asm.Opcodes.AASTORE);
+                }
+                mv.visitMethodInsn(org.objectweb.asm.Opcodes.INVOKEVIRTUAL, beanDefInternal, "setDependsOn", "([Ljava/lang/String;)V", false);
+            }
             
             // Create new factory instance - factory class names use dots, convert to internal name
             String factoryInternal = binaryNameToInternalName(beanInfo.factoryClassName);

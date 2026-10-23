@@ -31,7 +31,7 @@ import java.util.concurrent.TimeUnit;
  * @see AvajeInjectBenchmark for Avaje Inject compile-time benchmarks
  * @see ResolutionBenchmark for Warmup compile-time and JIT path benchmarks
  */
-@State(org.openjdk.jmh.annotations.Scope.Benchmark)
+@State(Scope.Benchmark)
 @BenchmarkMode(Mode.AverageTime)
 @OutputTimeUnit(TimeUnit.NANOSECONDS)
 public class JavaBaselineBenchmark {

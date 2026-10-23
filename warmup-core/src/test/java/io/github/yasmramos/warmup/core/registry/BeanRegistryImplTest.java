@@ -1,8 +1,7 @@
 package io.github.yasmramos.warmup.core.registry;
 
-import io.github.yasmramos.warmup.core.registry.BeanDefinition;
-import io.github.yasmramos.warmup.core.registry.BeanRegistryImpl;
-import io.github.yasmramos.warmup.core.registry.BeanRegistry;
+import io.github.yasmramos.warmup.core.lifecycle.LifecycleCallbacks;
+import io.github.yasmramos.warmup.core.scope.Scope;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -12,8 +11,6 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
-
-import io.github.yasmramos.warmup.core.scope.Scope;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -58,7 +55,7 @@ class BeanRegistryImplTest {
     void testGetInstancePrototype() {
         String beanName = "prototypeBean";
         AtomicInteger counter = new AtomicInteger(0);
-        BeanDefinition<TestService> definition = new BeanDefinition<>(TestService.class, beanName, io.github.yasmramos.warmup.core.scope.Scope.PROTOTYPE);
+        BeanDefinition<TestService> definition = new BeanDefinition<>(TestService.class, beanName, Scope.PROTOTYPE);
 
         registry.register(definition);
 
@@ -158,7 +155,7 @@ class BeanRegistryImplTest {
     void testGetInstancePrototypeWithDefinition() {
         String beanName = "prototypeDefBean";
         AtomicInteger counter = new AtomicInteger(0);
-        BeanDefinition<TestService> definition = new BeanDefinition<>(TestService.class, beanName, io.github.yasmramos.warmup.core.scope.Scope.PROTOTYPE);
+        BeanDefinition<TestService> definition = new BeanDefinition<>(TestService.class, beanName, Scope.PROTOTYPE);
 
         registry.register(definition);
 
@@ -227,8 +224,8 @@ class BeanRegistryImplTest {
         TestServiceWithLifecycle instance = new TestServiceWithLifecycle();
         BeanDefinition<TestServiceWithLifecycle> definition = new BeanDefinition<>(
             TestServiceWithLifecycle.class, "lifecycleBean",
-            io.github.yasmramos.warmup.core.scope.Scope.SINGLETON,
-            new io.github.yasmramos.warmup.core.lifecycle.LifecycleCallbacks<>(
+            Scope.SINGLETON,
+            new LifecycleCallbacks<>(
                 obj -> obj.onInitCalled.set(true),
                 obj -> obj.onDestroyCalled.set(true)
             ),
@@ -247,8 +244,8 @@ class BeanRegistryImplTest {
     void testRemovePrimaryBeanClearsTypeMapping() {
         BeanDefinition<TestService> definition = new BeanDefinition<>(
             TestService.class, "primaryBean",
-            io.github.yasmramos.warmup.core.scope.Scope.SINGLETON,
-            io.github.yasmramos.warmup.core.lifecycle.LifecycleCallbacks.empty(),
+            Scope.SINGLETON,
+            LifecycleCallbacks.empty(),
             true, // primary
             new Object[0]
         );
@@ -276,8 +273,8 @@ class BeanRegistryImplTest {
         
         BeanDefinition<TestServiceWithLifecycle> def1 = new BeanDefinition<>(
             TestServiceWithLifecycle.class, "bean1",
-            io.github.yasmramos.warmup.core.scope.Scope.SINGLETON,
-            new io.github.yasmramos.warmup.core.lifecycle.LifecycleCallbacks<>(
+            Scope.SINGLETON,
+            new LifecycleCallbacks<>(
                 obj -> obj.onInitCalled.set(true),
                 obj -> obj.onDestroyCalled.set(true)
             ),
@@ -287,8 +284,8 @@ class BeanRegistryImplTest {
         
         BeanDefinition<TestServiceWithLifecycle> def2 = new BeanDefinition<>(
             TestServiceWithLifecycle.class, "bean2",
-            io.github.yasmramos.warmup.core.scope.Scope.SINGLETON,
-            new io.github.yasmramos.warmup.core.lifecycle.LifecycleCallbacks<>(
+            Scope.SINGLETON,
+            new LifecycleCallbacks<>(
                 obj -> obj.onInitCalled.set(true),
                 obj -> obj.onDestroyCalled.set(true)
             ),
@@ -312,7 +309,7 @@ class BeanRegistryImplTest {
         AtomicInteger counter = new AtomicInteger(0);
         BeanDefinition<TestService> definition = new BeanDefinition<>(
             TestService.class, beanName, 
-            io.github.yasmramos.warmup.core.scope.Scope.CUSTOM
+            Scope.CUSTOM
         );
 
         registry.register(definition);
@@ -350,13 +347,13 @@ class BeanRegistryImplTest {
     void testPrimaryBeanWinsOverNonPrimary() {
         BeanDefinition<TestService> nonPrimaryDef = new BeanDefinition<>(
             TestService.class, "nonPrimary",
-            Scope.SINGLETON, io.github.yasmramos.warmup.core.lifecycle.LifecycleCallbacks.empty(),
+            Scope.SINGLETON, LifecycleCallbacks.empty(),
             false, new String[0]
         );
         
         BeanDefinition<TestService> primaryDef = new BeanDefinition<>(
             TestService.class, "primary",
-            Scope.SINGLETON, io.github.yasmramos.warmup.core.lifecycle.LifecycleCallbacks.empty(),
+            Scope.SINGLETON, LifecycleCallbacks.empty(),
             true, new String[0]
         );
         
@@ -375,13 +372,13 @@ class BeanRegistryImplTest {
     void testTwoNonPrimaryBeansOfSameTypeCauseAmbiguity() {
         BeanDefinition<TestService> def1 = new BeanDefinition<>(
             TestService.class, "bean1",
-            Scope.SINGLETON, io.github.yasmramos.warmup.core.lifecycle.LifecycleCallbacks.empty(),
+            Scope.SINGLETON, LifecycleCallbacks.empty(),
             false, new String[0]
         );
         
         BeanDefinition<TestService> def2 = new BeanDefinition<>(
             TestService.class, "bean2",
-            Scope.SINGLETON, io.github.yasmramos.warmup.core.lifecycle.LifecycleCallbacks.empty(),
+            Scope.SINGLETON, LifecycleCallbacks.empty(),
             false, new String[0]
         );
         
@@ -399,13 +396,13 @@ class BeanRegistryImplTest {
     void testNamedQualifierResolvesCorrectBean() {
         BeanDefinition<TestService> def1 = new BeanDefinition<>(
             TestService.class, "serviceImpl1",
-            Scope.SINGLETON, io.github.yasmramos.warmup.core.lifecycle.LifecycleCallbacks.empty(),
+            Scope.SINGLETON, LifecycleCallbacks.empty(),
             false, new String[0]
         );
         
         BeanDefinition<TestService> def2 = new BeanDefinition<>(
             TestService.class, "serviceImpl2",
-            Scope.SINGLETON, io.github.yasmramos.warmup.core.lifecycle.LifecycleCallbacks.empty(),
+            Scope.SINGLETON, LifecycleCallbacks.empty(),
             false, new String[0]
         );
         
@@ -427,19 +424,19 @@ class BeanRegistryImplTest {
     void testPrimaryWinsOverMultipleNonPrimary() {
         BeanDefinition<TestService> nonPrimary1 = new BeanDefinition<>(
             TestService.class, "nonPrimary1",
-            Scope.SINGLETON, io.github.yasmramos.warmup.core.lifecycle.LifecycleCallbacks.empty(),
+            Scope.SINGLETON, LifecycleCallbacks.empty(),
             false, new String[0]
         );
         
         BeanDefinition<TestService> nonPrimary2 = new BeanDefinition<>(
             TestService.class, "nonPrimary2",
-            Scope.SINGLETON, io.github.yasmramos.warmup.core.lifecycle.LifecycleCallbacks.empty(),
+            Scope.SINGLETON, LifecycleCallbacks.empty(),
             false, new String[0]
         );
         
         BeanDefinition<TestService> primary = new BeanDefinition<>(
             TestService.class, "primaryBean",
-            Scope.SINGLETON, io.github.yasmramos.warmup.core.lifecycle.LifecycleCallbacks.empty(),
+            Scope.SINGLETON, LifecycleCallbacks.empty(),
             true, new String[0]
         );
         
@@ -470,7 +467,7 @@ class BeanRegistryImplTest {
     void testWireFactoriesWithMissingDependencies() {
         // This test verifies that beans can be registered even with missing dependencies
         BeanDefinition<String> dependentDef = new BeanDefinition<>(String.class, "dependent", 
-            Scope.SINGLETON, io.github.yasmramos.warmup.core.lifecycle.LifecycleCallbacks.empty(), 
+            Scope.SINGLETON, LifecycleCallbacks.empty(), 
             false, new Object[] { new TestService("missing") }, new String[] { "missingBean" }, new String[0]);
         
         registry.register(dependentDef);
@@ -489,10 +486,10 @@ class BeanRegistryImplTest {
     void testWireFactoriesWithCircularDependency() {
         // This tests that beans can be registered even with potential circular dependencies
         BeanDefinition<TestService> bean1 = new BeanDefinition<>(TestService.class, "bean1",
-            Scope.SINGLETON, io.github.yasmramos.warmup.core.lifecycle.LifecycleCallbacks.empty(),
+            Scope.SINGLETON, LifecycleCallbacks.empty(),
             false, new Object[] { null }, new String[] { "bean2" }, new String[0]);
         BeanDefinition<TestService> bean2 = new BeanDefinition<>(TestService.class, "bean2",
-            Scope.SINGLETON, io.github.yasmramos.warmup.core.lifecycle.LifecycleCallbacks.empty(),
+            Scope.SINGLETON, LifecycleCallbacks.empty(),
             false, new Object[] { null }, new String[] { "bean1" }, new String[0]);
         
         registry.register(bean1);

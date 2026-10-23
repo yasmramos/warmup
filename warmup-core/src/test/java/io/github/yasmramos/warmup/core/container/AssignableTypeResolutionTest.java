@@ -17,10 +17,12 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /**
  * Regression test for type-indexing by assignability.
  *
- * <p>Before the fix the registry indexed beans under their exact declared type only, so
- * {@code resolveAll(PaymentProcessor.class)} never found beans registered as
- * {@code CardProcessor.class} and interface-based lookup / collection injection were broken.
- * Beans are now also indexed under every implemented interface and superclass.</p>
+ * <p>
+ * Before the fix the registry indexed beans under their exact declared type
+ * only, so {@code resolveAll(PaymentProcessor.class)} never found beans
+ * registered as {@code CardProcessor.class} and interface-based lookup /
+ * collection injection were broken. Beans are now also indexed under every
+ * implemented interface and superclass.</p>
  */
 class AssignableTypeResolutionTest {
 

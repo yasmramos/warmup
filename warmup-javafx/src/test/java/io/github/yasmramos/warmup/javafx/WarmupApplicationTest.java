@@ -1,7 +1,8 @@
 package io.github.yasmramos.warmup.javafx;
 
 import io.github.yasmramos.warmup.core.Warmup;
-import io.github.yasmramos.warmup.core.container.HybridContainer;
+import io.github.yasmramos.warmup.core.container.Container;
+import javafx.stage.Stage;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -19,7 +20,6 @@ class WarmupApplicationTest {
         // Call init directly - does not require JavaFX toolkit
         app.init();
         
-        assertNotNull(app.getContainer());
         assertNotNull(app.getFxLoader());
     }
 
@@ -28,23 +28,12 @@ class WarmupApplicationTest {
         TestWarmupApplication app = new TestWarmupApplication();
         
         app.init();
-        HybridContainer container = app.getContainer();
         
         // Call stop which should shutdown the container
         app.stop();
         
         // Container should be shut down (verify by checking it was called)
         assertTrue(app.isStopCalled());
-    }
-
-    @Test
-    void testGetContainerReturnsContainer() throws Exception {
-        TestWarmupApplication app = new TestWarmupApplication();
-        
-        app.init();
-        
-        HybridContainer container = app.getContainer();
-        assertNotNull(container);
     }
 
     @Test
@@ -84,7 +73,7 @@ class WarmupApplicationTest {
         private boolean stopCalled = false;
         
         @Override
-        protected void configure(Warmup warmup) {
+        protected void registerBeans(Warmup warmup) {
             // No configuration needed for tests
         }
         
@@ -97,10 +86,17 @@ class WarmupApplicationTest {
         boolean isStopCalled() {
             return stopCalled;
         }
-        
-        HybridContainer getContainer() {
-            return ((io.github.yasmramos.warmup.core.Warmup) getWarmup()).unsafeContainer();
+
+        @Override
+        protected void onStart(Stage stage) throws Exception {
+            
         }
+
+        @Override
+        protected void onStop() throws Exception {
+            
+        }
+        
     }
 
     /**
@@ -111,7 +107,7 @@ class WarmupApplicationTest {
         private boolean onInitCalled = false;
         
         @Override
-        protected void configure(Warmup warmup) {
+        protected void registerBeans(Warmup warmup) {
         }
         
         @Override
@@ -121,6 +117,16 @@ class WarmupApplicationTest {
         
         boolean isOnInitCalled() {
             return onInitCalled;
+        }
+
+        @Override
+        protected void onStart(Stage stage) throws Exception {
+            
+        }
+
+        @Override
+        protected void onStop() throws Exception {
+    
         }
     }
 
@@ -132,7 +138,7 @@ class WarmupApplicationTest {
         private boolean onStopCalled = false;
         
         @Override
-        protected void configure(Warmup warmup) {
+        protected void registerBeans(Warmup warmup) {
         }
         
         @Override
@@ -142,6 +148,11 @@ class WarmupApplicationTest {
         
         boolean isOnStopCalled() {
             return onStopCalled;
+        }
+
+        @Override
+        protected void onStart(Stage stage) throws Exception {
+            
         }
     }
 }

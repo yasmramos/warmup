@@ -27,14 +27,13 @@ jobs:
         java-version: '17'
         distribution: 'temurin'
         cache: maven
-    - name: Install project to local Maven repository
-      run: mvn -B -DskipTests install
 
-    - name: Build with Maven and run tests
-      run: mvn -B package --file pom.xml
+    # JavaFX tests need an X server even though they run headless for us.
+    - name: Install xvfb
+      run: sudo apt-get update && sudo apt-get install -y xvfb
 
-    - name: Run Tests
-      run: mvn test
+    - name: Build, test and verify coverage
+      run: xvfb-run -a mvn -B verify
 
     # Optional: Uploads the full dependency graph to GitHub to improve the quality of Dependabot alerts this repository can receive
     - name: Generate Maven dependency graph

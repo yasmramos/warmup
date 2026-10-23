@@ -1,6 +1,5 @@
 package io.github.yasmramos.warmup.core.scope;
 
-import io.github.yasmramos.warmup.core.scope.Scope;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.*;

@@ -54,6 +54,19 @@ public class BeanDefinition<T> {
     private final boolean[] fieldOrSetterDependencies;
     
     /**
+     * Explicit order for collection injection, set by the annotation processor from
+     * {@code @Order} on the bean class or {@code @Bean} method.
+     * {@link Integer#MAX_VALUE} means the bean is unordered.
+     */
+    private int order = Integer.MAX_VALUE;
+
+    /**
+     * Bean names that must be created before this bean, set by the annotation processor from
+     * {@code @DependsOn} on the bean class or {@code @Bean} method. Never {@code null}.
+     */
+    private String[] dependsOn = new String[0];
+    
+    /**
      * Creates a bean definition with default values.
      */
     public BeanDefinition(Class<T> type, String name) {
@@ -252,5 +265,41 @@ public class BeanDefinition<T> {
     public boolean isFieldOrSetterDependency(int depIndex) {
         return fieldOrSetterDependencies != null && depIndex >= 0 && depIndex < fieldOrSetterDependencies.length 
                && fieldOrSetterDependencies[depIndex];
+    }
+
+    /**
+     * Returns the explicit order of this bean for collection injection.
+     *
+     * @return the order value, or {@link Integer#MAX_VALUE} when unordered
+     */
+    public int order() {
+        return order;
+    }
+
+    /**
+     * Sets the explicit order of this bean for collection injection.
+     *
+     * @param order the order value; lower values have higher precedence
+     */
+    public void setOrder(int order) {
+        this.order = order;
+    }
+
+    /**
+     * Returns the bean names that must be created before this bean.
+     *
+     * @return the dependency bean names (never {@code null}, possibly empty)
+     */
+    public String[] dependsOn() {
+        return dependsOn;
+    }
+
+    /**
+     * Sets the bean names that must be created before this bean.
+     *
+     * @param dependsOn the dependency bean names (may be {@code null} to clear)
+     */
+    public void setDependsOn(String[] dependsOn) {
+        this.dependsOn = dependsOn != null ? dependsOn : new String[0];
     }
 }

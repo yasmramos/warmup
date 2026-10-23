@@ -9,10 +9,10 @@ import java.lang.annotation.Target;
 
 /**
  * Annotation to mark JavaFX controllers for lazy loading and DI injection.
- * 
+ *
  * Usage:
  * <pre>
- * {@code @WarmupFxController}
+ * {@code @FxController}
  * public class MainController implements Initializable {
  *     {@code @Inject} private Service service;
  * }
@@ -20,12 +20,26 @@ import java.lang.annotation.Target;
  */
 @Target(ElementType.TYPE)
 @Retention(RetentionPolicy.RUNTIME)
-public @interface WarmupFxController {
+public @interface FxController {
+
     /**
      * FXML file path (optional, for auto-loading).
      */
     String fxml() default "";
-    
+
+    /**
+     * Base name of the {@link java.util.ResourceBundle} used for localization
+     * when the loader is not given one explicitly (for example
+     * {@code "com.example.messages"}).
+     */
+    String bundle() default "";
+
+    /**
+     * Stylesheet paths applied to the loaded root, for example
+     * {@code {"/com/example/app.css"}}.
+     */
+    String[] css() default {};
+
     /**
      * Bean scope (default: PROTOTYPE for controllers).
      */

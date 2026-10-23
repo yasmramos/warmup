@@ -6,8 +6,8 @@ import io.github.yasmramos.warmup.benchmarks.warmup.WarmupBeanWithOneDependency;
 import io.github.yasmramos.warmup.benchmarks.warmup.WarmupSimpleBean;
 import io.github.yasmramos.warmup.core.Warmup;
 import io.github.yasmramos.warmup.core.container.ContainerMetrics;
-import io.github.yasmramos.warmup.core.container.HybridContainer;
-import io.github.yasmramos.warmup.core.container.HybridContainerConfig;
+import io.github.yasmramos.warmup.core.container.Container;
+import io.github.yasmramos.warmup.core.container.ContainerConfig;
 import org.openjdk.jmh.annotations.Benchmark;
 import org.openjdk.jmh.annotations.BenchmarkMode;
 import org.openjdk.jmh.annotations.Level;
@@ -55,7 +55,7 @@ import java.util.concurrent.TimeUnit;
 public class WarmupCompileTimeBenchmark {
 
     private Warmup warmup;
-    private HybridContainer verificationContainer;
+    private Warmup verificationContainer;
 
     @Setup(Level.Trial)
     public void setup() {
@@ -65,9 +65,7 @@ public class WarmupCompileTimeBenchmark {
         // CRITICAL: metricsEnabled=false to measure bare fast-path overhead without
         // System.nanoTime() instrumentation (~50ns per call) that would dominate and mask
         // the actual resolution cost, making comparison with Avaje unfair.
-        AsmJITCompiler jitCompiler = new AsmJITCompiler();
         warmup = Warmup.builder()
-            .jitCompiler(jitCompiler)
             .diagnostic(false)
             .maxPendingCompilations(10)
             .autoDiscoverFactories(true)
@@ -86,7 +84,7 @@ public class WarmupCompileTimeBenchmark {
         // Separate verification container: verify COMPILE_TIME path is used without
         // contaminating the measured container's metrics. This container has
         // metricsEnabled=true solely to validate we're hitting the expected code path.
-        verifyCompileTimePath(jitCompiler);
+        verifyCompileTimePath();
     }
 
     /**
@@ -95,17 +93,16 @@ public class WarmupCompileTimeBenchmark {
      * and validates that compileTimeHits > 0 and jitHits == 0.
      * This verification does NOT affect the measured container's performance.
      */
-    private void verifyCompileTimePath(AsmJITCompiler jitCompiler) {
-        HybridContainerConfig verifyConfig = new HybridContainerConfig(
-            false,  // diagnosticMode
-            10,     // maxPendingCompilations
-            true,   // autoDiscoverFactories
-            true,   // metricsEnabled=true ONLY for path verification
-            null    // propertyResolver
-        ,
-            new String[0]  // activeProfiles
-        );
-        verificationContainer = new HybridContainer(verifyConfig, jitCompiler);
+    private void verifyCompileTimePath() {
+
+        verificationContainer = Warmup.builder()
+                .diagnostic(false)
+                .maxPendingCompilations(10)
+                .autoDiscoverFactories(true)
+                .metrics(true)
+                .propertyResolver(null)
+                .profiles(new String[0])
+                .build();
         
         // Resolve each bean type once to populate metrics
         verificationContainer.resolve(WarmupSimpleBean.class);

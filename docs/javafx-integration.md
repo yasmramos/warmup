@@ -1,255 +1,354 @@
 # JavaFX Integration Guide
 
-This document describes the JavaFX integration module (`warmup-javafx`) for the Warmup DI framework, including the hot-reload functionality for development.
+`warmup-javafx` brings dependency injection, typed FXML loading and hot-reload
+to JavaFX applications. Controllers are regular Warmup beans: they are created
+by the container (constructor/field injection included) and then handed to
+`FXMLLoader`, which performs the usual `@FXML` injection and calls
+`initialize()`.
 
 ## Overview
 
-The `warmup-javafx` module provides seamless integration between JavaFX and Warmup's dependency injection system. It enables:
+The module provides:
 
-- **Automatic controller injection**: Controllers are resolved from the container with full dependency injection
-- **FXML auto-loading**: Load FXML files with controllers automatically wired via `@WarmupFxController` annotation
-- **Hot-reload support**: Real-time reloading of FXML/CSS files and controller factories during development
+- **Automatic controller registration**: `@FxController` classes are discovered
+  by the annotation processor and registered as beans.
+- **Full DI for controllers**: constructor and field injection, `@Value`,
+  scopes, profiles, conditions, ordering… everything the core container offers.
+- **Typed FXML loading**: `FxView<T>` returns the root node *and* the controller
+  instance that the container created.
+- **Annotation-driven resources**: `bundle` and `css` attributes are resolved
+  automatically when a view is loaded.
+- **Hot-reload**: FXML, CSS and controller factories can be reloaded while the
+  application is running, with per-scene tracking.
+- **`WarmupApplication`**: a ready-to-use `Application` base class that boots
+  the container and exposes the loader.
+
+A complete, runnable example lives in [`warmup-javafx-demo`](../warmup-javafx-demo).
 
 ## Quick Start
 
-### Basic Setup
+### 1. Add the dependency
 
-Extend `WarmupApplication` instead of `javafx.application.Application`:
-
-```java
-public class MyApp extends WarmupApplication {
-    @Override
-    protected void configure(Warmup warmup) {
-        // Register your beans
-        warmup.register("myService", MyService.class, MyService::new, Scope.SINGLETON);
-    }
-    
-    @Override
-    protected void onStart(Stage stage) {
-        // Set up your UI
-        Parent root = fxLoader.loadFxml("/com/example/main.fxml");
-        stage.setScene(new Scene(root));
-        stage.show();
-    }
-}
+```xml
+<dependency>
+    <groupId>io.github.yasmramos</groupId>
+    <artifactId>warmup-javafx</artifactId>
+    <version>1.0.0-SNAPSHOT</version>
+</dependency>
 ```
 
-### Creating Controllers
+Make sure `warmup-processor` is configured as an annotation processor (see the
+[compile-time processing guide](compile-time-processing.md)).
 
-Annotate your controller classes with `@WarmupFxController`:
+### 2. Annotate your controller
 
 ```java
 package com.example;
 
-import io.github.yasmramos.warmup.javafx.WarmupFxController;
 import io.github.yasmramos.warmup.annotations.Inject;
-import javafx.fxml.Initializable;
+import io.github.yasmramos.warmup.javafx.FxController;
 
-@WarmupFxController(fxml = "/com/example/main.fxml")
-public class MainController implements Initializable {
-    
+@FxController(
+        fxml = "/com/example/main.fxml",
+        bundle = "com.example.messages",      // optional
+        css = "/com/example/styles.css")      // optional
+public class MainController {
+
+    // Package-private: the generated factory writes this field directly.
     @Inject
-    private MyService myService;
-    
-    @Override
-    public void initialize(URL location, ResourceBundle resources) {
-        // Controller initialization
-    }
+    GreetingService service;
+
+    @FXML private Label greeting;
 }
 ```
 
-The annotation processor will automatically generate a factory for this controller and register it with the container.
+`@FxController` attributes:
 
-## Hot-Reload Functionality
+| Attribute | Default | Description |
+|-----------|---------|-------------|
+| `fxml` | `""` | FXML path used by `loadView(Class)`. |
+| `bundle` | `""` | Base name of a `ResourceBundle` used when none is passed to the loader. |
+| `css` | `{}` | Stylesheet paths applied to the loaded root. |
+| `scope` | `PROTOTYPE` | Bean scope. `PROTOTYPE` gives a fresh controller per view. |
 
-### Enabling Hot-Reload
+> **Note:** `@Inject` fields must not be `private`. The processor generates a
+> factory that writes them directly; make them package-private, protected or
+> public. `@FXML` fields may stay private because JavaFX injects those.
 
-Call `enableHotReload()` in your application to enable development mode:
+### 3. Load the view
 
 ```java
 public class MyApp extends WarmupApplication {
+
     @Override
-    protected void onInit() {
-        // Enable hot-reload for development
-        enableHotReload();
+    protected void registerBeans(Warmup warmup) {
+        // Optional: @Singleton/@FxController beans are auto-registered by the
+        // generated FactoryRegistrar. Register extra beans here if needed.
     }
-    
+
     @Override
-    protected void onStart(Stage stage) {
-        // Register the scene for automatic root replacement
-        Parent root = fxLoader.loadController(MainController.class);
-        registerSceneForHotReload(stage, root);
-        stage.setScene(new Scene(root));
+    protected void onStart(Stage stage) throws Exception {
+        FxView<MainController> view = getFxLoader().loadView(MainController.class);
+
+        Scene scene = new Scene(view.root(), 800, 600);
+        getFxLoader().registerScene(scene);
+        registerSceneForHotReload(stage, view);
+
+        stage.setTitle("My App");
+        stage.setScene(scene);
         stage.show();
+    }
+
+    @Override
+    protected void onStop() {
+        getFxLoader().stopFileWatching();
     }
 }
 ```
 
-### How Hot-Reload Works
+## Loading Views
 
-The hot-reload mechanism performs the following steps when triggered:
+`FxLoader` offers two flavors: path-based and annotation-based.
 
-1. **Container Reload**: Calls `HybridContainer.reload(beanName)` to:
-   - Evict cached singleton instances
-   - Invalidate factory caches
-   - Unload the previous ASM-generated factory class
-   - Trigger background recompilation of the factory
+```java
+// Path-based: controller type is whatever the FXML declares (Object)
+FxView<Object> view1 = fxLoader.loadView("/com/example/main.fxml");
 
-2. **Controller Cache Clear**: Clears the `FxLoader` controller cache to force new controller creation
+// Annotation-based: strongly typed controller
+FxView<MainController> view2 = fxLoader.loadView(MainController.class);
 
-3. **FXML Re-load**: Re-loads the FXML file using `loadFxmlInternal()` to get:
-   - A new `Parent` root node
-   - A new controller instance from the recompiled factory
+// With an explicit resource bundle (overrides @FxController(bundle = ...))
+FxView<MainController> view3 = fxLoader.loadView(MainController.class, bundle);
+```
 
-4. **Scene Root Replacement**: Invokes the registered `sceneRootReplacer` callback to update the displayed scene
+`FxView<T>` exposes:
 
-### File Watching
+| Method | Description |
+|--------|-------------|
+| `root()` | The loaded scene graph root. |
+| `controller()` | The container-created controller (never `null` when the FXML declares one). |
+| `fxmlPath()` | The FXML path used. |
+| `controllerClass()` | The controller class for annotation-based loads, otherwise `null`. |
+| `resourceBundle()` | The bundle used, or `null`. |
 
-Enable automatic file watching for FXML/CSS changes:
+The older `loadFxml(...)` and `loadController(...)` methods still exist and are
+equivalent to `loadView(...).root()`.
+
+> **Why `FxView`?** Controllers default to `PROTOTYPE`, so they are never
+> cached. `getCachedController(...)` therefore returns `null` for the common
+> case; `FxView.controller()` is the reliable way to reach the instance.
+
+## Hot-Reload
+
+### Enabling it
+
+Hot-reload is enabled when the container runs in development mode:
 
 ```java
 @Override
 protected void onInit() {
+    enableHotReload(); // sets warmup.dev.mode and updates the loader
+}
+```
+
+You can also start it with `-Dwarmup.dev.mode=true`.
+
+### Watching files
+
+```java
+@Override
+protected void onInit() throws Exception {
     enableHotReload();
-    
-    // Start watching directories for changes
-    try {
-        fxLoader.startFileWatching(
+    getFxLoader().startFileWatching(
             "src/main/resources/com/example",
-            "target/classes/com/example"
-        );
-    } catch (IOException e) {
-        e.printStackTrace();
-    }
+            "target/classes/com/example");
 }
 
 @Override
-protected void onStop() {
-    // Stop watching on application shutdown
-    fxLoader.stopFileWatching();
+protected void onStop() throws Exception {
+    getFxLoader().stopFileWatching();
 }
 ```
 
-The `WatchService` monitors specified directories for file modifications and automatically triggers reload when `.fxml` or `.css` files change.
+A `WatchService` monitors the directories and reloads `.fxml` and `.css` files
+(after a short debounce) when they change.
 
-### CSS Hot-Reload
+### How a reload works
 
-CSS stylesheets can also be hot-reloaded. When a CSS file changes:
+1. **Container reload** — the controller bean's factory is evicted and
+   recompiled (`Warmup#hotReload()`).
+2. **Cache clear** — `FxLoader` drops cached controllers.
+3. **FXML re-load** — a new root and a new controller are created.
+4. **Scene update** — every scene registered for that FXML receives the new
+   root.
 
-1. The CSS URL is re-resolved to pick up file changes
-2. All registered scenes have their stylesheets refreshed (removed and re-added)
-3. The `stylesheetReplacer` callback is invoked with updated URLs
+### Registering scenes
+
+The typed overload tracks **each view independently**, so multi-window
+applications work correctly:
 
 ```java
-// Load and track a CSS file
-String cssUrl = fxLoader.loadCss("/com/example/styles.css");
+FxView<MainController> main = fxLoader.loadView(MainController.class);
+FxView<SettingsController> settings = fxLoader.loadView(SettingsController.class);
 
-// Register the scene for CSS updates
-fxLoader.registerScene(scene);
+registerSceneForHotReload(mainStage, main);
+registerSceneForHotReload(settingsStage, settings);
+```
 
-// Optionally set a callback for stylesheet updates
-fxLoader.setStylesheetReplacer(urls -> {
-    // urls contains all tracked CSS URLs
-    // You can apply them to scenes manually if needed
+At the `FxLoader` level you can register arbitrary callbacks:
+
+```java
+fxLoader.registerRootReplacer("/com/example/main.fxml", newRoot -> {
+    mainStage.getScene().setRoot(newRoot);
 });
 
-// Manual CSS reload
-fxLoader.reloadCss("/com/example/styles.css");
+// Later, when the view is gone:
+fxLoader.unregisterRootReplacer("/com/example/main.fxml", callback);
 ```
 
-### Manual Reload
+`setSceneRootReplacer(Consumer<Parent>)` remains available as a **global**
+fallback (last registration wins) but is not suitable for multiple scenes.
 
-You can also manually trigger reload:
+### Manual reloads
 
 ```java
-// Reload a specific FXML by path
 fxLoader.reloadFxml("/com/example/main.fxml");
-
-// Reload a controller by class
 fxLoader.reloadController(MainController.class);
+fxLoader.reloadCss("/com/example/styles.css");
+fxLoader.reloadAll(); // every FXML loaded through this loader
+```
 
-// Reload a CSS stylesheet
+### CSS hot-reload
+
+```java
+String cssUrl = fxLoader.loadCss("/com/example/styles.css");
+
+fxLoader.registerScene(scene);
+fxLoader.setStylesheetReplacer(urls -> {
+    // Called with every tracked stylesheet URL after a CSS reload
+});
+
 fxLoader.reloadCss("/com/example/styles.css");
 ```
+
+Stylesheets declared with `@FxController(css = ...)` are loaded and tracked
+automatically when the view is loaded.
 
 ## API Reference
 
-### FxLoader
+### `FxLoader`
 
 | Method | Description |
 |--------|-------------|
-| `loadFxml(String fxmlPath)` | Load FXML file by path |
-| `loadFxml(String fxmlPath, ResourceBundle bundle)` | Load FXML with localization |
-| `loadController(Class<T> controllerClass)` | Load FXML from annotated controller |
-| `loadCss(String cssPath)` | Load and track a CSS stylesheet for hot-reload |
-| `reloadFxml(String fxmlPath)` | Hot-reload a previously loaded FXML |
-| `reloadController(Class<T> controllerClass)` | Hot-reload a controller's FXML |
-| `reloadCss(String cssPath)` | Hot-reload a CSS stylesheet |
-| `startFileWatching(String... directories)` | Start watching directories for changes |
-| `stopFileWatching()` | Stop file watching |
-| `setDevelopmentMode(boolean)` | Enable/disable development mode at runtime |
-| `setSceneRootReplacer(Consumer<Parent>)` | Set callback for scene root replacement |
-| `setStylesheetReplacer(Consumer<List<String>>)` | Set callback for stylesheet updates |
-| `registerScene(Scene)` | Register a Scene for CSS hot-reload |
-| `unregisterScene(Scene)` | Unregister a Scene from CSS hot-reload |
+| `loadView(String fxmlPath)` | Load a view by path; controller is `Object`. |
+| `loadView(String, ResourceBundle)` | Same, with localization. |
+| `loadView(Class<T>)` | Load the FXML declared on `@FxController`. |
+| `loadView(Class<T>, ResourceBundle)` | Same, with an explicit bundle. |
+| `loadFxml(...)` / `loadController(...)` | Shortcuts returning only the root. |
+| `loadCss(String cssPath)` | Resolve and track a stylesheet. |
+| `reloadFxml(String fxmlPath)` | Reload a previously loaded FXML. |
+| `reloadController(Class<T>)` | Reload a controller's FXML and factory. |
+| `reloadCss(String cssPath)` | Reload a stylesheet. |
+| `reloadAll()` | Reload every tracked FXML. |
+| `registerRootReplacer(String, Consumer<Parent>)` | Track one scene per FXML. |
+| `unregisterRootReplacer(String, Consumer<Parent>)` | Stop tracking. |
+| `startFileWatching(String...)` | Watch directories for changes. |
+| `stopFileWatching()` | Stop watching and release resources. |
+| `setDevelopmentMode(boolean)` | Toggle development mode at runtime. |
+| `setSceneRootReplacer(Consumer<Parent>)` | Global root callback (last wins). |
+| `setStylesheetReplacer(Consumer<List<String>>)` | Global stylesheet callback. |
+| `registerScene(Scene)` / `unregisterScene(Scene)` | Track scenes for CSS reload. |
+| `getCachedController(Class<T>)` | Cache lookup (only useful for `SINGLETON` controllers). |
+| `clearCache()` | Clear the controller cache. |
 
-### WarmupApplication
+### `WarmupApplication`
 
 | Method | Description |
 |--------|-------------|
-| `enableHotReload()` | Enable development mode and hot-reload |
-| `registerSceneForHotReload(Stage, Parent)` | Register scene for automatic root replacement |
-| `getFxLoader()` | Get the FxLoader instance |
-| `getWarmup()` | Get the Warmup container instance |
+| `registerBeans(Warmup)` | Hook to register additional beans (required override). |
+| `onInit()` | Called after the container is ready. |
+| `onStart(Stage)` | Called when JavaFX starts. |
+| `onStop()` | Called on shutdown; override to release resources. |
+| `enableHotReload()` | Enable development mode and hot-reload. |
+| `registerSceneForHotReload(Stage, FxView<?>)` | Track a view (recommended). |
+| `registerSceneForHotReload(Stage, Parent)` | Global fallback (last wins). |
+| `getFxLoader()` | Access the `FxLoader`. |
+| `getWarmup()` | Access the container. |
+| `createWarmup()` | Override to customize the `Warmup.Builder`. |
 
 ## Development Mode Behavior
 
-When `developmentMode` is enabled:
+When development mode is enabled:
 
-- **Controller Cache**: Cleared on each `createController()` call, ensuring fresh instances
-- **Factory Recompilation**: Container triggers JIT recompilation on `reload()`
-- **File Watching**: Active monitoring of FXML/CSS directories
-- **Scene Updates**: Automatic root replacement via callback
+- Controller caches are cleared on each controller creation.
+- Factory reloads trigger JIT recompilation in the container.
+- Watched directories are polled for changes.
+- Registered scenes receive new roots automatically.
 
-## Important Notes
+## Limitations
 
-### Limitations
+1. **Existing references are not rewritten.** Hot-reload creates new instances;
+   code holding the old controller keeps the old instance.
+2. **Singleton controllers** are recreated on reload. Prefer `PROTOTYPE`.
+3. **File paths** should include both source and compiled resource directories
+   while developing.
+4. **Errors during reload** are propagated to the caller (or logged by the
+   watcher); the currently displayed root is left untouched.
+5. **State is not preserved** across FXML reloads yet (planned for hot-reload
+   2.0).
 
-1. **Existing References**: Hot-reload creates new instances, but existing references held by your code are NOT updated. Only future `resolve()` calls return new instances.
+## Best Practices
 
-2. **Singleton Controllers**: By default, controllers use `Scope.PROTOTYPE`. If you use `Scope.SINGLETON`, be aware that the singleton instance will be destroyed and recreated on reload.
+1. Call `stopFileWatching()` from `onStop()`.
+2. Use `registerSceneForHotReload(Stage, FxView)` for multi-window apps.
+3. Keep controllers as `PROTOTYPE`.
+4. Run without hot-reload periodically to validate production behavior.
 
-3. **File Paths**: When using `startFileWatching()`, ensure paths point to both source and compiled resource directories for complete coverage.
+## Running the Demo
 
-### Best Practices
+```bash
+mvn -pl warmup-javafx-demo javafx:run
+```
 
-1. **Always call `stopFileWatching()`** in `onStop()` to prevent resource leaks
-2. **Use `registerSceneForHotReload()`** to get automatic UI updates
-3. **Keep controllers as PROTOTYPE** scope for predictable behavior
-4. **Test without hot-reload** periodically to ensure production behavior is correct
+The demo shows a `@Singleton` service injected into an `@FxController`,
+annotation-driven CSS and a stage registered for hot-reload. Its
+`DemoWiringTest` verifies the processor → registrar → container pipeline
+without starting the JavaFX toolkit, so it also runs on headless CI.
 
 ## Troubleshooting
 
-### FXML Not Found
+### FXML not found
 
-Ensure FXML files are in the classpath. For annotated controllers, the path is relative to the controller's package unless it starts with `/`.
+Ensure the FXML is on the classpath. Absolute paths start with `/`; relative
+paths are resolved against the controller's package.
 
-### Reload Not Triggering
+### Controller not registered
 
-1. Verify `developmentMode` is enabled: `fxLoader.isDevelopmentMode()`
-2. Check that watched directories exist and are readable
-3. Ensure the controller bean name matches what's being reloaded
+- The class must be annotated with `@FxController` (or registered manually).
+- The annotation processor must be on the annotation processor path.
+- Check the controller's bean name if you registered it manually.
 
-### ClassLoader Leaks
+### `@Inject` field is null
 
-If you notice increasing memory usage during development:
+- The field must not be `private` (the processor rejects private fields).
+- The processor must have generated the controller's factory.
+- The FXML must declare `fx:controller` (or you must call `loadView(Class)`).
 
-1. Ensure `stopFileWatching()` is called on shutdown
-2. Avoid holding long-lived references to controller instances
-3. The container handles ClassLoader cleanup automatically on `reload()`
+### Reload not triggering
+
+1. Confirm `fxLoader.isDevelopmentMode()`.
+2. Confirm the watched directories exist and are readable.
+3. Ensure the bean name matches the reloaded controller.
+
+### ClassLoader leaks
+
+1. Always call `stopFileWatching()`.
+2. Avoid long-lived references to controller instances.
+3. Unregister root replacers when views are disposed.
 
 ## See Also
 
-- [Annotations Reference](annotations.md) - Documentation for `@WarmupFxController` and other annotations
-- [Architecture](architecture.md) - Overall framework architecture
-- [Scopes and Lifecycle](scopes-and-lifecycle.md) - Understanding bean scopes
+- [Annotations Reference](annotations.md)
+- [Architecture](architecture.md)
+- [Scopes and Lifecycle](scopes-and-lifecycle.md)
+- [Compile-Time Processing](compile-time-processing.md)
