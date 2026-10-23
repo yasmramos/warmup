@@ -42,6 +42,33 @@ public class ResolvedBeanDefinition<T> {
     
     /** Cached singleton instance for fast-path resolution (null for PROTOTYPE scope) */
     private volatile T cachedInstance;
+
+    /**
+     * Pre-computed registry indices for each dependency slot of the wrapped
+     * definition, or {@code null} when not yet flattened. A value of -1 means
+     * "not resolved yet", -2 means "not a plain bean reference" (value/marker
+     * dependency). Populated lazily by the container's dependency-flattening
+     * pass so the hot wiring loop can skip string marker checks and index
+     * lookups entirely.
+     */
+    private volatile int[] flatDepIndices;
+
+    /**
+     * Pre-computed {@code @DependsOn} names for this bean, or {@code null}
+     * when not yet computed. An empty array means "no declared dependencies"
+     * and lets the creation path skip the reflective merge entirely.
+     */
+    private volatile String[] dependsOnCache;
+
+    /**
+     * True when at least one constructor dependency slot is a plain bean-name
+     * reference that is NOT a cached singleton (prototype dependency, not yet
+     * instantiated dependency, or unresolved forward reference). When set, the
+     * flattened fast path must fall back to per-slot name resolution for the
+     * affected slots instead of assuming an indexed cache hit. Populated by the
+     * container's dependency-flattening pass and lazily by the wiring loop.
+     */
+    private volatile boolean flatDepHasNonSingleton;
     
     public ResolvedBeanDefinition(BeanDefinition<T> definition) {
         this.definition = definition;
@@ -156,6 +183,56 @@ public class ResolvedBeanDefinition<T> {
         this.wired = wired;
     }
     
+    /**
+     * Gets the pre-computed dependency index array, or {@code null} when the
+     * dependencies have not been flattened yet. See {@link #flatDepIndices}.
+     */
+    public int[] getFlatDepIndices() {
+        return flatDepIndices;
+    }
+
+    /**
+     * Sets the pre-computed dependency index array (container-internal API
+     * used by the dependency-flattening pass).
+     */
+    public void setFlatDepIndices(int[] flatDepIndices) {
+        this.flatDepIndices = flatDepIndices;
+    }
+
+    /**
+     * Gets the cached {@code @DependsOn} names, or {@code null} when not yet
+     * computed. An empty array means the bean declares no dependencies.
+     */
+    public String[] getDependsOnCache() {
+        return dependsOnCache;
+    }
+
+    /**
+     * Sets the cached {@code @DependsOn} names (container-internal API used
+     * by the effective-depends-on computation).
+     */
+    public void setDependsOnCache(String[] dependsOnCache) {
+        this.dependsOnCache = dependsOnCache;
+    }
+
+    /**
+     * Checks whether any flattened dependency slot is a non-singleton
+     * reference (prototype bean or not-yet-instantiated singleton). See
+     * {@link #flatDepHasNonSingleton}.
+     */
+    public boolean hasFlatDepNonSingleton() {
+        return flatDepHasNonSingleton;
+    }
+
+    /**
+     * Marks that at least one flattened dependency slot is a non-singleton
+     * reference (container-internal API used by the flattening pass and the
+     * wiring loop).
+     */
+    public void setFlatDepHasNonSingleton(boolean flatDepHasNonSingleton) {
+        this.flatDepHasNonSingleton = flatDepHasNonSingleton;
+    }
+
     /**
      * Gets the cached singleton instance for fast-path resolution.
      * Returns null if not yet cached or if this is a PROTOTYPE bean.
