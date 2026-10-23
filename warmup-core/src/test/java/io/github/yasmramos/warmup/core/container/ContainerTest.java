@@ -1353,6 +1353,45 @@ class ContainerTest {
     }
 
     @Test
+    void testResolveByIndexSingletonReturnsCachedInstance() {
+        var definition = new BeanDefinition<>(TestService.class, "indexedSingleton");
+        container.register(definition, null);
+
+        int index = container.indexOf("indexedSingleton");
+        assertTrue(index >= 0);
+
+        // Before first resolution the singleton is not cached yet: fast path returns null.
+        assertNull(container.resolveByIndex(index));
+
+        // After name-based resolution the instance is cached and reachable by index.
+        TestService viaResolve = container.resolve(TestService.class);
+        assertNotNull(viaResolve);
+        assertSame(viaResolve, container.<TestService>resolveByIndex(index));
+    }
+
+    @Test
+    void testResolveByIndexPrototypeCreatesNewInstances() {
+        var definition = new BeanDefinition<>(TestService.class, "indexedPrototype", Scope.PROTOTYPE);
+        container.register(definition, null);
+
+        int index = container.indexOf("indexedPrototype");
+        assertTrue(index >= 0);
+
+        TestService first = container.resolveByIndex(index);
+        TestService second = container.resolveByIndex(index);
+
+        assertNotNull(first, "prototype indexed path must never return null");
+        assertNotNull(second);
+        assertNotSame(first, second, "each indexed prototype resolution must create a new instance");
+    }
+
+    @Test
+    void testResolveByIndexUnknownIndexReturnsNull() {
+        assertNull(container.resolveByIndex(-1));
+        assertNull(container.resolveByIndex(9999));
+    }
+
+    @Test
     void testIndexOf() {
         var definition = new BeanDefinition<>(TestService.class, "indexedBean");
         container.register(definition, null);

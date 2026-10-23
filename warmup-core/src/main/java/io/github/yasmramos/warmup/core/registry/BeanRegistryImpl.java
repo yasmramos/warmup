@@ -59,6 +59,10 @@ public class BeanRegistryImpl implements BeanRegistry {
     // Using Object[] with VarHandle for cheaper reads than AtomicReferenceArray volatile access
     // VarHandle.getOpaque provides acquire semantics for safe publication without full volatile cost
     private volatile Object[] singletonInstancesByIndex = new Object[64];
+    // Parallel array of resolved definitions keyed by the same integer index.
+    // Enables scope-aware indexed resolution: singletons read the cached-instance
+    // array, prototypes read their definition (and compiled factory) from here.
+    private volatile ResolvedBeanDefinition<?>[] definitionsByIndex = new ResolvedBeanDefinition<?>[64];
     // VarHandle for array element access with acquire/release semantics
     private static final VarHandle ARRAY_ELEMENT_HANDLE;
     static {
@@ -117,6 +121,9 @@ public class BeanRegistryImpl implements BeanRegistry {
         // Create and cache the ResolvedBeanDefinition with pre-computed index
         ResolvedBeanDefinition<T> resolvedDef = new ResolvedBeanDefinition<>(definition, index);
         resolvedByName.put(name, resolvedDef);
+        // Publish the definition in the index-parallel array for scope-aware
+        // indexed resolution (prototypes never appear in the instance array).
+        setDefinitionByIndex(index, resolvedDef);
         
         // Track all beans of this type for ambiguity detection
         allBeansByType.computeIfAbsent(definition.type(), k -> new ArrayList<>()).add(name);
@@ -163,15 +170,54 @@ public class BeanRegistryImpl implements BeanRegistry {
                 }
             }
             
-            // CAS to replace the array reference
+            // Grow the parallel definitions array in lockstep so both arrays
+            // always share the same capacity and index semantics.
+            ResolvedBeanDefinition<?>[] currentDefs = definitionsByIndex;
+            ResolvedBeanDefinition<?>[] newDefs = java.util.Arrays.copyOf(currentDefs, newSize);
+
+            // CAS to replace the array references
             synchronized (this) {
                 if (singletonInstancesByIndex == current) {
                     singletonInstancesByIndex = newArray;
+                    definitionsByIndex = newDefs;
                     break;
                 }
             }
             // Another thread updated it, retry with the new array
         }
+    }
+
+    /**
+     * Stores a resolved bean definition in the index-parallel array so that
+     * scope-aware indexed resolution can find prototypes (which are never
+     * present in the cached-instance array). Registration is single-writer per
+     * index, so a plain volatile-array write is safe here.
+     *
+     * @param index the bean index assigned during registration
+     * @param resolvedDef the pre-computed resolved definition
+     */
+    public void setDefinitionByIndex(int index, ResolvedBeanDefinition<?> resolvedDef) {
+        ResolvedBeanDefinition<?>[] arr = definitionsByIndex;
+        if (index >= 0 && index < arr.length) {
+            arr[index] = resolvedDef;
+        }
+    }
+
+    /**
+     * Returns the resolved bean definition stored at the given index, or null
+     * if out of range. Used by the container's scope-aware indexed fast path.
+     *
+     * @param <T> the bean type
+     * @param index the bean index
+     * @return the resolved definition at that index, or null
+     */
+    @SuppressWarnings("unchecked")
+    public <T> ResolvedBeanDefinition<T> getResolvedByIndex(int index) {
+        ResolvedBeanDefinition<?>[] arr = definitionsByIndex;
+        if (index < 0 || index >= arr.length) {
+            return null;
+        }
+        return (ResolvedBeanDefinition<T>) arr[index];
     }
 
     @Override
@@ -470,6 +516,9 @@ public class BeanRegistryImpl implements BeanRegistry {
         }
         definitionsByName.clear();
         resolvedByName.clear();
+        // Clear the index-parallel definitions array so stale entries from a
+        // previous registration generation are never visible after clear().
+        java.util.Arrays.fill(definitionsByIndex, null);
         definitionsByType.clear();
         typeToNameMap.clear();
         allBeansByType.clear();
