@@ -782,6 +782,12 @@ public class Container implements HotReloadCapable, AutoCloseable {
         }
         dependencyGraph.registerBean(definition.name(), definition.dependencies(), isDeferred);
 
+        // Invalidate ClassValue cache in case a previous resolution cached NOT_FOUND
+        resolvedDefinitionsByClassValue.remove(definition.type());
+
+        // Increment resolution version to invalidate any cached BeanHandles
+        resolutionVersion++;
+
         // Beans registered after startup still contribute @EventListener methods: scan this
         // bean so its listeners are attached without requiring a container restart.
         registerEventListenersFor(definition.name());
