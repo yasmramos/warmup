@@ -75,7 +75,9 @@ import java.util.*;
     "io.github.yasmramos.warmup.annotations.Profile",
     "io.github.yasmramos.warmup.annotations.Conditional",
     "io.github.yasmramos.warmup.annotations.EventListener",
-    "io.github.yasmramos.warmup.javafx.FxController"
+    "io.github.yasmramos.warmup.javafx.FxController",
+    "io.github.yasmramos.warmup.javafx.ViewScoped",
+    "io.github.yasmramos.warmup.javafx.WindowScoped"
 })
 @SupportedSourceVersion(SourceVersion.RELEASE_17)
 public class WarmupProcessor extends AbstractProcessor {
@@ -187,6 +189,12 @@ public class WarmupProcessor extends AbstractProcessor {
         
         // Process @FxController annotation (by qualified name to avoid coupling)
         processFxControllers(roundEnv, filer, messager);
+        
+        // Process UI-scoped beans (discovered by qualified name, like @FxController)
+        processUiScopedClasses(roundEnv, filer, messager,
+                "io.github.yasmramos.warmup.javafx.ViewScoped", "@ViewScoped", "view");
+        processUiScopedClasses(roundEnv, filer, messager,
+                "io.github.yasmramos.warmup.javafx.WindowScoped", "@WindowScoped", "window");
         
         // Process @Factory classes with @Bean methods
         processFactoryClasses(roundEnv, filer, messager);
@@ -386,6 +394,60 @@ public class WarmupProcessor extends AbstractProcessor {
     }
     
     /**
+     * Processes classes annotated with a JavaFX UI scope annotation.
+     * The annotations are discovered by qualified name so the processor does not
+     * depend on warmup-javafx at compile time. Beans are registered with
+     * {@code Scope.CUSTOM} and the given scope name, which is resolved by the
+     * matching {@code ScopeHandler} at runtime.
+     */
+    private void processUiScopedClasses(RoundEnvironment roundEnv, Filer filer, Messager messager,
+                                        String annotationFqn, String annotationName, String scopeName) {
+        TypeElement annotationTypeElement = processingEnv.getElementUtils().getTypeElement(annotationFqn);
+        if (annotationTypeElement == null) {
+            return;
+        }
+
+        for (Element element : roundEnv.getElementsAnnotatedWith(annotationTypeElement)) {
+            if (element.getKind() != ElementKind.CLASS) {
+                messager.printMessage(Diagnostic.Kind.ERROR,
+                        annotationName + " only applies to classes", element);
+                continue;
+            }
+
+            TypeElement typeElement = (TypeElement) element;
+            if (!validateNestedClass(typeElement, messager, annotationName)) {
+                continue;
+            }
+
+            String beanName = extractValueFromAnnotationMirror(element, annotationTypeElement);
+            try {
+                String factoryClassName = generateFactoryForClassBytecode(typeElement, "CUSTOM", beanName, filer);
+                storeBeanInfo(typeElement, beanName, "CUSTOM", scopeName, factoryClassName);
+            } catch (IOException e) {
+                messager.printMessage(Diagnostic.Kind.ERROR,
+                        "Failed to generate factory: " + e.getMessage(), element);
+            }
+        }
+    }
+
+    /**
+     * Extracts the optional {@code value()} used as an explicit bean name.
+     */
+    private String extractValueFromAnnotationMirror(Element element, TypeElement annotationType) {
+        for (AnnotationMirror mirror : element.getAnnotationMirrors()) {
+            if (mirror.getAnnotationType().toString().equals(annotationType.getQualifiedName().toString())) {
+                for (Map.Entry<? extends ExecutableElement, ? extends AnnotationValue> entry : mirror.getElementValues().entrySet()) {
+                    if (entry.getKey().getSimpleName().toString().equals("value")) {
+                        Object value = entry.getValue().getValue();
+                        return value instanceof String stringValue ? stringValue : "";
+                    }
+                }
+            }
+        }
+        return "";
+    }
+
+    /**
      * Extracts the scope value from an annotation mirror.
      * Default is PROTOTYPE for @FxController.
      */
@@ -470,16 +532,22 @@ public class WarmupProcessor extends AbstractProcessor {
      * Stores bean information for class-level stereotypes.
      */
     private void storeBeanInfo(TypeElement typeElement, String explicitName, String scope, String factoryClassName) {
-        String packageName = getPackageName(typeElement);
-        String className = getFullyQualifiedTypeName(typeElement);
-        String beanName = explicitName.isEmpty() ? typeElement.getSimpleName().toString() : explicitName;
-        
         // Extract scope name from @Bean annotation if present (for CUSTOM scope)
         String scopeName = "";
         Bean beanAnnotation = typeElement.getAnnotation(Bean.class);
         if (beanAnnotation != null && "CUSTOM".equals(beanAnnotation.scope().name())) {
             scopeName = beanAnnotation.scopeName();
         }
+        storeBeanInfo(typeElement, explicitName, scope, scopeName, factoryClassName);
+    }
+
+    /**
+     * Stores bean metadata with an explicit custom scope name.
+     */
+    private void storeBeanInfo(TypeElement typeElement, String explicitName, String scope, String scopeName, String factoryClassName) {
+        String packageName = getPackageName(typeElement);
+        String className = getFullyQualifiedTypeName(typeElement);
+        String beanName = explicitName.isEmpty() ? typeElement.getSimpleName().toString() : explicitName;
         
         // Check if the bean is marked as @Primary
         boolean isPrimary = typeElement.getAnnotation(Primary.class) != null;
@@ -889,7 +957,8 @@ public class WarmupProcessor extends AbstractProcessor {
             isFieldOrSetter.add(false);
         }
         
-        BeanInfo methodBeanInfo = new BeanInfo(packageName, classNameForRegistration, beanName, factoryClassName, scope, "", depNames, providerFlags, new ArrayList<>(), new ArrayList<>(), isPrimary, new ArrayList<>(), profiles, conditionClassNames, isDeferred, isFieldOrSetter);
+        BeanInfo methodBeanInfo = new BeanInfo(packageName, classNameForRegistration, beanName, factoryClassName, scope, 
+                "CUSTOM".equals(scope) ? beanAnnotation.scopeName() : "", depNames, providerFlags, new ArrayList<>(), new ArrayList<>(), isPrimary, new ArrayList<>(), profiles, conditionClassNames, isDeferred, isFieldOrSetter);
         applyOrderingMetadata(methodBeanInfo, null, method);
         processedBeans.add(methodBeanInfo);
     }
@@ -1549,7 +1618,11 @@ public class WarmupProcessor extends AbstractProcessor {
             mv.visitLdcInsn(beanInfo.beanName);
             
             // Push scope enum
-            String scopeEnum = beanInfo.scope.equals("PROTOTYPE") ? "PROTOTYPE" : "SINGLETON";
+            String scopeEnum = switch (beanInfo.scope) {
+                case "PROTOTYPE" -> "PROTOTYPE";
+                case "CUSTOM" -> "CUSTOM";
+                default -> "SINGLETON";
+            };
             mv.visitFieldInsn(org.objectweb.asm.Opcodes.GETSTATIC, "io/github/yasmramos/warmup/core/scope/Scope", scopeEnum, "Lio/github/yasmramos/warmup/core/scope/Scope;");
             
             // Push LifecycleCallbacks.empty()
@@ -1602,9 +1675,12 @@ public class WarmupProcessor extends AbstractProcessor {
                 }
             }
             
+            // Push the custom scope name (empty string for non-CUSTOM scopes)
+            mv.visitLdcInsn(beanInfo.scopeName != null ? beanInfo.scopeName : "");
+            
             // Invoke BeanDefinition constructor
-            // Constructor descriptor: (Ljava/lang/Class;Ljava/lang/String;Lio/github/yasmramos/warmup/core/scope/Scope;Lio/github/yasmramos/warmup/core/lifecycle/LifecycleCallbacks;Z[Ljava/lang/Object;[Ljava/lang/String;[Ljava/lang/String;)V
-            StringBuilder beanDefCtorDesc = new StringBuilder("(Ljava/lang/Class;Ljava/lang/String;Lio/github/yasmramos/warmup/core/scope/Scope;Lio/github/yasmramos/warmup/core/lifecycle/LifecycleCallbacks;Z[Ljava/lang/Object;[Ljava/lang/String;[Ljava/lang/String;)V");
+            // Constructor descriptor: (Ljava/lang/Class;Ljava/lang/String;Lio/github/yasmramos/warmup/core/scope/Scope;Lio/github/yasmramos/warmup/core/lifecycle/LifecycleCallbacks;Z[Ljava/lang/Object;[Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;)V
+            StringBuilder beanDefCtorDesc = new StringBuilder("(Ljava/lang/Class;Ljava/lang/String;Lio/github/yasmramos/warmup/core/scope/Scope;Lio/github/yasmramos/warmup/core/lifecycle/LifecycleCallbacks;Z[Ljava/lang/Object;[Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;)V");
             mv.visitMethodInsn(org.objectweb.asm.Opcodes.INVOKESPECIAL, beanDefInternal, "<init>", beanDefCtorDesc.toString(), false);
             
             // Apply @Order so collection injection can order this bean (lower value first).
