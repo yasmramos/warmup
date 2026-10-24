@@ -1,0 +1,76 @@
+# AGENT.md — Guía para agentes de IA en Warmup
+
+> **Propósito**: Este archivo es la **fuente única de verdad** para cualquier agente de IA
+> (Claude, Copilot, Cursor, Aider, etc.) que trabaje en Warmup. Léelo entero antes de tocar
+> código. Si algo no está aquí, pregunta antes de improvisar.
+>
+> **Última actualización**: 2025-01-XX
+> **Versión del proyecto**: 0.1.0-SNAPSHOT
+> **Branch actual**: `develop`
+
+---
+
+## 1. Idioma y estilo
+
+### 1.1. Idioma
+- **Código, comentarios, Javadoc, commits y documentación**: **inglés** (sin excepciones).
+- **Discusión con el humano**: español (si el humano escribe en español).
+- **Mensajes de error de compilación/runtime**: inglés (los usuarios internacionales los verán).
+
+### 1.2. Javadoc
+- **Obligatorio** en toda clase/método `public` o `protected`.
+- **Opcional** en `private`/`package-private` (pero recomendado si la lógica no es obvia).
+- Incluir `@param`, `@return`, `@throws`, `@since` (versión), y `@see` cuando aplique.
+- Usar `<p>` para párrafos, `<ul>` para listas, `{@code ...}` para código inline.
+- **Ejemplos**:
+  - `WarmupApplication.java` (Javadoc ejemplar de clase base).
+  - `Container.reload(String)` (Javadoc ejemplar de método complejo).
+- **Prohibido**: `@author` (el repo ya tiene autor), Javadoc vacío (`/** */`), Javadoc que repite el nombre del método.
+
+### 1.3. Comentarios inline
+- **Solo para "por qué"**, no para "qué". El código dice el qué.
+- **Prohibido**: `// incrementa i`, `// llama al método`, `// TODO` sin issue, `// FIXME` sin issue.
+- **Preferido**: `// OPTIMIZATION: skip singleton cache lookup for prototypes`, `// PHASE 2: inject deferred dependencies after publishing instance`.
+- **TODOs**: siempre con issue (`// TODO(#123): ...`) o con contexto (`// TODO: add timeout when X is implemented`).
+
+### 1.4. Nombres
+- **Inglés**, camelCase, descriptivos.
+- **Prohibido**: `tmp`, `data`, `foo`, `bar`, `x1`, `doStuff()`, `handle()`, `process()`, `manager`, `helper`, `util`, `service` (a secas).
+- **Preferido**: `resolvedDefinition`, `factoryCache`, `injectDeferredDependencies()`, `isPrototypeController()`, `registeredScenes`.
+
+---
+
+## 2. Workflow de Git y commits
+
+### 2.1. Branch strategy
+- **`develop`**: rama de integración. Todo se mergea aquí primero.
+- **`main`**: solo para releases (merge desde `develop`).
+- **Feature branches**: `feature/<scope>-<short-desc>` cortadas desde `develop`.
+  - Ejemplo: `feature/container-fix-classvalue-invalidation`.
+- **Bugfix branches**: `fix/<scope>-<short-desc>`.
+  - Ejemplo: `fix/processor-registrar-collision`.
+- **Hotfix branches**: `hotfix/<scope>-<short-desc>` (desde `main`, merge a `main` y `develop`).
+- **Docs branches**: `docs/<short-desc>`.
+- **Refactor branches**: `refactor/<scope>-<short-desc>`.
+
+### 2.2. Commits (Conventional Commits, inglés)
+- **Formato**: `<type>(<scope>): <subject>`
+- **Tipos permitidos**:
+  - `feat`: nueva feature (para el usuario).
+  - `fix`: bugfix.
+  - `docs`: solo documentación.
+  - `style`: formato (no cambia lógica).
+  - `refactor`: cambio de código (no nueva feature, no bugfix).
+  - `perf`: mejora de rendimiento.
+  - `test`: añadir/corregir tests.
+  - `build`: cambios en build system (Maven, Gradle, CI).
+  - `ci`: cambios en CI config.
+  - `chore`: tareas de mantenimiento (deps, versiones).
+  - `revert`: revertir commit anterior.
+- **Scopes permitidos**:
+  - `core`, `processor`, `javafx`, `benchmarks`, `examples`, `test`, `docs`, `ci`, `build`, `deps`, `release`.
+  - Si no encaja ninguno, usar el nombre del módulo (`asm`, `spi`, `native`).
+- **Subject**: imperativo, sin punto final, ≤72 caracteres.
+- **Body** (opcional): "por qué", no "qué". Líneas ≤100 caracteres.
+- **Footer** (opcional): `BREAKING CHANGE: ...`, `Closes #123`, `Refs #456`.
+- **Ejemplos válidos**:

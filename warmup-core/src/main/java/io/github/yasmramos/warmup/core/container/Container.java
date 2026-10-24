@@ -895,27 +895,33 @@ public class Container implements HotReloadCapable, AutoCloseable {
             return instance;
         }
 
-        // OPTIMIZATION 2: Fast-path for SINGLETON/CUSTOM with cached instance
+        // CUSTOM scopes are managed by an external handler: never reuse the
+        // singleton caches for them, since instances are per scope instance.
+        boolean singleton = resolvedDef.scope() == Scope.SINGLETON;
+
+        // OPTIMIZATION 2: Fast-path for SINGLETON with cached instance
         // Skip index lookup and Map.get() if instance is already cached in ResolvedBeanDefinition
-        T cachedInstance = resolvedDef.getCachedInstance();
-        if (cachedInstance != null) {
-            return cachedInstance;
-        }
-
-        // SINGLETON/CUSTOM path: use indexed resolution if index is cached
-        int index = resolvedDef.getOrComputeIndex(registry);
-        if (index >= 0) {
-            // Try fast indexed resolution first (avoids String hashing)
-            T indexedInstance = (T) registry.getIfPresent(index);
-            if (indexedInstance != null) {
-                return indexedInstance;
+        if (singleton) {
+            T cachedInstance = resolvedDef.getCachedInstance();
+            if (cachedInstance != null) {
+                return cachedInstance;
             }
-        }
 
-        // Fall back to name-based lookup for singletons not yet cached
-        T nameBasedInstance = registry.getIfPresent(name);
-        if (nameBasedInstance != null) {
-            return nameBasedInstance;
+            // SINGLETON path: use indexed resolution if index is cached
+            int index = resolvedDef.getOrComputeIndex(registry);
+            if (index >= 0) {
+                // Try fast indexed resolution first (avoids String hashing)
+                T indexedInstance = (T) registry.getIfPresent(index);
+                if (indexedInstance != null) {
+                    return indexedInstance;
+                }
+            }
+
+            // Fall back to name-based lookup for singletons not yet cached
+            T nameBasedInstance = registry.getIfPresent(name);
+            if (nameBasedInstance != null) {
+                return nameBasedInstance;
+            }
         }
 
         // Singleton not yet created, use registry.getInstance for thread-safe lazy init
@@ -937,11 +943,15 @@ public class Container implements HotReloadCapable, AutoCloseable {
             // Non-wired or no factory: fall back to createBean lambda
             instance = registry.getInstance(resolvedDef.getDefinition(), () -> createBean(resolvedDef));
         }
-        // Publish the created instance for fast-path on subsequent resolutions
-        resolvedDef.setCachedInstance(instance);
-        // Also populate the indexed array for fast indexed resolution
-        if (registry instanceof BeanRegistryImpl impl) {
-            impl.setInstanceByIndex(resolvedDef.getIndex(), instance);
+        // Publish the created instance for fast-path on subsequent resolutions.
+        // Only SINGLETON instances belong in the resolved-definition cache;
+        // CUSTOM scope instances live in their own scope handler.
+        if (singleton) {
+            resolvedDef.setCachedInstance(instance);
+            // Also populate the indexed array for fast indexed resolution
+            if (registry instanceof BeanRegistryImpl impl) {
+                impl.setInstanceByIndex(resolvedDef.getIndex(), instance);
+            }
         }
         return instance;
     }
@@ -1012,7 +1022,7 @@ public class Container implements HotReloadCapable, AutoCloseable {
         // OPTIMIZATION 3: For cached singletons, return instance directly without delegation
         // This avoids re-evaluating scope and an extra method call that can inhibit inlining
         T cachedInstance = resolvedDef.getCachedInstance();
-        if (cachedInstance != null && !resolvedDef.isPrototype()) {
+        if (cachedInstance != null && resolvedDef.scope() == Scope.SINGLETON) {
             if (metricsEnabled) {
                 recordMetrics(resolvedDef.getDefinition(), System.nanoTime() - startTime);
             }
@@ -1054,28 +1064,35 @@ public class Container implements HotReloadCapable, AutoCloseable {
             return instance;
         }
 
-        // OPTIMIZATION 2: Fast-path for SINGLETON/CUSTOM with cached instance
+        // CUSTOM scopes are managed by an external handler (for example the
+        // JavaFX VIEW/WINDOW scopes). Their instances must never be cached on
+        // the resolved definition: the same type can legitimately have a
+        // different instance per scope instance.
+        boolean singleton = resolvedDef.scope() == Scope.SINGLETON;
+
+        // OPTIMIZATION 2: Fast-path for SINGLETON with cached instance
         // Skip index lookup and Map.get() if instance is already cached in ResolvedBeanDefinition
-        T cachedInstance = resolvedDef.getCachedInstance();
-        if (cachedInstance != null) {
-            return cachedInstance;
-        }
-
-        // SINGLETON/CUSTOM path: use indexed resolution if index is cached
-        int index = resolvedDef.getOrComputeIndex(registry);
-        if (index >= 0) {
-            // Try fast indexed resolution first (avoids String hashing)
-            T indexedInstance = (T) registry.getIfPresent(index);
-            if (indexedInstance != null) {
-                return indexedInstance;
+        if (singleton) {
+            T cachedInstance = resolvedDef.getCachedInstance();
+            if (cachedInstance != null) {
+                return cachedInstance;
             }
-        }
 
-        // Fall back to name-based lookup for singletons not yet cached
-        String name = resolvedDef.name();
-        T nameBasedInstance = registry.getIfPresent(name);
-        if (nameBasedInstance != null) {
-            return nameBasedInstance;
+            // SINGLETON path: use indexed resolution if index is cached
+            int index = resolvedDef.getOrComputeIndex(registry);
+            if (index >= 0) {
+                // Try fast indexed resolution first (avoids String hashing)
+                T indexedInstance = (T) registry.getIfPresent(index);
+                if (indexedInstance != null) {
+                    return indexedInstance;
+                }
+            }
+
+            // Fall back to name-based lookup for singletons not yet cached
+            T nameBasedInstance = registry.getIfPresent(resolvedDef.name());
+            if (nameBasedInstance != null) {
+                return nameBasedInstance;
+            }
         }
 
         // Singleton not yet created, use registry.getInstance for thread-safe lazy init
@@ -1099,8 +1116,12 @@ public class Container implements HotReloadCapable, AutoCloseable {
             // Deferred injection happens AFTER getInstance returns to avoid Recursive update
             instance = registry.getInstance(resolvedDef.getDefinition(), () -> createBeanWithoutDeferredInjection(resolvedDef));
         }
-        // Publish the created instance for fast-path on subsequent resolutions
-        resolvedDef.setCachedInstance(instance);
+        // Publish the created instance for fast-path on subsequent resolutions.
+        // Only SINGLETON instances are cached here; CUSTOM scopes keep their
+        // instances in their own scope handler.
+        if (singleton) {
+            resolvedDef.setCachedInstance(instance);
+        }
 
         // PHASE 2: Inject deferred dependencies (@Lazy field/setter injections) AFTER the bean is published
         // This breaks circular dependencies by ensuring the instance is visible in singletonInstances

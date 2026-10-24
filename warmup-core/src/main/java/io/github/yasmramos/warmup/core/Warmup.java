@@ -21,6 +21,7 @@ import io.github.yasmramos.warmup.core.jit.CompiledFactory;
 import io.github.yasmramos.warmup.core.lifecycle.LifecycleCallbacks;
 import io.github.yasmramos.warmup.core.registry.BeanDefinition;
 import io.github.yasmramos.warmup.core.scope.Scope;
+import io.github.yasmramos.warmup.core.scope.ScopeHandler;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -298,6 +299,66 @@ public class Warmup implements AutoCloseable {
             }
         };
         container.registerFactory(name, type, factory);
+    }
+
+    /**
+     * Registers a bean with a Supplier, an explicit {@link Scope} and the name
+     * of a custom scope handler.
+     * <p>
+     * Use this overload for {@link Scope#CUSTOM} beans whose lifecycle is
+     * delegated to a {@link ScopeHandler} registered with
+     * {@link #registerScope(String, ScopeHandler)}.
+     * </p>
+     *
+     * @param <T> the bean type
+     * @param name the bean name
+     * @param type the bean type
+     * @param supplier the supplier that creates bean instances
+     * @param scope the scope for this bean
+     * @param scopeName the custom scope name (ignored for non-CUSTOM scopes)
+     * @throws IllegalStateException if a bean with this name already exists
+     */
+    public <T> void register(String name, Class<T> type, Supplier<T> supplier, Scope scope, String scopeName) {
+        LifecycleCallbacks<T> lifecycle = LifecycleCallbacks.empty();
+        BeanDefinition<T> definition = new BeanDefinition<>(
+                type, name, scope, lifecycle, false, new Object[0], new String[0], new String[0], scopeName
+        );
+        container.registerDynamic(definition);
+
+        CompiledFactory<T> factory = new CompiledFactory<T>() {
+            @Override
+            public T create(Object... dependencies) {
+                return supplier.get();
+            }
+
+            @Override
+            public Class<T> getBeanType() {
+                return type;
+            }
+        };
+        container.registerFactory(name, type, factory);
+    }
+
+    /**
+     * Registers a custom scope handler. Beans declared with
+     * {@link Scope#CUSTOM} and a matching scope name are cached by the handler
+     * according to its lifecycle semantics.
+     *
+     * @param name the scope name (e.g. {@code "view"})
+     * @param handler the scope handler implementation
+     */
+    public void registerScope(String name, ScopeHandler handler) {
+        container.registerScope(name, handler);
+    }
+
+    /**
+     * Returns a previously registered scope handler.
+     *
+     * @param name the scope name
+     * @return the handler, or {@code null} when none is registered
+     */
+    public ScopeHandler getScopeHandler(String name) {
+        return container.getScopeHandler(name);
     }
 
     public boolean isDevelopmentMode() {
