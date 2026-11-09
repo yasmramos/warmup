@@ -138,6 +138,20 @@ public class ResolvedBeanDefinition<T> {
                 if (factory == null) {
                     resolvedFactory = (CompiledFactory<T>) computedFactory;
                     factory = resolvedFactory;
+                    // A JIT factory produced after the startup wiring pass was
+                    // never wired to its dependency factories. Reset the stale
+                    // wired flag so the lazy-wiring retry can wire THIS exact
+                    // factory instance before the allocation-free get() path
+                    // is used.
+                    if (factory != null && !compileTime) {
+                        this.wired = false;
+                    }
+                } else if (computedFactory != null && factory != computedFactory && !compileTime) {
+                    // Late registration replaced the compiled factory: publish
+                    // the new one and force a re-wire of the current instance.
+                    resolvedFactory = (CompiledFactory<T>) computedFactory;
+                    this.wired = false;
+                    factory = resolvedFactory;
                 }
             }
         }
@@ -149,6 +163,11 @@ public class ResolvedBeanDefinition<T> {
      */
     public void setResolvedFactory(CompiledFactory<T> factory) {
         this.resolvedFactory = factory;
+        // The freshly installed factory has not been wired yet; drop any stale
+        // wired flag so the lazy-wiring retry runs against this instance.
+        if (factory != null && !compileTime) {
+            this.wired = false;
+        }
     }
     
     /**

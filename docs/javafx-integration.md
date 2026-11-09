@@ -14,14 +14,19 @@ The module provides:
   by the annotation processor and registered as beans.
 - **Full DI for controllers**: constructor and field injection, `@Value`,
   scopes, profiles, conditions, ordering… everything the core container offers.
+- **UI scopes**: `@ViewScoped` beans live for the lifetime of one loaded view;
+  `@WindowScoped` beans are shared by all views of the same window.
 - **Typed FXML loading**: `FxView<T>` returns the root node *and* the controller
-  instance that the container created.
+  instance that the container created. `FxView` implements `AutoCloseable` to
+  destroy its view scope.
 - **Annotation-driven resources**: `bundle` and `css` attributes are resolved
   automatically when a view is loaded.
 - **Hot-reload**: FXML, CSS and controller factories can be reloaded while the
-  application is running, with per-scene tracking.
+  application is running, with per-scene tracking; reloading destroys the
+  previous view scope.
 - **`WarmupApplication`**: a ready-to-use `Application` base class that boots
-  the container and exposes the loader.
+  the container, activates the primary window scope during `start`, and shuts
+  down cleanly on `stop`.
 
 A complete, runnable example lives in [`warmup-javafx-demo`](../warmup-javafx-demo).
 
@@ -233,6 +238,75 @@ fxLoader.reloadCss("/com/example/styles.css");
 
 Stylesheets declared with `@FxController(css = ...)` are loaded and tracked
 automatically when the view is loaded.
+
+## UI Scopes (VIEW and WINDOW)
+
+`warmup-javafx` adds two custom scopes managed by `FxLoader`:
+
+| Annotation | Scope name | Lifetime | Notes |
+|-----------|------------|----------|-------|
+| `@ViewScoped` | `view` | One `FxView` instance. Destroyed when the view is closed or hot-reloaded. | Beans resolved while a view is loading (e.g. in a controller constructor) share the same instance within that view. |
+| `@WindowScoped` | `window` | One JavaFX `Window` (e.g. `Stage`). Shared by every view loaded for that window. | Must be resolved while the window scope is active. |
+
+### Usage
+
+```java
+import io.github.yasmramos.warmup.javafx.ViewScoped;
+import io.github.yasmramos.warmup.javafx.WindowScoped;
+
+@ViewScoped
+public class ViewSession implements AutoCloseable {
+    @Override public void close() { /* cleanup */ }
+}
+
+@WindowScoped
+public class WorkspaceState {
+    @PreDestroy
+    void cleanup() { /* lifecycle hook */ }
+}
+
+@FxController(fxml = "/com/example/editor.fxml")
+public class EditorController {
+    public EditorController(@ViewScoped ViewSession session,
+                            @WindowScoped WorkspaceState state) {
+        // ...
+    }
+}
+```
+
+### Lifecycle
+
+- **View scope**: Created automatically by `FxLoader.loadView(...)` and activated
+  on the thread that runs `FXMLLoader.load()`. It is destroyed when
+  `FxView.close()` is called, when the view is hot-reloaded, or by
+  `FxLoader.closeAll()`. `ScopedBeanStore` calls `@PreDestroy` methods; if none
+  exist, it calls `AutoCloseable.close()`.
+- **Window scope**: Created on first use for a `Window`. `WarmupApplication`
+  activates the primary stage's window scope around `onStart`. You can activate
+  it manually with `fxLoader.beginWindowScope(window) / endWindowScope()` or
+  `fxLoader.withWindow(window, () -> { ... })`. It is destroyed when
+  `fxLoader.closeWindow(window)` is called or when the window is hidden
+  (automatically registered by `WarmupApplication`), and also by `closeAll()`.
+- **Errors**: Resolving a `@ViewScoped` bean outside an active view scope throws
+  `IllegalStateException`. Resolving a `@WindowScoped` bean outside an active
+  window scope throws `IllegalStateException` with guidance to use
+  `WarmupApplication#onStart` or `FxLoader#withWindow`.
+
+### Programmatic API
+
+```java
+// Load a view tied to a specific window (shares that window scope)
+FxView<EditorController> view = fxLoader.loadView(EditorController.class, stage);
+
+// Close just that window's scope
+fxLoader.closeWindow(stage);
+
+// Close all view and window scopes
+fxLoader.closeAll();
+
+// Run with a window scope active (if not already active)
+fxLoader.withWindow(stage, () -> warmup.resolve(WorkspaceState.class));
+```
 
 ## API Reference
 

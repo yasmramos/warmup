@@ -5,6 +5,7 @@ import javafx.collections.ObservableList;
 import javafx.fxml.FXMLLoader;
 import javafx.scene.Parent;
 import javafx.scene.Scene;
+import javafx.stage.Window;
 
 import java.io.IOException;
 import java.net.URL;
@@ -62,6 +63,10 @@ public class FxLoader {
     private final Map<String, Long> lastReloadTime = new ConcurrentHashMap();
     private static final long DEBOUNCE_MS = 200;
 
+    // UI scopes (VIEW / WINDOW)
+    private final ViewScopeHandler viewScopeHandler = new ViewScopeHandler();
+    private final WindowScopeHandler windowScopeHandler = new WindowScopeHandler();
+
     /**
      * Holds information about a loaded FXML for potential hot-reload.
      */
@@ -70,12 +75,15 @@ public class FxLoader {
         final String fxmlPath;
         final ResourceBundle resourceBundle;
         final Class<?> controllerClass;
+        final Window window;
         Parent lastLoadedRoot;
+        ScopedBeanStore viewScope;
 
-        LoadedFxmlInfo(String fxmlPath, ResourceBundle resourceBundle, Class<?> controllerClass) {
+        LoadedFxmlInfo(String fxmlPath, ResourceBundle resourceBundle, Class<?> controllerClass, Window window) {
             this.fxmlPath = fxmlPath;
             this.resourceBundle = resourceBundle;
             this.controllerClass = controllerClass;
+            this.window = window;
         }
     }
 
@@ -104,6 +112,13 @@ public class FxLoader {
         this.loadedFxmlMap = new ConcurrentHashMap<>();
         this.loadedCssMap = new ConcurrentHashMap<>();
         this.registeredScenes = new CopyOnWriteArrayList<>();
+
+        // Register the UI scope handlers so @ViewScoped/@WindowScoped beans can
+        // be created while views are loaded.
+        if (warmup != null) {
+            warmup.registerScope(UiScopes.VIEW, viewScopeHandler);
+            warmup.registerScope(UiScopes.WINDOW, windowScopeHandler);
+        }
     }
 
     private boolean shouldReload(String key) {
@@ -227,7 +242,7 @@ public class FxLoader {
      * @throws IOException if FXML loading fails
      */
     public FxView<Object> loadView(String fxmlPath) throws IOException {
-        return loadView(fxmlPath, null);
+        return loadView(fxmlPath, (ResourceBundle) null, null);
     }
 
     /**
@@ -239,9 +254,34 @@ public class FxLoader {
      * @throws IOException if FXML loading fails
      */
     public FxView<Object> loadView(String fxmlPath, ResourceBundle resourceBundle) throws IOException {
-        FxView<?> view = loadViewInternal(null, fxmlPath, resourceBundle);
-        Object controller = view.controller();
-        return new FxView<>(view.root(), controller, view.fxmlPath(), null, resourceBundle);
+        return loadView(fxmlPath, resourceBundle, null);
+    }
+
+    /**
+     * Load an FXML file associated with a window, so {@link WindowScoped} beans
+     * can be resolved while the view is built.
+     *
+     * @param fxmlPath path to the FXML file
+     * @param window the window that owns the view (may be {@code null})
+     * @return the loaded view
+     * @throws IOException if FXML loading fails
+     */
+    public FxView<Object> loadView(String fxmlPath, Window window) throws IOException {
+        return loadView(fxmlPath, (ResourceBundle) null, window);
+    }
+
+    /**
+     * Load an FXML file with a resource bundle and an owning window.
+     *
+     * @param fxmlPath path to the FXML file
+     * @param resourceBundle optional resource bundle for localization
+     * @param window the window that owns the view (may be {@code null})
+     * @return the loaded view
+     * @throws IOException if FXML loading fails
+     */
+    @SuppressWarnings("unchecked")
+    public FxView<Object> loadView(String fxmlPath, ResourceBundle resourceBundle, Window window) throws IOException {
+        return (FxView<Object>) loadViewInternal(null, fxmlPath, resourceBundle, window);
     }
 
     /**
@@ -258,7 +298,7 @@ public class FxLoader {
      * {@code fxml()} is empty
      */
     public <T> FxView<T> loadView(Class<T> controllerClass) throws IOException {
-        return loadView(controllerClass, null);
+        return loadView(controllerClass, (ResourceBundle) null, null);
     }
 
     /**
@@ -274,6 +314,40 @@ public class FxLoader {
      * {@code fxml()} is empty
      */
     public <T> FxView<T> loadView(Class<T> controllerClass, ResourceBundle resourceBundle) throws IOException {
+        return loadView(controllerClass, resourceBundle, null);
+    }
+
+    /**
+     * Load FXML from a {@link FxController} annotation for a specific window,
+     * so {@link WindowScoped} beans can be resolved while the view is built.
+     *
+     * @param controllerClass the controller class annotated with {@link FxController}
+     * @param window the window that owns the view (may be {@code null})
+     * @param <T> controller type
+     * @return the loaded view
+     * @throws IOException if FXML loading fails
+     * @throws IllegalArgumentException if the controller is not annotated or
+     * {@code fxml()} is empty
+     */
+    public <T> FxView<T> loadView(Class<T> controllerClass, Window window) throws IOException {
+        return loadView(controllerClass, (ResourceBundle) null, window);
+    }
+
+    /**
+     * Fully configurable view load: explicit bundle and owning window.
+     *
+     * @param controllerClass the controller class annotated with {@link FxController}
+     * @param resourceBundle bundle to use instead of the annotation's
+     * {@code bundle()}
+     * @param window the window that owns the view (may be {@code null})
+     * @param <T> controller type
+     * @return the loaded view
+     * @throws IOException if FXML loading fails
+     * @throws IllegalArgumentException if the controller is not annotated or
+     * {@code fxml()} is empty
+     */
+    @SuppressWarnings("unchecked")
+    public <T> FxView<T> loadView(Class<T> controllerClass, ResourceBundle resourceBundle, Window window) throws IOException {
         FxController annotation = requireFxController(controllerClass);
         String fxmlPath = annotation.fxml();
         if (fxmlPath.isEmpty()) {
@@ -288,11 +362,12 @@ public class FxLoader {
             bundle = ResourceBundle.getBundle(annotation.bundle());
         }
 
-        FxView<?> view = loadViewInternal(controllerClass, fxmlPath, bundle);
+        FxView<T> view = (FxView<T>) loadViewInternal(controllerClass, fxmlPath, bundle, window);
+        // Idempotent: loadViewInternal also applies the stylesheets declared on
+        // the actual controller instance (covers path-based loads).
         applyStylesheets(annotation.css(), view.root());
-        return new FxView<>(view.root(), controllerClass.cast(view.controller()), view.fxmlPath(), controllerClass, bundle);
+        return view;
     }
-
     /**
      * Load FXML automatically from a {@link FxController} annotation.
      *
@@ -350,17 +425,19 @@ public class FxLoader {
     }
 
     /**
-     * Internal method to load FXML, shared by loadFxml and loadController.
+     * Internal method to load FXML, shared by the public load methods.
      *
      * @param controllerClass optional controller class for relative path
      * resolution (null for absolute paths)
      * @param fxmlPath path to FXML file (relative to controller class if
      * controllerClass provided, otherwise absolute)
      * @param resourceBundle optional resource bundle for localization
-     * @return loaded Parent node
+     * @param window optional owning window, used to activate the WINDOW scope
+     * @return the loaded view (root + controller)
      * @throws IOException if FXML loading fails
      */
-    private FxView<?> loadViewInternal(Class<?> controllerClass, String fxmlPath, ResourceBundle resourceBundle) throws IOException {
+    private FxView<?> loadViewInternal(Class<?> controllerClass, String fxmlPath,
+                                       ResourceBundle resourceBundle, Window window) throws IOException {
         FXMLLoader loader = new FXMLLoader();
 
         // Resolve FXML URL: try relative to controller class first, then as absolute resource
@@ -393,41 +470,74 @@ public class FxLoader {
         // Set controller factory for DI - all controllers are resolved from container
         loader.setControllerFactory(this::createController);
 
+        // A fresh view scope is created for every load (including reloads).
+        // It must be active on the thread that runs FXMLLoader.load(), because
+        // the container resolves controllers and their @ViewScoped dependencies
+        // from the controller factory while parsing.
+        ScopedBeanStore viewScope = viewScopeHandler.createScope();
+        ScopedBeanStore windowScope = window != null ? windowScopeHandler.scopeFor(window) : null;
+
+        Callable<Void> loadAction = () -> {
+            viewScopeHandler.activate(viewScope);
+            boolean activatedWindow = false;
+            try {
+                if (windowScope != null && !windowScopeHandler.isActive(windowScope)) {
+                    windowScopeHandler.activate(windowScope);
+                    activatedWindow = true;
+                }
+                loader.load();
+                return null;
+            } finally {
+                if (activatedWindow) {
+                    windowScopeHandler.deactivate(windowScope);
+                }
+                viewScopeHandler.deactivate(viewScope);
+            }
+        };
+
         // FXMLLoader creates scene nodes, so loading must run on the JavaFX
         // Application Thread. When we are already on it, load synchronously;
         // otherwise dispatch and wait so the caller still gets the loaded root
         // (previously this returned before load() had run, leaving root null).
-        if (Platform.isFxApplicationThread()) {
-            // Load FXML - let FXMLLoader handle the stream internally to avoid file handle leaks
-            loader.load();
-        } else {
-            CompletableFuture<Void> loaded = new CompletableFuture<>();
-            Platform.runLater(() -> {
+        try {
+            if (Platform.isFxApplicationThread()) {
+                // Load FXML - let FXMLLoader handle the stream internally to avoid file handle leaks
+                loadAction.call();
+            } else {
+                CompletableFuture<Void> loaded = new CompletableFuture<>();
+                Platform.runLater(() -> {
+                    try {
+                        loadAction.call();
+                        loaded.complete(null);
+                    } catch (Throwable t) {
+                        loaded.completeExceptionally(t);
+                    }
+                });
                 try {
-                    loader.load();
-                    loaded.complete(null);
-                } catch (Throwable t) {
-                    loaded.completeExceptionally(t);
+                    loaded.get();
+                } catch (InterruptedException ex) {
+                    Thread.currentThread().interrupt();
+                    throw new IOException("Interrupted while loading FXML: " + fxmlPath, ex);
+                } catch (ExecutionException ex) {
+                    Throwable cause = ex.getCause();
+                    if (cause instanceof IOException ioException) {
+                        throw ioException;
+                    }
+                    if (cause instanceof RuntimeException runtimeException) {
+                        throw runtimeException;
+                    }
+                    if (cause instanceof Error error) {
+                        throw error;
+                    }
+                    throw new IOException("Failed to load FXML: " + fxmlPath, cause);
                 }
-            });
-            try {
-                loaded.get();
-            } catch (InterruptedException ex) {
-                Thread.currentThread().interrupt();
-                throw new IOException("Interrupted while loading FXML: " + fxmlPath, ex);
-            } catch (ExecutionException ex) {
-                Throwable cause = ex.getCause();
-                if (cause instanceof IOException ioException) {
-                    throw ioException;
-                }
-                if (cause instanceof RuntimeException runtimeException) {
-                    throw runtimeException;
-                }
-                if (cause instanceof Error error) {
-                    throw error;
-                }
-                throw new IOException("Failed to load FXML: " + fxmlPath, cause);
             }
+        } catch (IOException | RuntimeException | Error e) {
+            viewScopeHandler.destroyScope(viewScope);
+            throw e;
+        } catch (Exception e) {
+            viewScopeHandler.destroyScope(viewScope);
+            throw new IOException("Failed to load FXML: " + fxmlPath, e);
         }
 
         Parent root = loader.getRoot();
@@ -444,11 +554,13 @@ public class FxLoader {
 
         // Track this loaded FXML for potential hot-reload
         String trackingKey = buildTrackingKey(controllerClass, fxmlPath);
-        LoadedFxmlInfo info = new LoadedFxmlInfo(fxmlPath, resourceBundle, controllerClass);
+        LoadedFxmlInfo info = new LoadedFxmlInfo(fxmlPath, resourceBundle, controllerClass, window);
         info.lastLoadedRoot = root;
+        info.viewScope = viewScope;
         loadedFxmlMap.put(trackingKey, info);
 
-        return new FxView<>(root, controller, fxmlPath, controllerClass, resourceBundle);
+        return new FxView<>(root, controller, fxmlPath, controllerClass, resourceBundle,
+                () -> viewScopeHandler.destroyScope(viewScope));
     }
 
     /**
@@ -549,7 +661,7 @@ public class FxLoader {
             }
         }
         if (info == null) {
-            return loadViewInternal(null, fxmlPath, null).root();
+            return loadViewInternal(null, fxmlPath, null, null).root();
         }
 
         // Step 1: Trigger hot-reload in the container for the controller bean
@@ -565,12 +677,17 @@ public class FxLoader {
         // Step 2: Clear controller cache to force new controller creation
         clearCache();
 
-        // Step 3: Re-load the FXML to get new Parent and controller
-        Parent newRoot = loadViewInternal(info.controllerClass, info.fxmlPath, info.resourceBundle).root();
+        // Step 3: Re-load the FXML to get new Parent and controller. The old
+        // view scope is kept alive until the new root has been installed.
+        ScopedBeanStore oldViewScope = info.viewScope;
+        Parent newRoot = loadViewInternal(info.controllerClass, info.fxmlPath, info.resourceBundle, info.window).root();
         info.lastLoadedRoot = newRoot;
 
         // Step 4: Notify every scene tracking this FXML
         notifyRootReplacers(info.fxmlPath, newRoot);
+
+        // Step 5: Destroy the beans of the previous view
+        viewScopeHandler.destroyScope(oldViewScope);
 
         return newRoot;
     }
@@ -668,6 +785,79 @@ public class FxLoader {
         // Build the key used to track this FXML
         String trackingKey = buildTrackingKey(controllerClass, fxmlPath);
         return reloadFxml(trackingKey);
+    }
+
+    /**
+     * Makes the scope of the given window current on the calling thread.
+     * Window-scoped beans resolved after this call (until
+     * {@link #endWindowScope()}) are cached per window.
+     *
+     * <p>Use it when a window is created outside {@code WarmupApplication} or
+     * when resolving window-scoped beans from a background thread. Calls nest:
+     * every {@code beginWindowScope} needs one {@code endWindowScope}.</p>
+     *
+     * @param window the window whose scope should be activated
+     */
+    public void beginWindowScope(Window window) {
+        windowScopeHandler.activate(windowScopeHandler.scopeFor(window));
+    }
+
+    /**
+     * Deactivates the window scope previously activated with
+     * {@link #beginWindowScope(Window)} or {@link #withWindow(Window, Runnable)}.
+     */
+    public void endWindowScope() {
+        ScopedBeanStore scope = windowScopeHandler.currentScope();
+        if (scope != null) {
+            windowScopeHandler.deactivate(scope);
+        }
+    }
+
+    /**
+     * Runs an action with the given window's scope active. If the scope is
+     * already active (for example inside {@code WarmupApplication#onStart}),
+     * it is reused and left active after the action returns.
+     *
+     * @param window the window whose scope should be active
+     * @param action the action to run
+     */
+    public void withWindow(Window window, Runnable action) {
+        if (action == null) {
+            return;
+        }
+        ScopedBeanStore scope = windowScopeHandler.scopeFor(window);
+        boolean alreadyActive = windowScopeHandler.isActive(scope);
+        if (!alreadyActive) {
+            windowScopeHandler.activate(scope);
+        }
+        try {
+            action.run();
+        } finally {
+            if (!alreadyActive) {
+                windowScopeHandler.deactivate(scope);
+            }
+        }
+    }
+
+    /**
+     * Destroys the scope of a window and all of its {@code @WindowScoped}
+     * beans. Called automatically by {@code WarmupApplication} when the
+     * primary stage is hidden.
+     *
+     * @param window the window to close
+     */
+    public void closeWindow(Window window) {
+        windowScopeHandler.close(window);
+    }
+
+    /**
+     * Destroys every view scope and window scope created by this loader. Call
+     * it when the application stops, before shutting down the container.
+     */
+    public void closeAll() {
+        viewScopeHandler.destroyAll();
+        windowScopeHandler.closeAll();
+        loadedFxmlMap.clear();
     }
 
     /**

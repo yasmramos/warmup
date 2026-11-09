@@ -6,6 +6,7 @@ import javafx.application.Platform;
 import javafx.scene.Parent;
 import javafx.scene.Scene;
 import javafx.stage.Stage;
+import javafx.stage.WindowEvent;
 
 /**
  * Base application class for JavaFX applications using Warmup DI. Automatically
@@ -53,8 +54,24 @@ public abstract class WarmupApplication extends Application {
 
     @Override
     public void start(Stage primaryStage) throws Exception {
-        // Call custom start hook
-        onStart(primaryStage);
+        if (fxLoader == null) {
+            onStart(primaryStage);
+            return;
+        }
+
+        // Make the primary window's scope current while the initial UI is
+        // built, so @WindowScoped beans can be injected into the first view.
+        fxLoader.beginWindowScope(primaryStage);
+        try {
+            onStart(primaryStage);
+        } finally {
+            fxLoader.endWindowScope();
+        }
+
+        // Use an event handler (not setOnHidden) so any handler installed by
+        // the application is preserved. Closing destroys @WindowScoped beans.
+        primaryStage.addEventHandler(WindowEvent.WINDOW_HIDDEN,
+                event -> fxLoader.closeWindow(primaryStage));
     }
 
     @Override
@@ -63,6 +80,14 @@ public abstract class WarmupApplication extends Application {
             // Call custom stop hook
             onStop();
         } finally {
+            try {
+                // Destroy view/window scopes before the container shuts down
+                if (fxLoader != null) {
+                    fxLoader.closeAll();
+                }
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
             try {
                 // Shutdown container
                 if (warmup != null) {

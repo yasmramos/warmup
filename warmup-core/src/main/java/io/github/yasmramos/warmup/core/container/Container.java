@@ -464,16 +464,7 @@ public class Container implements HotReloadCapable, AutoCloseable {
 
             // Wire the factory if all dependencies are available
             if (allResolved) {
-                try {
-                    factory.wire(depFactories);
-                    // Mark as successfully wired
-                    if (resolvedDef != null) {
-                        resolvedDef.setWired(true);
-                    }
-                } catch (Exception e) {
-                    // Ignore wiring errors - fallback to create(Object...) will still work
-                    // Keep wired=false so hot-path uses create() instead of get()
-                }
+                wireOneFactory(beanName, factory, depFactories, resolvedDef);
             }
         }
 
@@ -482,6 +473,72 @@ public class Container implements HotReloadCapable, AutoCloseable {
         // resolveNonDeferredDependencies). Runs after wiring because it relies
         // on the same "all deps are plain bean names" condition.
         flattenConstructorDependencies();
+    }
+
+    /**
+     * Wires a single factory to its dependency factories and marks the bean as
+     * wired on success. Shared by the startup pass ({@link #wireFactories()})
+     * and the lazy retry path used when dynamically registered beans become
+     * resolvable only after registration completed.
+     */
+    private void wireOneFactory(String beanName, CompiledFactory<?> factory,
+            CompiledFactory<?>[] depFactories, ResolvedBeanDefinition<?> resolvedDef) {
+        try {
+            factory.wire(depFactories);
+            // Mark as successfully wired
+            if (resolvedDef != null) {
+                resolvedDef.setWired(true);
+            }
+        } catch (Exception e) {
+            // Ignore wiring errors - fallback to create(Object...) will still work
+            // Keep wired=false so hot-path uses create() instead of get()
+        }
+    }
+
+    /**
+     * Lazy wiring retry for a JIT-compiled factory whose dependency factories
+     * were not available at {@link #wireFactories()} time (typical for beans
+     * registered through {@code registerDynamic}, where dependencies compile
+     * asynchronously in the background).
+     *
+     * <p>
+     * Called from the prototype creation path once the factory itself exists.
+     * If every dependency has a compiled factory in the cache, the factories
+     * are wired together and the bean is marked wired so subsequent creations
+     * take the allocation-free {@code factory.get()} fast path. Failures are
+     * swallowed: the bean simply stays on the slower {@code create(Object[])}
+     * loop and another attempt happens on the next resolution.</p>
+     */
+    @SuppressWarnings("unchecked")
+    private void tryLazyWire(ResolvedBeanDefinition<?> resolvedDef, CompiledFactory<?> factory) {
+        BeanDefinition<?> definition = resolvedDef.getDefinition();
+        Object[] dependencies = definition.dependencies();
+        if (dependencies.length == 0) {
+            resolvedDef.setWired(true);
+            return;
+        }
+
+        CompiledFactory<?>[] depFactories = new CompiledFactory<?>[dependencies.length];
+        for (int i = 0; i < dependencies.length; i++) {
+            if (!(dependencies[i] instanceof String depName)) {
+                return; // Direct object reference: not wireable, keep slow path
+            }
+            if (CollectionDependency.isMarker(depName)) {
+                depFactories[i] = collectionFactory(depName);
+                continue;
+            }
+            if (OptionalDependency.isMarker(depName)) {
+                depFactories[i] = optionalFactory(depName);
+                continue;
+            }
+            CompiledFactory<?> depFactory = factoryCache.get(depName);
+            if (depFactory == null) {
+                return; // Dependency factory not compiled yet: retry later
+            }
+            depFactories[i] = depFactory;
+        }
+
+        wireOneFactory(definition.name(), factory, depFactories, resolvedDef);
     }
 
     /**
@@ -725,6 +782,12 @@ public class Container implements HotReloadCapable, AutoCloseable {
         }
         dependencyGraph.registerBean(definition.name(), definition.dependencies(), isDeferred);
 
+        // Invalidate ClassValue cache in case a previous resolution cached NOT_FOUND
+        resolvedDefinitionsByClassValue.remove(definition.type());
+
+        // Increment resolution version to invalidate any cached BeanHandles
+        resolutionVersion++;
+
         // Beans registered after startup still contribute @EventListener methods: scan this
         // bean so its listeners are attached without requiring a container restart.
         registerEventListenersFor(definition.name());
@@ -838,27 +901,33 @@ public class Container implements HotReloadCapable, AutoCloseable {
             return instance;
         }
 
-        // OPTIMIZATION 2: Fast-path for SINGLETON/CUSTOM with cached instance
+        // CUSTOM scopes are managed by an external handler: never reuse the
+        // singleton caches for them, since instances are per scope instance.
+        boolean singleton = resolvedDef.scope() == Scope.SINGLETON;
+
+        // OPTIMIZATION 2: Fast-path for SINGLETON with cached instance
         // Skip index lookup and Map.get() if instance is already cached in ResolvedBeanDefinition
-        T cachedInstance = resolvedDef.getCachedInstance();
-        if (cachedInstance != null) {
-            return cachedInstance;
-        }
-
-        // SINGLETON/CUSTOM path: use indexed resolution if index is cached
-        int index = resolvedDef.getOrComputeIndex(registry);
-        if (index >= 0) {
-            // Try fast indexed resolution first (avoids String hashing)
-            T indexedInstance = (T) registry.getIfPresent(index);
-            if (indexedInstance != null) {
-                return indexedInstance;
+        if (singleton) {
+            T cachedInstance = resolvedDef.getCachedInstance();
+            if (cachedInstance != null) {
+                return cachedInstance;
             }
-        }
 
-        // Fall back to name-based lookup for singletons not yet cached
-        T nameBasedInstance = registry.getIfPresent(name);
-        if (nameBasedInstance != null) {
-            return nameBasedInstance;
+            // SINGLETON path: use indexed resolution if index is cached
+            int index = resolvedDef.getOrComputeIndex(registry);
+            if (index >= 0) {
+                // Try fast indexed resolution first (avoids String hashing)
+                T indexedInstance = (T) registry.getIfPresent(index);
+                if (indexedInstance != null) {
+                    return indexedInstance;
+                }
+            }
+
+            // Fall back to name-based lookup for singletons not yet cached
+            T nameBasedInstance = registry.getIfPresent(name);
+            if (nameBasedInstance != null) {
+                return nameBasedInstance;
+            }
         }
 
         // Singleton not yet created, use registry.getInstance for thread-safe lazy init
@@ -880,11 +949,15 @@ public class Container implements HotReloadCapable, AutoCloseable {
             // Non-wired or no factory: fall back to createBean lambda
             instance = registry.getInstance(resolvedDef.getDefinition(), () -> createBean(resolvedDef));
         }
-        // Publish the created instance for fast-path on subsequent resolutions
-        resolvedDef.setCachedInstance(instance);
-        // Also populate the indexed array for fast indexed resolution
-        if (registry instanceof BeanRegistryImpl impl) {
-            impl.setInstanceByIndex(resolvedDef.getIndex(), instance);
+        // Publish the created instance for fast-path on subsequent resolutions.
+        // Only SINGLETON instances belong in the resolved-definition cache;
+        // CUSTOM scope instances live in their own scope handler.
+        if (singleton) {
+            resolvedDef.setCachedInstance(instance);
+            // Also populate the indexed array for fast indexed resolution
+            if (registry instanceof BeanRegistryImpl impl) {
+                impl.setInstanceByIndex(resolvedDef.getIndex(), instance);
+            }
         }
         return instance;
     }
@@ -955,7 +1028,7 @@ public class Container implements HotReloadCapable, AutoCloseable {
         // OPTIMIZATION 3: For cached singletons, return instance directly without delegation
         // This avoids re-evaluating scope and an extra method call that can inhibit inlining
         T cachedInstance = resolvedDef.getCachedInstance();
-        if (cachedInstance != null && !resolvedDef.isPrototype()) {
+        if (cachedInstance != null && resolvedDef.scope() == Scope.SINGLETON) {
             if (metricsEnabled) {
                 recordMetrics(resolvedDef.getDefinition(), System.nanoTime() - startTime);
             }
@@ -997,28 +1070,35 @@ public class Container implements HotReloadCapable, AutoCloseable {
             return instance;
         }
 
-        // OPTIMIZATION 2: Fast-path for SINGLETON/CUSTOM with cached instance
+        // CUSTOM scopes are managed by an external handler (for example the
+        // JavaFX VIEW/WINDOW scopes). Their instances must never be cached on
+        // the resolved definition: the same type can legitimately have a
+        // different instance per scope instance.
+        boolean singleton = resolvedDef.scope() == Scope.SINGLETON;
+
+        // OPTIMIZATION 2: Fast-path for SINGLETON with cached instance
         // Skip index lookup and Map.get() if instance is already cached in ResolvedBeanDefinition
-        T cachedInstance = resolvedDef.getCachedInstance();
-        if (cachedInstance != null) {
-            return cachedInstance;
-        }
-
-        // SINGLETON/CUSTOM path: use indexed resolution if index is cached
-        int index = resolvedDef.getOrComputeIndex(registry);
-        if (index >= 0) {
-            // Try fast indexed resolution first (avoids String hashing)
-            T indexedInstance = (T) registry.getIfPresent(index);
-            if (indexedInstance != null) {
-                return indexedInstance;
+        if (singleton) {
+            T cachedInstance = resolvedDef.getCachedInstance();
+            if (cachedInstance != null) {
+                return cachedInstance;
             }
-        }
 
-        // Fall back to name-based lookup for singletons not yet cached
-        String name = resolvedDef.name();
-        T nameBasedInstance = registry.getIfPresent(name);
-        if (nameBasedInstance != null) {
-            return nameBasedInstance;
+            // SINGLETON path: use indexed resolution if index is cached
+            int index = resolvedDef.getOrComputeIndex(registry);
+            if (index >= 0) {
+                // Try fast indexed resolution first (avoids String hashing)
+                T indexedInstance = (T) registry.getIfPresent(index);
+                if (indexedInstance != null) {
+                    return indexedInstance;
+                }
+            }
+
+            // Fall back to name-based lookup for singletons not yet cached
+            T nameBasedInstance = registry.getIfPresent(resolvedDef.name());
+            if (nameBasedInstance != null) {
+                return nameBasedInstance;
+            }
         }
 
         // Singleton not yet created, use registry.getInstance for thread-safe lazy init
@@ -1042,8 +1122,12 @@ public class Container implements HotReloadCapable, AutoCloseable {
             // Deferred injection happens AFTER getInstance returns to avoid Recursive update
             instance = registry.getInstance(resolvedDef.getDefinition(), () -> createBeanWithoutDeferredInjection(resolvedDef));
         }
-        // Publish the created instance for fast-path on subsequent resolutions
-        resolvedDef.setCachedInstance(instance);
+        // Publish the created instance for fast-path on subsequent resolutions.
+        // Only SINGLETON instances are cached here; CUSTOM scopes keep their
+        // instances in their own scope handler.
+        if (singleton) {
+            resolvedDef.setCachedInstance(instance);
+        }
 
         // PHASE 2: Inject deferred dependencies (@Lazy field/setter injections) AFTER the bean is published
         // This breaks circular dependencies by ensuring the instance is visible in singletonInstances
@@ -1077,6 +1161,13 @@ public class Container implements HotReloadCapable, AutoCloseable {
                 if (factory != null) {
                     factoryCache.put(name, factory);
                     resolvedDef.setResolvedFactory(factory);
+                    // Wire the freshly compiled factory immediately: its
+                    // dependency factories may already exist, letting this bean
+                    // take the allocation-free get() fast path on creation.
+                    CompiledFactory<?>[] depFactories = collectDependencyFactories(resolvedDef);
+                    if (depFactories != null) {
+                        wireOneFactory(name, factory, depFactories, resolvedDef);
+                    }
                     path = ResolutionDiagnostic.ResolutionPath.JIT;
                     jitHits.add(1);
                 } else {
@@ -1897,6 +1988,80 @@ public class Container implements HotReloadCapable, AutoCloseable {
         ResolvedBeanDefinition<?> resolvedDef = registry.getResolvedOrNull(name);
         if (resolvedDef != null) {
             resolvedDef.setCompileTime(true);
+            // Late-registered factories never saw the startup wiring pass. Wire
+            // them now (and re-wire any already-wired bean whose dependency
+            // factory was just replaced) so the allocation-free get() fast path
+            // is available immediately after registration.
+            wireOneFactory(name, factory, collectDependencyFactories(resolvedDef), resolvedDef);
+            retryWiringDependentsOf(name);
+        }
+    }
+
+    /**
+     * Collects the compiled factories for every constructor dependency of the
+     * given bean definition. Returns {@code null} when a dependency cannot be
+     * wired through a plain factory reference (direct object dependency, or a
+     * bean dependency whose factory has not been compiled yet).
+     */
+    private CompiledFactory<?>[] collectDependencyFactories(ResolvedBeanDefinition<?> resolvedDef) {
+        Object[] dependencies = resolvedDef.getDefinition().dependencies();
+        if (dependencies.length == 0) {
+            return new CompiledFactory<?>[0];
+        }
+        CompiledFactory<?>[] depFactories = new CompiledFactory<?>[dependencies.length];
+        for (int i = 0; i < dependencies.length; i++) {
+            if (!(dependencies[i] instanceof String depName)) {
+                return null; // Direct object reference: not wireable
+            }
+            if (CollectionDependency.isMarker(depName)) {
+                depFactories[i] = collectionFactory(depName);
+                continue;
+            }
+            if (OptionalDependency.isMarker(depName)) {
+                depFactories[i] = optionalFactory(depName);
+                continue;
+            }
+            CompiledFactory<?> depFactory = factoryCache.get(depName);
+            if (depFactory == null) {
+                return null; // Dependency factory not available yet
+            }
+            depFactories[i] = depFactory;
+        }
+        return depFactories;
+    }
+
+    /**
+     * Re-wires every registered bean that depends on the given bean name. Used
+     * when a factory is installed late (dynamic registration or JIT compilation
+     * during warmup): dependents that previously failed wiring because this
+     * factory was missing can now take the allocation-free get() fast path.
+     */
+    private void retryWiringDependentsOf(String depName) {
+        for (String beanName : registry.getBeanNames()) {
+            ResolvedBeanDefinition<?> def = registry.getResolvedOrNull(beanName);
+            if (def == null || def.isWired()) {
+                continue;
+            }
+            Object[] deps = def.getDefinition().dependencies();
+            boolean affected = false;
+            for (Object dep : deps) {
+                if (dep instanceof String depCandidate && depCandidate.equals(depName)) {
+                    affected = true;
+                    break;
+                }
+            }
+            if (!affected) {
+                continue;
+            }
+            CompiledFactory<?> factory = factoryCache.get(beanName);
+            if (factory == null) {
+                continue; // Dependent has no factory yet; it will wire on creation
+            }
+            CompiledFactory<?>[] depFactories = collectDependencyFactories(def);
+            if (depFactories == null) {
+                continue; // Other dependencies still missing; retry later
+            }
+            wireOneFactory(beanName, factory, depFactories, def);
         }
     }
 
@@ -1966,6 +2131,13 @@ public class Container implements HotReloadCapable, AutoCloseable {
                 if (factory != null) {
                     factoryCache.put(name, factory);
                     resolvedDef.setResolvedFactory(factory);
+                    // Wire the freshly compiled factory now that its own
+                    // dependency factories exist: this bean can take the
+                    // allocation-free get() fast path on subsequent creations.
+                    CompiledFactory<?>[] depFactories = collectDependencyFactories(resolvedDef);
+                    if (depFactories != null) {
+                        wireOneFactory(name, factory, depFactories, resolvedDef);
+                    }
                     path = ResolutionDiagnostic.ResolutionPath.JIT;
                     jitHits.add(1);
                 } else {
@@ -2064,9 +2236,21 @@ public class Container implements HotReloadCapable, AutoCloseable {
             Object[] deps = resolveDependencies(resolvedDef.getDefinition());
             instance = factory.create(deps);
         } else {
-            // JIT or other factory: use traditional path
-            Object[] deps = resolveDependencies(resolvedDef.getDefinition());
-            instance = factory.create(deps);
+            // JIT or other factory: use traditional path. Before paying the
+            // per-resolution wiring loop, retry lazy wiring once: dependency
+            // factories for dynamically registered beans may have finished
+            // compiling in the background since the startup wiring pass.
+            // After a successful retry this bean takes the get() fast path on
+            // all subsequent creations.
+            if (!resolvedDef.isWired()) {
+                tryLazyWire(resolvedDef, factory);
+            }
+            if (resolvedDef.isWired()) {
+                instance = factory.get();
+            } else {
+                Object[] deps = resolveDependencies(resolvedDef.getDefinition());
+                instance = factory.create(deps);
+            }
         }
 
         // Record diagnostic if enabled (minimal overhead path)
@@ -2793,6 +2977,45 @@ public class Container implements HotReloadCapable, AutoCloseable {
         );
     }
 
+    /**
+     * Publishes the result of a background warmup compilation for a bean that
+     * was registered dynamically. Installs the compiled factory in the cache
+     * and on the resolved definition, wires it to its dependency factories if
+     * they are available (enabling the allocation-free get() fast path), and
+     * retries wiring for any dependents that were blocked on this bean.
+     *
+     * <p>If the bean was closed or replaced while the compilation was in
+     * flight the result is dropped. All failures are swallowed: the resolution
+     * path still compiles the factory on demand as a fallback.</p>
+     */
+    @SuppressWarnings("unchecked")
+    private void publishWarmupResult(String beanName, CompiledFactory<?> factory) {
+        try {
+            // shutdown() clears the registry before terminating the executor,
+            // so a result arriving after clear() means the container is down:
+            // drop it instead of resurrecting entries in a cleared registry.
+            ResolvedBeanDefinition<?> resolvedDef = registry.getResolvedOrNull(beanName);
+            if (resolvedDef == null) {
+                return; // Bean removed or container shut down while compiling
+            }
+            synchronized (this) {
+                if (registry.getResolvedOrNull(beanName) != resolvedDef) {
+                    return; // Replaced or removed while locking
+                }
+                factoryCache.put(beanName, factory);
+                ((ResolvedBeanDefinition<Object>) resolvedDef)
+                        .setResolvedFactory((CompiledFactory<Object>) factory); // resets stale wired flag
+            }
+            CompiledFactory<?>[] depFactories = collectDependencyFactories(resolvedDef);
+            if (depFactories != null) {
+                wireOneFactory(beanName, factory, depFactories, resolvedDef);
+            }
+            retryWiringDependentsOf(beanName);
+        } catch (Exception e) {
+            // Non-fatal: lazy-wiring retry on the resolution path will recover
+        }
+    }
+
     private <T> void triggerBackgroundWarmup(BeanDefinition<T> definition) {
         // Lazy initialization of warmup executor on first use
         ExecutorService executor = warmupExecutor;
@@ -2828,11 +3051,21 @@ public class Container implements HotReloadCapable, AutoCloseable {
 
         try {
             ExecutorService warmupExec = warmupExecutor;
+            String beanName = definition.name();
             CompletableFuture<CompiledFactory<T>> future = jitCompiler.compileAsync(definition.type(), warmupExec, getNonDeferredDependencyClasses(definition));
             // Track the future for shutdown synchronization
             pendingWarmupFutures.add(future);
-            // Release semaphore and remove from tracking when compilation completes (success or failure)
-            future.whenComplete((r, e) -> {
+            // Publish the compiled factory as soon as background compilation
+            // finishes. Without this, dynamically registered beans never get a
+            // wired JIT factory unless they are resolved explicitly first, so
+            // every creation pays the per-resolution wiring loop instead of
+            // taking the allocation-free get() fast path. Failures are simply
+            // ignored here: the lazy-wiring retry on the resolution path will
+            // compile the factory on demand.
+            future.whenComplete((compiledFactory, error) -> {
+                if (error == null && compiledFactory != null) {
+                    publishWarmupResult(beanName, compiledFactory);
+                }
                 warmupSemaphore.release();
                 pendingWarmupFutures.remove(future);
             });
