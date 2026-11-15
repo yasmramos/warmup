@@ -887,18 +887,7 @@ public class Container implements HotReloadCapable, AutoCloseable {
         // OPTIMIZATION 1: For PROTOTYPE beans, skip singleton cache lookup entirely
         // since prototypes are never cached. This avoids unnecessary ConcurrentHashMap.get()
         if (resolvedDef.scope() == Scope.PROTOTYPE) {
-            CompiledFactory<T> factory = resolvedDef.getOrComputeFactory(factoryCache);
-            T instance;
-            if (factory != null) {
-                // Use optimized path for prototypes: skip diagnostic overhead in hot path
-                instance = createPrototypeBeanWithFactory(resolvedDef, factory);
-            } else {
-                instance = createViaReflection(resolvedDef);
-            }
-            if (resolvedDef.lifecycle().onInit() != null) {
-                resolvedDef.lifecycle().onInit().onInit(instance);
-            }
-            return instance;
+            return createPrototypeBean(resolvedDef);
         }
 
         // CUSTOM scopes are managed by an external handler: never reuse the
@@ -947,7 +936,10 @@ public class Container implements HotReloadCapable, AutoCloseable {
             instance = registry.getInstance(resolvedDef.getDefinition(), factory);
         } else {
             // Non-wired or no factory: fall back to createBean lambda
-            instance = registry.getInstance(resolvedDef.getDefinition(), () -> createBean(resolvedDef));
+            // NOTE: createBeanWithoutDeferredInjection only creates the instance;
+            // deferred injection happens below, after the instance is published.
+            instance = registry.getInstance(resolvedDef.getDefinition(),
+                    () -> createBeanWithoutDeferredInjection(resolvedDef));
         }
         // Publish the created instance for fast-path on subsequent resolutions.
         // Only SINGLETON instances belong in the resolved-definition cache;
@@ -959,6 +951,14 @@ public class Container implements HotReloadCapable, AutoCloseable {
                 impl.setInstanceByIndex(resolvedDef.getIndex(), instance);
             }
         }
+
+        // PHASE 2: Inject deferred dependencies (@Lazy field/setter injections) AFTER the bean is published
+        // This breaks circular dependencies by ensuring the instance is visible in singletonInstances
+        // before we try to resolve its lazy dependencies (which may be beans in a cycle with this one).
+        // Must mirror resolve(ResolvedBeanDefinition): the wired fast path above returns an
+        // instance created directly by the factory, which never injects deferred dependencies.
+        injectDeferredDependencies(instance, resolvedDef.getDefinition());
+
         return instance;
     }
 
@@ -1056,18 +1056,7 @@ public class Container implements HotReloadCapable, AutoCloseable {
         // OPTIMIZATION 1: For PROTOTYPE beans, skip singleton cache lookup entirely
         // since prototypes are never cached. This avoids unnecessary ConcurrentHashMap.get()
         if (resolvedDef.isPrototype()) {
-            CompiledFactory<T> factory = resolvedDef.getOrComputeFactory(factoryCache);
-            T instance;
-            if (factory != null) {
-                // Use optimized path for prototypes: skip diagnostic overhead in hot path
-                instance = createPrototypeBeanWithFactory(resolvedDef, factory);
-            } else {
-                instance = createViaReflection(resolvedDef);
-            }
-            if (resolvedDef.lifecycle().onInit() != null) {
-                resolvedDef.lifecycle().onInit().onInit(instance);
-            }
-            return instance;
+            return createPrototypeBean(resolvedDef);
         }
 
         // CUSTOM scopes are managed by an external handler (for example the
@@ -1117,10 +1106,11 @@ public class Container implements HotReloadCapable, AutoCloseable {
             }
             instance = registry.getInstance(resolvedDef.getDefinition(), factory);
         } else {
-            // Non-wired or no factory: fall back to createBean lambda
-            // NOTE: createBean now only creates the instance WITHOUT injecting deferred deps
-            // Deferred injection happens AFTER getInstance returns to avoid Recursive update
-            instance = registry.getInstance(resolvedDef.getDefinition(), () -> createBeanWithoutDeferredInjection(resolvedDef));
+            // Non-wired or no factory: fall back to the createBean lambda
+            // NOTE: createBeanWithoutDeferredInjection only creates the instance;
+            // deferred injection happens after getInstance returns (see PHASE 2 below)
+            instance = registry.getInstance(resolvedDef.getDefinition(),
+                    () -> createBeanWithoutDeferredInjection(resolvedDef));
         }
         // Publish the created instance for fast-path on subsequent resolutions.
         // Only SINGLETON instances are cached here; CUSTOM scopes keep their
@@ -1262,16 +1252,7 @@ public class Container implements HotReloadCapable, AutoCloseable {
         if (registry instanceof BeanRegistryImpl impl) {
             ResolvedBeanDefinition<T> resolvedDef = impl.getResolvedByIndex(index);
             if (resolvedDef != null && resolvedDef.isPrototype()) {
-                CompiledFactory<T> factory = resolvedDef.getOrComputeFactory(factoryCache);
-                T instance;
-                if (factory != null) {
-                    instance = createPrototypeBeanWithFactory(resolvedDef, factory);
-                } else {
-                    instance = createViaReflectionWithoutDeferredInjection(resolvedDef);
-                }
-                if (resolvedDef.lifecycle().onInit() != null) {
-                    resolvedDef.lifecycle().onInit().onInit(instance);
-                }
+                T instance = createPrototypeBean(resolvedDef);
                 if (metricsEnabled) {
                     totalResolutions.add(1);
                 }
@@ -1988,6 +1969,14 @@ public class Container implements HotReloadCapable, AutoCloseable {
         ResolvedBeanDefinition<?> resolvedDef = registry.getResolvedOrNull(name);
         if (resolvedDef != null) {
             resolvedDef.setCompileTime(true);
+            // An explicit factory supersedes any scheduled background warmup:
+            // cancel it so the JIT compiler cannot replace this factory with a
+            // constructor-based one (which would fail for beans without a
+            // no-arg constructor, e.g. supplier-registered beans).
+            if (resolvedDef.hasPendingWarmup()) {
+                pendingWarmupBeans.remove(name);
+                resolvedDef.setHasPendingWarmup(false);
+            }
             // Late-registered factories never saw the startup wiring pass. Wire
             // them now (and re-wire any already-wired bean whose dependency
             // factory was just replaced) so the allocation-free get() fast path
@@ -2092,101 +2081,6 @@ public class Container implements HotReloadCapable, AutoCloseable {
     }
 
     // Internal methods
-    /**
-     * Creates a bean instance using its factory, avoiding redundant lookups.
-     * This optimized version receives a ResolvedBeanDefinition with cached
-     * data.
-     */
-    @SuppressWarnings("unchecked")
-    private <T> T createBean(ResolvedBeanDefinition<T> resolvedDef) {
-        BeanDefinition<T> definition = resolvedDef.getDefinition();
-        String name = definition.name();
-        long compileTimeNs = 0;
-        ResolutionDiagnostic.ResolutionPath path = null;
-
-        // Check if running in GraalVM native image mode - disable JIT
-        boolean nativeImage = IS_NATIVE_IMAGE;
-
-        // Get cached factory from resolved definition to avoid redundant lookup
-        CompiledFactory<T> factory = resolvedDef.getOrComputeFactory(factoryCache);
-        if (factory != null) {
-            // Hot path: factory already cached, determine origin for metrics/diagnostic only if enabled
-            if (metricsEnabled || diagnosticMode) {
-                if (resolvedDef.isCompileTime()) {
-                    path = ResolutionDiagnostic.ResolutionPath.COMPILE_TIME;
-                    if (metricsEnabled) {
-                        compileTimeHits.add(1);
-                    }
-                } else {
-                    path = ResolutionDiagnostic.ResolutionPath.JIT;
-                    if (metricsEnabled) {
-                        jitHits.add(1);
-                    }
-                }
-            }
-        } else if (!nativeImage) {
-            // Try JIT compilation and cache the result
-            try {
-                factory = jitCompiler.compile(definition.type(), getNonDeferredDependencyClasses(definition));
-                if (factory != null) {
-                    factoryCache.put(name, factory);
-                    resolvedDef.setResolvedFactory(factory);
-                    // Wire the freshly compiled factory now that its own
-                    // dependency factories exist: this bean can take the
-                    // allocation-free get() fast path on subsequent creations.
-                    CompiledFactory<?>[] depFactories = collectDependencyFactories(resolvedDef);
-                    if (depFactories != null) {
-                        wireOneFactory(name, factory, depFactories, resolvedDef);
-                    }
-                    path = ResolutionDiagnostic.ResolutionPath.JIT;
-                    jitHits.add(1);
-                } else {
-                    // Factory is null (shouldn't happen, but be defensive)
-                    path = ResolutionDiagnostic.ResolutionPath.REFLECTION_FALLBACK;
-                    fallbackCount.add(1);
-                    return createViaReflection(resolvedDef);
-                }
-            } catch (CompilationException e) {
-                // Fallback to reflection
-                path = ResolutionDiagnostic.ResolutionPath.REFLECTION_FALLBACK;
-                fallbackCount.add(1);
-                return createViaReflection(resolvedDef);
-            }
-        } else {
-            // Native image mode: skip JIT, go directly to fallback
-            path = ResolutionDiagnostic.ResolutionPath.REFLECTION_FALLBACK;
-            fallbackCount.add(1);
-            return createViaReflection(resolvedDef);
-        }
-
-        // Create instance using factory - use wired path when available (no Object[] allocation)
-        // PHASE 1: Resolve only non-deferred dependencies and create the bean
-        T instance;
-        if (resolvedDef.isCompileTime() && resolvedDef.isWired()) {
-            // Wired compile-time factory: call get() directly without Object[] allocation
-            // Wiring was verified at startup, so get() is guaranteed safe
-            instance = factory.get();
-        } else if (resolvedDef.isCompileTime()) {
-            // Compile-time but not wired (e.g., forward reference): fallback to create()
-            Object[] deps = resolveNonDeferredDependencies(definition);
-            instance = factory.create(deps);
-        } else {
-            // JIT or other factory: use traditional path with non-deferred deps only
-            Object[] deps = resolveNonDeferredDependencies(definition);
-            instance = factory.create(deps);
-        }
-
-        // PHASE 2: Inject deferred dependencies (@Lazy field/setter injections) after bean is created
-        // This breaks circular dependencies by deferring these injections until the bean exists
-        injectDeferredDependencies(instance, definition);
-
-        // Record diagnostic if enabled
-        if (diagnosticMode) {
-            diagnostics.add(new ResolutionDiagnostic(name, definition.type(), path, compileTimeNs));
-        }
-
-        return instance;
-    }
 
     /**
      * Wraps a BeanDefinition into a ResolvedBeanDefinition with cached index
@@ -2212,6 +2106,38 @@ public class Container implements HotReloadCapable, AutoCloseable {
     @SuppressWarnings("unchecked")
     private <T> T createViaReflection(ResolvedBeanDefinition<T> resolvedDef) {
         return createViaReflection(resolvedDef.getDefinition());
+    }
+
+    /**
+     * Creates a prototype bean and runs its full lifecycle: instance creation
+     * (through the compiled factory when available, reflection otherwise),
+     * deferred (@Lazy field/setter) dependency injection, and the
+     * {@code @PostConstruct} callback.
+     *
+     * <p>Centralizes the prototype path shared by name-based, type-based and
+     * index-based resolution so that all three stay consistent.</p>
+     *
+     * @param resolvedDef the resolved prototype definition
+     * @param <T> the bean type
+     * @return a freshly created, fully initialized prototype instance
+     */
+    @SuppressWarnings("unchecked")
+    private <T> T createPrototypeBean(ResolvedBeanDefinition<T> resolvedDef) {
+        CompiledFactory<T> factory = resolvedDef.getOrComputeFactory(factoryCache);
+        T instance = factory != null
+                ? createPrototypeBeanWithFactory(resolvedDef, factory)
+                : createViaReflection(resolvedDef);
+
+        // Prototypes are never cached, so the deferred dependencies must be
+        // re-injected on every creation. The factory only wires non-deferred
+        // (constructor) dependencies, and the reflection fallback resolves them
+        // eagerly, so both paths need this step to populate @Lazy fields.
+        injectDeferredDependencies(instance, resolvedDef.getDefinition());
+
+        if (resolvedDef.lifecycle().onInit() != null) {
+            resolvedDef.lifecycle().onInit().onInit(instance);
+        }
+        return instance;
     }
 
     /**
