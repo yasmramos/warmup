@@ -349,6 +349,7 @@ fxLoader.withWindow(stage, () -> warmup.resolve(WorkspaceState.class));
 | `getFxLoader()` | Access the `FxLoader`. |
 | `getWarmup()` | Access the container. |
 | `createWarmup()` | Override to customize the `Warmup.Builder`. |
+| `configure(Warmup.Builder)` | Tweak the builder before `build()`; settings take effect on the container. |
 
 ## Development Mode Behavior
 
