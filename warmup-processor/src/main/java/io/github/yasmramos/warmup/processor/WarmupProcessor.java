@@ -587,11 +587,11 @@ public class WarmupProcessor extends AbstractProcessor {
             }
         }
         
-        // @Inject field dependencies (deferrable)
+        // Field dependencies: @Inject beans and @Value configuration values (deferrable)
         for (Element enclosed : typeElement.getEnclosedElements()) {
             if (enclosed.getKind() == ElementKind.FIELD) {
                 VariableElement field = (VariableElement) enclosed;
-                if (field.getAnnotation(Inject.class) != null) {
+                if (field.getAnnotation(Inject.class) != null || field.getAnnotation(Value.class) != null) {
                     extractFieldDependencyInfo(field, depNames, providerFlags, isDeferred, isFieldOrSetter);
                 }
             }
@@ -1003,22 +1003,23 @@ public class WarmupProcessor extends AbstractProcessor {
             ? constructor.getParameters() 
             : Collections.emptyList();
         
-        // Collect @Inject fields
+        // Collect @Inject and @Value fields, in declaration order so the generated
+        // factory indices stay aligned with the BeanDefinition dependency array.
         List<VariableElement> injectFields = new ArrayList<>();
         for (Element enclosed : beanClass.getEnclosedElements()) {
             if (enclosed.getKind() == ElementKind.FIELD) {
                 VariableElement field = (VariableElement) enclosed;
-                if (field.getAnnotation(Inject.class) != null) {
+                if (field.getAnnotation(Inject.class) != null || field.getAnnotation(Value.class) != null) {
                     // Validate field is not private or final
                     if (field.getModifiers().contains(Modifier.PRIVATE)) {
                         processingEnv.getMessager().printMessage(Diagnostic.Kind.ERROR,
-                            "@Inject fields for compile-time wiring must not be private: " + 
+                            "@Inject/@Value fields for compile-time wiring must not be private: " + 
                             field.getSimpleName() + " in " + beanClass.getQualifiedName(), field);
                         continue;
                     }
                     if (field.getModifiers().contains(Modifier.FINAL)) {
                         processingEnv.getMessager().printMessage(Diagnostic.Kind.ERROR,
-                            "@Inject fields for compile-time wiring must not be final: " + 
+                            "@Inject/@Value fields for compile-time wiring must not be final: " + 
                             field.getSimpleName() + " in " + beanClass.getQualifiedName(), field);
                         continue;
                     }

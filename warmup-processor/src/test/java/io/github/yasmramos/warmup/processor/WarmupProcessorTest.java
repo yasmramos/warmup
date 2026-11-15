@@ -915,7 +915,7 @@ class WarmupProcessorTest {
             "@Singleton",
             "public class ValueBean {",
             "    @Value(\"${app.name}\")",
-            "    private String appName;",
+            "    String appName;",
             "    ",
             "    public ValueBean(@Value(\"${app.name}\") String appName) {",
             "        this.appName = appName;",
