@@ -739,7 +739,7 @@ public class WarmupProcessor extends AbstractProcessor {
             }
         }
         providerFlags.add(isProvider);
-        isDeferred.add(true); // Field injections are always deferrable
+        isDeferred.add(isLazy); // Only @Lazy fields are injected after construction
         isFieldOrSetter.add(true);
     }
     
@@ -829,9 +829,9 @@ public class WarmupProcessor extends AbstractProcessor {
             }
             methodProviderFlags.add(isProvider);
             providerFlags.add(isProvider);
-            methodIsDeferred.add(true); // Setter injections are always deferrable
+            methodIsDeferred.add(isLazy); // Only @Lazy setter/method deps are injected later
             methodIsFieldOrSetter.add(true);
-            isDeferred.add(true);
+            isDeferred.add(isLazy);
             isFieldOrSetter.add(true);
         }
         
@@ -1528,6 +1528,26 @@ public class WarmupProcessor extends AbstractProcessor {
     }
     
     /**
+     * Emits bytecode that pushes a {@code boolean[]} onto the stack, one
+     * {@code BASTORE} per element. An empty list yields {@code null} so legacy
+     * "no metadata" consumers keep their previous behaviour.
+     */
+    private void emitBooleanArray(org.objectweb.asm.MethodVisitor mv, List<Boolean> values) {
+        if (values == null || values.isEmpty()) {
+            mv.visitInsn(org.objectweb.asm.Opcodes.ACONST_NULL);
+            return;
+        }
+        mv.visitLdcInsn(values.size());
+        mv.visitIntInsn(org.objectweb.asm.Opcodes.NEWARRAY, org.objectweb.asm.Opcodes.T_BOOLEAN);
+        for (int i = 0; i < values.size(); i++) {
+            mv.visitInsn(org.objectweb.asm.Opcodes.DUP);
+            mv.visitLdcInsn(i);
+            mv.visitInsn(Boolean.TRUE.equals(values.get(i)) ? org.objectweb.asm.Opcodes.ICONST_1 : org.objectweb.asm.Opcodes.ICONST_0);
+            mv.visitInsn(org.objectweb.asm.Opcodes.BASTORE);
+        }
+    }
+
+    /**
      * Converts a binary name (with $ for nested classes) to JVM internal name format.
      * E.g., "com.pkg.Outer$Inner" -> "com/pkg/Outer$Inner"
      */
@@ -1677,10 +1697,16 @@ public class WarmupProcessor extends AbstractProcessor {
             
             // Push the custom scope name (empty string for non-CUSTOM scopes)
             mv.visitLdcInsn(beanInfo.scopeName != null ? beanInfo.scopeName : "");
+
+            // Propagate the deferred (@Lazy field/setter) and field-or-setter flags so the
+            // container injects those dependencies after construction and keeps the wired
+            // factory slots aligned with the compacted non-deferred dependency order.
+            emitBooleanArray(mv, beanInfo.isDeferredDependency);
+            emitBooleanArray(mv, beanInfo.isFieldOrSetterDependency);
             
             // Invoke BeanDefinition constructor
-            // Constructor descriptor: (Ljava/lang/Class;Ljava/lang/String;Lio/github/yasmramos/warmup/core/scope/Scope;Lio/github/yasmramos/warmup/core/lifecycle/LifecycleCallbacks;Z[Ljava/lang/Object;[Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;)V
-            StringBuilder beanDefCtorDesc = new StringBuilder("(Ljava/lang/Class;Ljava/lang/String;Lio/github/yasmramos/warmup/core/scope/Scope;Lio/github/yasmramos/warmup/core/lifecycle/LifecycleCallbacks;Z[Ljava/lang/Object;[Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;)V");
+            // Constructor descriptor: (Ljava/lang/Class;Ljava/lang/String;Lio/github/yasmramos/warmup/core/scope/Scope;Lio/github/yasmramos/warmup/core/lifecycle/LifecycleCallbacks;Z[Ljava/lang/Object;[Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;[Z[Z)V
+            StringBuilder beanDefCtorDesc = new StringBuilder("(Ljava/lang/Class;Ljava/lang/String;Lio/github/yasmramos/warmup/core/scope/Scope;Lio/github/yasmramos/warmup/core/lifecycle/LifecycleCallbacks;Z[Ljava/lang/Object;[Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;[Z[Z)V");
             mv.visitMethodInsn(org.objectweb.asm.Opcodes.INVOKESPECIAL, beanDefInternal, "<init>", beanDefCtorDesc.toString(), false);
             
             // Apply @Order so collection injection can order this bean (lower value first).

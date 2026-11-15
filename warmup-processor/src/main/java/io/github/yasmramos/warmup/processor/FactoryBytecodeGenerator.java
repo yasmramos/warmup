@@ -297,9 +297,10 @@ public class FactoryBytecodeGenerator {
         // Invoke constructor
         mv.visitMethodInsn(Opcodes.INVOKESPECIAL, beanInternalName, "<init>", constructorDescriptor, false);
 
-        // Inject @Inject fields from dependencies array (after constructor params)
-        for (int i = 0; i < injectFields.size(); i++) {
-            VariableElement field = injectFields.get(i);
+        // Inject non-lazy @Inject fields from the compacted dependencies array
+        // (constructor params first, then non-lazy fields), matching get().
+        for (int i = 0; i < nonLazyFields.size(); i++) {
+            VariableElement field = nonLazyFields.get(i);
             String fieldName = field.getSimpleName().toString();
             int fieldIndex = constructorParams.size() + i;
 
@@ -319,9 +320,9 @@ public class FactoryBytecodeGenerator {
             mv.visitFieldInsn(Opcodes.PUTFIELD, beanInternalName, fieldName, fieldDescriptor);
         }
 
-        // Invoke @Inject methods after field injection (create method path)
-        int createMethodParamStartIndex = constructorParams.size() + injectFields.size();
-        for (ExecutableElement method : injectMethods) {
+        // Invoke non-lazy @Inject methods after field injection (create method path)
+        int createMethodParamStartIndex = constructorParams.size() + nonLazyFields.size();
+        for (ExecutableElement method : nonLazyMethods) {
             String methodName = method.getSimpleName().toString();
             List<? extends VariableElement> methodParams = method.getParameters();
             

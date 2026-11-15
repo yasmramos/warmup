@@ -421,52 +421,17 @@ public class Container implements HotReloadCapable, AutoCloseable {
             }
 
             ResolvedBeanDefinition<?> resolvedDef = registry.getResolvedOrNull(beanName);
-
-            Object[] dependencies = definition.dependencies();
-            if (dependencies.length == 0) {
-                // No dependencies: mark as wired since get() is safe to call directly
-                if (resolvedDef != null) {
-                    resolvedDef.setWired(true);
-                }
+            if (resolvedDef == null) {
                 continue;
             }
 
-            // Collect dependency factories
-            CompiledFactory<?>[] depFactories = new CompiledFactory<?>[dependencies.length];
-            boolean allResolved = true;
-
-            for (int i = 0; i < dependencies.length; i++) {
-                Object dep = dependencies[i];
-                if (dep instanceof String depName) {
-                    if (CollectionDependency.isMarker(depName)) {
-                        // Collection injection point: synthesise a factory that collects every
-                        // bean of the element type, keeping the bean on the wired fast path.
-                        depFactories[i] = collectionFactory(depName);
-                        continue;
-                    }
-                    if (OptionalDependency.isMarker(depName)) {
-                        // Optional injection point: synthesise a factory that wraps the matching
-                        // bean (or empty), keeping the bean on the wired fast path.
-                        depFactories[i] = optionalFactory(depName);
-                        continue;
-                    }
-                    CompiledFactory<?> depFactory = factoryCache.get(depName);
-                    if (depFactory != null) {
-                        depFactories[i] = depFactory;
-                    } else {
-                        // Dependency factory not yet available (forward reference or dynamic bean)
-                        allResolved = false;
-                        break;
-                    }
-                } else {
-                    // Direct object reference (not a bean name) - skip wiring for this dependency
-                    allResolved = false;
-                    break;
-                }
-            }
-
-            // Wire the factory if all dependencies are available
-            if (allResolved) {
+            // Collect the non-deferred dependency factories (deferred @Lazy deps
+            // are injected by name after creation, so they are never wired). The
+            // array is null when a dependency is a direct reference or its
+            // factory is not available yet, in which case the bean stays on the
+            // create(Object[]) slow path.
+            CompiledFactory<?>[] depFactories = collectDependencyFactories(resolvedDef);
+            if (depFactories != null) {
                 wireOneFactory(beanName, factory, depFactories, resolvedDef);
             }
         }
@@ -514,34 +479,10 @@ public class Container implements HotReloadCapable, AutoCloseable {
      */
     @SuppressWarnings("unchecked")
     private void tryLazyWire(ResolvedBeanDefinition<?> resolvedDef, CompiledFactory<?> factory) {
-        BeanDefinition<?> definition = resolvedDef.getDefinition();
-        Object[] dependencies = definition.dependencies();
-        if (dependencies.length == 0) {
-            resolvedDef.setWired(true);
-            return;
+        CompiledFactory<?>[] depFactories = collectDependencyFactories(resolvedDef);
+        if (depFactories != null) {
+            wireOneFactory(resolvedDef.getDefinition().name(), factory, depFactories, resolvedDef);
         }
-
-        CompiledFactory<?>[] depFactories = new CompiledFactory<?>[dependencies.length];
-        for (int i = 0; i < dependencies.length; i++) {
-            if (!(dependencies[i] instanceof String depName)) {
-                return; // Direct object reference: not wireable, keep slow path
-            }
-            if (CollectionDependency.isMarker(depName)) {
-                depFactories[i] = collectionFactory(depName);
-                continue;
-            }
-            if (OptionalDependency.isMarker(depName)) {
-                depFactories[i] = optionalFactory(depName);
-                continue;
-            }
-            CompiledFactory<?> depFactory = factoryCache.get(depName);
-            if (depFactory == null) {
-                return; // Dependency factory not compiled yet: retry later
-            }
-            depFactories[i] = depFactory;
-        }
-
-        wireOneFactory(definition.name(), factory, depFactories, resolvedDef);
     }
 
     /**
@@ -1996,30 +1937,38 @@ public class Container implements HotReloadCapable, AutoCloseable {
      * bean dependency whose factory has not been compiled yet).
      */
     private CompiledFactory<?>[] collectDependencyFactories(ResolvedBeanDefinition<?> resolvedDef) {
-        Object[] dependencies = resolvedDef.getDefinition().dependencies();
+        BeanDefinition<?> definition = resolvedDef.getDefinition();
+        Object[] dependencies = definition.dependencies();
         if (dependencies.length == 0) {
             return new CompiledFactory<?>[0];
         }
-        CompiledFactory<?>[] depFactories = new CompiledFactory<?>[dependencies.length];
+        // Deferred (@Lazy field/setter) dependencies are resolved by name after the
+        // bean is published, so they are never wired. The generated factories index
+        // their wired slots by the compacted non-deferred position, so this array
+        // must skip deferred entries to stay aligned with get()/create().
+        List<CompiledFactory<?>> depFactories = new ArrayList<>(dependencies.length);
         for (int i = 0; i < dependencies.length; i++) {
+            if (definition.isDeferredDependency(i)) {
+                continue;
+            }
             if (!(dependencies[i] instanceof String depName)) {
                 return null; // Direct object reference: not wireable
             }
             if (CollectionDependency.isMarker(depName)) {
-                depFactories[i] = collectionFactory(depName);
+                depFactories.add(collectionFactory(depName));
                 continue;
             }
             if (OptionalDependency.isMarker(depName)) {
-                depFactories[i] = optionalFactory(depName);
+                depFactories.add(optionalFactory(depName));
                 continue;
             }
             CompiledFactory<?> depFactory = factoryCache.get(depName);
             if (depFactory == null) {
                 return null; // Dependency factory not available yet
             }
-            depFactories[i] = depFactory;
+            depFactories.add(depFactory);
         }
-        return depFactories;
+        return depFactories.toArray(new CompiledFactory<?>[0]);
     }
 
     /**
