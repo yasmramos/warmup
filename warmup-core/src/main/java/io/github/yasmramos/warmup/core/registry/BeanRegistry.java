@@ -2,6 +2,8 @@ package io.github.yasmramos.warmup.core.registry;
 
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.Consumer;
+import java.util.function.Supplier;
 
 /**
  * Thread-safe bean registry with O(1) lookup using ConcurrentHashMap.
@@ -94,6 +96,42 @@ public interface BeanRegistry {
     default <T> T getInstance(BeanDefinition<T> definition, io.github.yasmramos.warmup.core.jit.CompiledFactory<T> factory) {
         // Default implementation delegates to the Supplier-based version
         return getInstance(definition, factory::get);
+    }
+
+    /**
+     * Gets or creates a bean instance and invokes {@code afterCreate} on each
+     * freshly created instance, inside the creation region.
+     *
+     * <p>{@code afterCreate} runs after the instance has been published for
+     * cycle-breaking but before the {@code @PostConstruct} callback, and is
+     * invoked exactly once per created instance (never for a cached one). The
+     * container uses this to inject deferred ({@code @Lazy}) dependencies
+     * before lifecycle callbacks observe the bean.</p>
+     *
+     * @param <T> the bean type
+     * @param definition the pre-resolved bean definition
+     * @param factory factory to create the instance if needed
+     * @param afterCreate callback invoked on each newly created instance, before {@code onInit}
+     * @return the bean instance
+     */
+    default <T> T getInstance(BeanDefinition<T> definition, Supplier<T> factory,
+                              Consumer<? super T> afterCreate) {
+        return getInstance(definition, factory);
+    }
+
+    /**
+     * Compiled-factory variant of
+     * {@link #getInstance(BeanDefinition, Supplier, Consumer)}.
+     *
+     * @param <T> the bean type
+     * @param definition the pre-resolved bean definition
+     * @param factory the CompiledFactory to create the instance if needed
+     * @param afterCreate callback invoked on each newly created instance, before {@code onInit}
+     * @return the bean instance
+     */
+    default <T> T getInstance(BeanDefinition<T> definition, io.github.yasmramos.warmup.core.jit.CompiledFactory<T> factory,
+                              Consumer<? super T> afterCreate) {
+        return getInstance(definition, factory::get, afterCreate);
     }
 
     /**

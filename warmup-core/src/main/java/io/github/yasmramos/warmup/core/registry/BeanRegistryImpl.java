@@ -18,6 +18,7 @@ import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
+import java.util.function.Consumer;
 import java.util.function.Supplier;
 
 /**
@@ -31,6 +32,9 @@ import java.util.function.Supplier;
  * - Pre-computed ResolvedBeanDefinition wrappers for single-lookup resolution
  */
 public class BeanRegistryImpl implements BeanRegistry {
+
+    // No-op hook reused by the 2-arg overloads so they allocate no lambda per call.
+    private static final Consumer<Object> NO_AFTER_CREATE = instance -> { };
 
     // Bean definitions indexed by name
     private final ConcurrentMap<String, BeanDefinition<?>> definitionsByName = new ConcurrentHashMap<>();
@@ -291,6 +295,13 @@ public class BeanRegistryImpl implements BeanRegistry {
     @Override
     @SuppressWarnings("unchecked")
     public <T> T getInstance(BeanDefinition<T> definition, Supplier<T> factory) {
+        return getInstance(definition, factory, NO_AFTER_CREATE);
+    }
+
+    @Override
+    @SuppressWarnings("unchecked")
+    public <T> T getInstance(BeanDefinition<T> definition, Supplier<T> factory,
+                             Consumer<? super T> afterCreate) {
         String name = definition.name();
 
         return switch (definition.scope()) {
@@ -310,6 +321,8 @@ public class BeanRegistryImpl implements BeanRegistry {
                     if (idx != null && idx >= 0 && idx < singletonInstancesByIndex.length) {
                         ARRAY_ELEMENT_HANDLE.setRelease(singletonInstancesByIndex, idx, newInstance);
                     }
+                    // Inject deferred (@Lazy) dependencies before @PostConstruct
+                    afterCreate.accept(newInstance);
                     // Apply init callback BEFORE returning the instance (inside the lock)
                     applyInitCallback(newInstance, definition);
                     return newInstance;
@@ -320,6 +333,7 @@ public class BeanRegistryImpl implements BeanRegistry {
             case PROTOTYPE -> {
                 // Always create new instance for prototype scope
                 T instance = factory.get();
+                afterCreate.accept(instance);
                 // Only apply init callback if the bean has lifecycle callbacks defined
                 if (definition.lifecycle().onInit() != null) {
                     definition.lifecycle().onInit().onInit(instance);
@@ -332,6 +346,7 @@ public class BeanRegistryImpl implements BeanRegistry {
                 if (scopeName == null || scopeName.isEmpty()) {
                     // Fallback to prototype behavior if no scope name is specified
                     T instance = factory.get();
+                    afterCreate.accept(instance);
                     if (definition.lifecycle().onInit() != null) {
                         definition.lifecycle().onInit().onInit(instance);
                     }
@@ -345,6 +360,7 @@ public class BeanRegistryImpl implements BeanRegistry {
                 
                 T instance = handler.get(name, () -> {
                     T newInstance = factory.get();
+                    afterCreate.accept(newInstance);
                     // Apply init callback when creating a new instance in the custom scope
                     if (definition.lifecycle().onInit() != null) {
                         definition.lifecycle().onInit().onInit(newInstance);
@@ -359,6 +375,13 @@ public class BeanRegistryImpl implements BeanRegistry {
     @Override
     @SuppressWarnings("unchecked")
     public <T> T getInstance(BeanDefinition<T> definition, CompiledFactory<T> factory) {
+        return getInstance(definition, factory, NO_AFTER_CREATE);
+    }
+
+    @Override
+    @SuppressWarnings("unchecked")
+    public <T> T getInstance(BeanDefinition<T> definition, CompiledFactory<T> factory,
+                             Consumer<? super T> afterCreate) {
         String name = definition.name();
 
         return switch (definition.scope()) {
@@ -378,6 +401,8 @@ public class BeanRegistryImpl implements BeanRegistry {
                     if (idx != null && idx >= 0 && idx < singletonInstancesByIndex.length) {
                         ARRAY_ELEMENT_HANDLE.setRelease(singletonInstancesByIndex, idx, newInstance);
                     }
+                    // Inject deferred (@Lazy) dependencies before @PostConstruct
+                    afterCreate.accept(newInstance);
                     // Apply init callback BEFORE returning the instance (inside the lock)
                     applyInitCallback(newInstance, definition);
                     return newInstance;
@@ -389,6 +414,7 @@ public class BeanRegistryImpl implements BeanRegistry {
                 // Always create new instance for prototype scope
                 // Use factory.get() directly to avoid Object[] allocation when wired
                 T instance = factory.get();
+                afterCreate.accept(instance);
                 // Only apply init callback if the bean has lifecycle callbacks defined
                 if (definition.lifecycle().onInit() != null) {
                     definition.lifecycle().onInit().onInit(instance);
@@ -401,6 +427,7 @@ public class BeanRegistryImpl implements BeanRegistry {
                 if (scopeName == null || scopeName.isEmpty()) {
                     // Fallback to prototype behavior if no scope name is specified
                     T instance = factory.get();
+                    afterCreate.accept(instance);
                     if (definition.lifecycle().onInit() != null) {
                         definition.lifecycle().onInit().onInit(instance);
                     }
@@ -414,6 +441,7 @@ public class BeanRegistryImpl implements BeanRegistry {
                 
                 T instance = handler.get(name, () -> {
                     T newInstance = factory.get();
+                    afterCreate.accept(newInstance);
                     // Apply init callback when creating a new instance in the custom scope
                     if (definition.lifecycle().onInit() != null) {
                         definition.lifecycle().onInit().onInit(newInstance);

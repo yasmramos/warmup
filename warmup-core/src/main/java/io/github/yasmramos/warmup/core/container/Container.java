@@ -925,6 +925,10 @@ public class Container implements HotReloadCapable, AutoCloseable {
         // Singleton not yet created, use registry.getInstance for thread-safe lazy init
         // Use CompiledFactory directly to avoid Supplier lambda allocation
         CompiledFactory<T> factory = resolvedDef.getOrComputeFactory(factoryCache);
+        // Deferred (@Lazy) dependencies must be injected INSIDE the creation region,
+        // after early publication but before @PostConstruct, so the callback observes a
+        // fully wired bean while cycles remain broken via the published instance.
+        Consumer<T> afterCreate = created -> injectDeferredDependencies(created, resolvedDef.getDefinition());
         T instance;
         if (factory != null && resolvedDef.isWired()) {
             // Wired factory: use factory.get() path without Object[] allocation
@@ -936,13 +940,13 @@ public class Container implements HotReloadCapable, AutoCloseable {
             if (resolvedDef.isCompileTime()) {
                 compileTimeHits.add(1);
             }
-            instance = registry.getInstance(resolvedDef.getDefinition(), factory);
+            instance = registry.getInstance(resolvedDef.getDefinition(), factory, afterCreate);
         } else {
-            // Non-wired or no factory: fall back to createBean lambda
-            // NOTE: createBeanWithoutDeferredInjection only creates the instance;
-            // deferred injection happens below, after the instance is published.
+            // Non-wired or no factory: fall back to createBean lambda.
+            // createBeanWithoutDeferredInjection only creates the instance; the
+            // afterCreate hook injects deferred deps once the bean is published.
             instance = registry.getInstance(resolvedDef.getDefinition(),
-                    () -> createBeanWithoutDeferredInjection(resolvedDef));
+                    () -> createBeanWithoutDeferredInjection(resolvedDef), afterCreate);
         }
         // Publish the created instance for fast-path on subsequent resolutions.
         // Only SINGLETON instances belong in the resolved-definition cache;
@@ -954,13 +958,6 @@ public class Container implements HotReloadCapable, AutoCloseable {
                 impl.setInstanceByIndex(resolvedDef.getIndex(), instance);
             }
         }
-
-        // PHASE 2: Inject deferred dependencies (@Lazy field/setter injections) AFTER the bean is published
-        // This breaks circular dependencies by ensuring the instance is visible in singletonInstances
-        // before we try to resolve its lazy dependencies (which may be beans in a cycle with this one).
-        // Must mirror resolve(ResolvedBeanDefinition): the wired fast path above returns an
-        // instance created directly by the factory, which never injects deferred dependencies.
-        injectDeferredDependencies(instance, resolvedDef.getDefinition());
 
         return instance;
     }
@@ -1096,6 +1093,10 @@ public class Container implements HotReloadCapable, AutoCloseable {
         // Singleton not yet created, use registry.getInstance for thread-safe lazy init
         // Use CompiledFactory directly to avoid Supplier lambda allocation
         CompiledFactory<T> factory = resolvedDef.getOrComputeFactory(factoryCache);
+        // Deferred (@Lazy) dependencies must be injected INSIDE the creation region,
+        // after early publication but before @PostConstruct, so the callback observes a
+        // fully wired bean while cycles remain broken via the published instance.
+        Consumer<T> afterCreate = created -> injectDeferredDependencies(created, resolvedDef.getDefinition());
         T instance;
         if (factory != null && resolvedDef.isWired()) {
             // Wired factory: use factory.get() path without Object[] allocation
@@ -1107,13 +1108,13 @@ public class Container implements HotReloadCapable, AutoCloseable {
             if (resolvedDef.isCompileTime()) {
                 compileTimeHits.add(1);
             }
-            instance = registry.getInstance(resolvedDef.getDefinition(), factory);
+            instance = registry.getInstance(resolvedDef.getDefinition(), factory, afterCreate);
         } else {
-            // Non-wired or no factory: fall back to the createBean lambda
-            // NOTE: createBeanWithoutDeferredInjection only creates the instance;
-            // deferred injection happens after getInstance returns (see PHASE 2 below)
+            // Non-wired or no factory: fall back to the createBean lambda.
+            // createBeanWithoutDeferredInjection only creates the instance; the
+            // afterCreate hook injects deferred deps once the bean is published.
             instance = registry.getInstance(resolvedDef.getDefinition(),
-                    () -> createBeanWithoutDeferredInjection(resolvedDef));
+                    () -> createBeanWithoutDeferredInjection(resolvedDef), afterCreate);
         }
         // Publish the created instance for fast-path on subsequent resolutions.
         // Only SINGLETON instances are cached here; CUSTOM scopes keep their
@@ -1121,11 +1122,6 @@ public class Container implements HotReloadCapable, AutoCloseable {
         if (singleton) {
             resolvedDef.setCachedInstance(instance);
         }
-
-        // PHASE 2: Inject deferred dependencies (@Lazy field/setter injections) AFTER the bean is published
-        // This breaks circular dependencies by ensuring the instance is visible in singletonInstances
-        // before we try to resolve its lazy dependencies (which may be beans in a cycle with this one)
-        injectDeferredDependencies(instance, resolvedDef.getDefinition());
 
         return instance;
     }
