@@ -22,6 +22,7 @@ import io.github.yasmramos.warmup.core.registry.BeanDefinition;
 import io.github.yasmramos.warmup.core.registry.BeanRegistry;
 import io.github.yasmramos.warmup.core.registry.BeanRegistryImpl;
 import io.github.yasmramos.warmup.core.registry.CollectionDependency;
+import io.github.yasmramos.warmup.core.registry.InjectionPoint;
 import io.github.yasmramos.warmup.core.registry.OptionalDependency;
 import io.github.yasmramos.warmup.core.registry.ResolvedBeanDefinition;
 import io.github.yasmramos.warmup.core.registry.TypedValueDependency;
@@ -524,16 +525,14 @@ public class Container implements HotReloadCapable, AutoCloseable {
             int[] flatIndices = new int[dependencies.length];
             boolean allPlainBeans = true;
             boolean hasNonSingletonDep = false;
+            InjectionPoint[] injectionPoints = definition.injectionPoints();
             for (int i = 0; i < dependencies.length; i++) {
-                Object dep = dependencies[i];
-                if (!(dep instanceof String depName)
-                        || CollectionDependency.isMarker(depName)
-                        || OptionalDependency.isMarker(depName)
-                        || TypedValueDependency.isMarker(depName)
-                        || isValueExpression(depName)) {
+                InjectionPoint point = injectionPoints[i];
+                if (point.kind() != InjectionPoint.Kind.BEAN) {
                     allPlainBeans = false;
                     break;
                 }
+                String depName = point.name();
                 int idx = registry.indexOf(depName);
                 if (idx < 0) {
                     // Forward reference: leave unflattened; the generic loop
@@ -1947,26 +1946,28 @@ public class Container implements HotReloadCapable, AutoCloseable {
         // their wired slots by the compacted non-deferred position, so this array
         // must skip deferred entries to stay aligned with get()/create().
         List<CompiledFactory<?>> depFactories = new ArrayList<>(dependencies.length);
+        InjectionPoint[] points = definition.injectionPoints();
         for (int i = 0; i < dependencies.length; i++) {
-            if (definition.isDeferredDependency(i)) {
+            InjectionPoint point = points[i];
+            if (point.deferred()) {
                 continue;
             }
-            if (!(dependencies[i] instanceof String depName)) {
-                return null; // Direct object reference: not wireable
+            switch (point.kind()) {
+                case COLLECTION -> depFactories.add(collectionFactory(point.name()));
+                case OPTIONAL -> depFactories.add(optionalFactory(point.name()));
+                case BEAN -> {
+                    CompiledFactory<?> depFactory = factoryCache.get(point.name());
+                    if (depFactory == null) {
+                        return null; // Dependency factory not available yet
+                    }
+                    depFactories.add(depFactory);
+                }
+                // Direct references and configuration values have no compiled factory to
+                // wire, so the bean stays on the create(Object[]) slow path.
+                default -> {
+                    return null;
+                }
             }
-            if (CollectionDependency.isMarker(depName)) {
-                depFactories.add(collectionFactory(depName));
-                continue;
-            }
-            if (OptionalDependency.isMarker(depName)) {
-                depFactories.add(optionalFactory(depName));
-                continue;
-            }
-            CompiledFactory<?> depFactory = factoryCache.get(depName);
-            if (depFactory == null) {
-                return null; // Dependency factory not available yet
-            }
-            depFactories.add(depFactory);
         }
         return depFactories.toArray(new CompiledFactory<?>[0]);
     }
@@ -2169,60 +2170,62 @@ public class Container implements HotReloadCapable, AutoCloseable {
         Class<?>[] depClasses = new Class<?>[nonDeferredCount];
         int depIndex = 0;
 
+        InjectionPoint[] points = definition.injectionPoints();
         for (int i = 0; i < deps.length; i++) {
+            InjectionPoint point = points[i];
             // Skip deferred dependencies
-            if (definition.isDeferredDependency(i)) {
+            if (point.deferred()) {
                 continue;
             }
 
             Object dep = deps[i];
-            if (dep instanceof String depName) {
-                if (CollectionDependency.isMarker(depName)) {
+            switch (point.kind()) {
+                case COLLECTION ->
                     // Collection injection point: the compiled factory must pass the declared
                     // collection type (List/Set/Deque/Map/...) to the constructor, and the
                     // resolved value is materialised as that exact type.
                     depClasses[depIndex++] = CollectionDependency.loadType(
-                            CollectionDependency.declaredTypeOf(depName));
-                    continue;
-                }
-                if (OptionalDependency.isMarker(depName)) {
+                            CollectionDependency.declaredTypeOf(point.name()));
+                case OPTIONAL ->
                     // Optional injection point: the constructor parameter is the declared raw
                     // type (java.util.Optional); the resolved value is an Optional instance.
                     depClasses[depIndex++] = OptionalDependency.loadType(
-                            OptionalDependency.declaredTypeOf(depName));
-                    continue;
-                }
-                if (TypedValueDependency.isMarker(depName)) {
+                            OptionalDependency.declaredTypeOf(point.name()));
+                case TYPED_VALUE ->
                     // Typed @Value collection: the constructor parameter is the declared raw
                     // collection type (List/Set/Deque/...), materialised with converted elements.
                     depClasses[depIndex++] = TypedValueDependency.loadType(
-                            TypedValueDependency.declaredTypeOf(depName));
-                    continue;
+                            TypedValueDependency.declaredTypeOf(point.name()));
+                case VALUE -> {
+                    if (dep instanceof ValueDependency valueDep) {
+                        // @Value dependency supplied as an object (dynamic registration): the
+                        // declared target type drives both the constructor parameter and
+                        // value conversion.
+                        depClasses[depIndex++] = valueDep.targetType();
+                    } else {
+                        // @Value placeholder: the constructor parameter type drives the
+                        // conversion (e.g. List for a comma separated value string).
+                        depClasses[depIndex++] = valueTargetType(definition, i);
+                    }
                 }
-                if (isValueExpression(depName)) {
-                    // @Value placeholder: the constructor parameter type drives the conversion
-                    // (e.g. List for a comma separated value string). No bean definition exists.
-                    depClasses[depIndex++] = valueTargetType(definition, i);
-                    continue;
+                case BEAN -> {
+                    BeanDefinition<?> d = registry.getDefinitionOrNull(point.name());
+                    if (d == null) {
+                        throw new IllegalStateException(
+                                "Unknown dependency '" + point.name() + "' in bean '" + definition.name()
+                                + "'. All dependencies must be registered before the dependent bean."
+                        );
+                    }
+                    depClasses[depIndex++] = d.type();
                 }
-                BeanDefinition<?> d = registry.getDefinitionOrNull(depName);
-                if (d == null) {
-                    throw new IllegalStateException(
-                            "Unknown dependency '" + depName + "' in bean '" + definition.name()
-                            + "'. All dependencies must be registered before the dependent bean."
-                    );
+                case DIRECT -> {
+                    if (dep == null) {
+                        throw new IllegalStateException(
+                                "Null dependency at index " + i + " in bean '" + definition.name() + "'"
+                        );
+                    }
+                    depClasses[depIndex++] = findConstructorParameterType(definition.type(), i, dep.getClass());
                 }
-                depClasses[depIndex++] = d.type();
-            } else if (dep instanceof ValueDependency valueDep) {
-                // @Value dependency supplied as an object (dynamic registration): the declared
-                // target type drives both the constructor parameter and value conversion.
-                depClasses[depIndex++] = valueDep.targetType();
-            } else if (dep != null) {
-                depClasses[depIndex++] = findConstructorParameterType(definition.type(), i, dep.getClass());
-            } else {
-                throw new IllegalStateException(
-                        "Null dependency at index " + i + " in bean '" + definition.name() + "'"
-                );
             }
         }
 
@@ -2344,74 +2347,66 @@ public class Container implements HotReloadCapable, AutoCloseable {
         int depIndex = 0;
         int[] depIndices = flatIndices != null ? flatIndices : definition.dependencyIndices();
 
+        InjectionPoint[] points = definition.injectionPoints();
         for (int i = 0; i < dependencies.length; i++) {
+            InjectionPoint point = points[i];
             // Skip deferred dependencies (marked as @Lazy on field/setter)
             // These will be injected after the bean is constructed and published
-            if (definition.isDeferredDependency(i)) {
+            if (point.deferred()) {
                 continue;
             }
 
             Object dep = dependencies[i];
-            if (dep instanceof String depName) {
-                // @Value placeholders ({@code ${...}}) recorded by the annotation processor are
-                // configuration values, not bean names: resolve them through the PropertyResolver
-                // with the declared injection type driving any string→collection conversion.
-                if (TypedValueDependency.isMarker(depName)) {
-                    if (propertyResolver == null) {
-                        throw new IllegalStateException(
-                                "PropertyResolver not configured but @Value dependency found in bean '"
-                                + definition.name() + "'. Use Warmup.builder().propertySource(...) to configure."
-                        );
-                    }
-                    deps[depIndex++] = resolveTypedValueDependency(depName);
-                    depIndices[i] = -2; // value dependencies have no bean index
-                    continue;
-                }
-                if (isValueExpression(depName)) {
-                    if (propertyResolver == null) {
-                        throw new IllegalStateException(
-                                "PropertyResolver not configured but @Value dependency found in bean '"
-                                + definition.name() + "'. Use Warmup.builder().propertySource(...) to configure."
-                        );
-                    }
-                    deps[depIndex++] = resolveValueDependency(
-                            new ValueDependency(depName, valueTargetType(definition, i)));
-                    depIndices[i] = -2; // value dependencies have no bean index
-                    continue;
-                }
-                // Check if we have a cached index for this dependency
-                int cachedIdx = depIndices[i];
+            InjectionPoint.Kind kind = point.kind();
 
-                // Lazy resolution: if index is -1, try to resolve it now
-                if (cachedIdx == -1) {
-                    cachedIdx = registry.indexOf(depName);
-                    depIndices[i] = cachedIdx;
-                }
-
-                // If we have a valid cached index and the singleton is already instantiated,
-                // use fast indexed access (avoids String hashing and map lookup)
-                if (cachedIdx >= 0) {
-                    Object indexedInstance = registry.getIfPresent(cachedIdx);
-                    if (indexedInstance != null) {
-                        deps[depIndex++] = indexedInstance;
-                        continue;
-                    }
-                }
-
-                // Fallback: resolve by name (handles prototypes, not-yet-cached, or forward references)
-                deps[depIndex++] = resolveByName(depName);
-            } else if (dep instanceof ValueDependency valueDep) {
-                // Resolve configuration value via PropertyResolver
+            if (kind == InjectionPoint.Kind.DIRECT) {
+                // Direct object reference (not a bean name)
+                deps[depIndex++] = dep;
+            } else if (point.isConfiguration()) {
+                // @Value placeholders and typed collections are configuration values, not bean
+                // names: resolve them through the PropertyResolver with the declared injection
+                // type driving any string→collection conversion.
                 if (propertyResolver == null) {
                     throw new IllegalStateException(
                             "PropertyResolver not configured but @Value dependency found in bean '"
                             + definition.name() + "'. Use Warmup.builder().propertySource(...) to configure."
                     );
                 }
-                deps[depIndex++] = resolveValueDependency(valueDep);
+                if (kind == InjectionPoint.Kind.TYPED_VALUE) {
+                    deps[depIndex++] = resolveTypedValueDependency(point.name());
+                } else {
+                    ValueDependency valueDep = dep instanceof ValueDependency vd
+                            ? vd : new ValueDependency(point.name(), valueTargetType(definition, i));
+                    deps[depIndex++] = resolveValueDependency(valueDep);
+                }
+                depIndices[i] = -2; // value dependencies have no bean index
             } else {
-                // Direct object reference (not a bean name)
-                deps[depIndex++] = dep;
+                // Bean reference (single bean, collection or optional marker): resolve by name.
+                String depName = point.name();
+                if (kind == InjectionPoint.Kind.BEAN) {
+                    // Check if we have a cached index for this dependency
+                    int cachedIdx = depIndices[i];
+
+                    // Lazy resolution: if index is -1, try to resolve it now
+                    if (cachedIdx == -1) {
+                        cachedIdx = registry.indexOf(depName);
+                        depIndices[i] = cachedIdx;
+                    }
+
+                    // If we have a valid cached index and the singleton is already instantiated,
+                    // use fast indexed access (avoids String hashing and map lookup)
+                    if (cachedIdx >= 0) {
+                        Object indexedInstance = registry.getIfPresent(cachedIdx);
+                        if (indexedInstance != null) {
+                            deps[depIndex++] = indexedInstance;
+                            continue;
+                        }
+                    }
+                }
+
+                // Fallback: resolve by name (handles prototypes, not-yet-cached, forward
+                // references and collection/optional markers)
+                deps[depIndex++] = resolveByName(depName);
             }
         }
         return deps;
@@ -2430,58 +2425,53 @@ public class Container implements HotReloadCapable, AutoCloseable {
         Object[] dependencies = definition.dependencies();
         int[] depIndices = definition.dependencyIndices();
 
+        InjectionPoint[] points = definition.injectionPoints();
         for (int i = 0; i < dependencies.length; i++) {
+            InjectionPoint point = points[i];
             // Only process deferred dependencies
-            if (!definition.isDeferredDependency(i)) {
+            if (!point.deferred()) {
                 continue;
             }
 
             Object dep = dependencies[i];
-            if (dep instanceof String depName) {
-                // Resolve the deferred dependency now that the bean is published
-                Object resolvedDep;
-                if (TypedValueDependency.isMarker(depName)) {
-                    // Typed @Value collection on a field/setter: convert every split element to
-                    // the element type encoded in the marker.
-                    if (propertyResolver == null) {
-                        throw new IllegalStateException(
-                                "PropertyResolver not configured but @Value dependency found in bean '"
-                                + definition.name() + "'. Use Warmup.builder().propertySource(...) to configure."
-                        );
-                    }
-                    resolvedDep = resolveTypedValueDependency(depName);
-                } else if (isValueExpression(depName)) {
-                    // @Value placeholder on a field/setter: resolve via PropertyResolver with a
-                    // target type derived from the reflected field/setter parameter.
-                    if (propertyResolver == null) {
-                        throw new IllegalStateException(
-                                "PropertyResolver not configured but @Value dependency found in bean '"
-                                + definition.name() + "'. Use Warmup.builder().propertySource(...) to configure."
-                        );
-                    }
-                    resolvedDep = resolveValueDependency(
-                            new ValueDependency(depName, valueTargetType(definition, i)));
-                } else {
-                    resolvedDep = resolveByName(depName);
-                }
+            InjectionPoint.Kind kind = point.kind();
 
-                // Inject via field or setter based on metadata
-                if (definition.isFieldOrSetterDependency(i)) {
-                    // This is a field or setter injection - use reflection to inject
-                    injectDependencyViaReflection(instance, definition.type(), depName, resolvedDep, i);
+            if (kind == InjectionPoint.Kind.DIRECT) {
+                // Direct object reference (not a bean name)
+                if (point.fieldOrSetter()) {
+                    injectDependencyViaReflection(instance, definition.type(), null, dep, i);
                 }
-            } else if (dep instanceof ValueDependency valueDep) {
-                // Resolve and inject value dependency
+                continue;
+            }
+
+            // Resolve the deferred dependency now that the bean is published
+            Object resolvedDep;
+            String depName = point.name();
+            if (point.isConfiguration()) {
+                // Typed @Value collection or @Value placeholder on a field/setter: resolve via
+                // the PropertyResolver, deriving the target type from the reflected
+                // field/setter parameter when the token is not already a typed marker.
                 if (propertyResolver == null) {
                     throw new IllegalStateException(
                             "PropertyResolver not configured but @Value dependency found in bean '"
                             + definition.name() + "'. Use Warmup.builder().propertySource(...) to configure."
                     );
                 }
-                Object resolvedValue = resolveValueDependency(valueDep);
-                if (definition.isFieldOrSetterDependency(i)) {
-                    injectDependencyViaReflection(instance, definition.type(), valueDep.expression(), resolvedValue, i);
+                if (kind == InjectionPoint.Kind.TYPED_VALUE) {
+                    resolvedDep = resolveTypedValueDependency(depName);
+                } else {
+                    ValueDependency valueDep = dep instanceof ValueDependency vd
+                            ? vd : new ValueDependency(depName, valueTargetType(definition, i));
+                    resolvedDep = resolveValueDependency(valueDep);
+                    depName = valueDep.expression();
                 }
+            } else {
+                resolvedDep = resolveByName(depName);
+            }
+
+            // Inject via field or setter based on metadata
+            if (point.fieldOrSetter()) {
+                injectDependencyViaReflection(instance, definition.type(), depName, resolvedDep, i);
             }
         }
     }
@@ -2705,15 +2695,6 @@ public class Container implements HotReloadCapable, AutoCloseable {
             return Enum.valueOf((Class<? extends Enum>) elementType, value);
         }
         return value;
-    }
-
-    /**
-     * @param name a dependency name
-     * @return {@code true} when {@code name} is a {@code @Value} placeholder
-     * expression such as {@code ${app.name}} or {@code ${app.port:8080}}
-     */
-    private boolean isValueExpression(String name) {
-        return name != null && name.length() >= 3 && name.startsWith("${") && name.endsWith("}");
     }
 
     /**
