@@ -997,11 +997,16 @@ public class WarmupProcessor extends AbstractProcessor {
         }
         generatedFactoryClasses.add(factoryFullClassName);
         
-        // Find constructor and dependencies
+        // Find constructor and dependencies. A missing constructor is a
+        // programming error: without an unambiguous constructor the generated
+        // factory would assume a no-arg one and fail confusingly at runtime.
         ExecutableElement constructor = findInjectableConstructor(beanClass);
-        List<? extends VariableElement> parameters = constructor != null 
-            ? constructor.getParameters() 
-            : Collections.emptyList();
+        if (constructor == null) {
+            throw new IOException("No injectable constructor found for bean '"
+                + beanClass.getQualifiedName() + "': declare a single public constructor, a "
+                + "no-argument constructor, or annotate exactly one constructor with @Inject.");
+        }
+        List<? extends VariableElement> parameters = constructor.getParameters();
         
         // Collect @Inject and @Value fields, in declaration order so the generated
         // factory indices stay aligned with the BeanDefinition dependency array.
