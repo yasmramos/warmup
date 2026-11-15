@@ -34,9 +34,19 @@ import javafx.application.Platform;
 public class FxLoader {
 
     private static final System.Logger LOG = System.getLogger(FxLoader.class.getName());
+
+    // Upper bound for waiting on the JavaFX Application Thread to run a
+    // dispatched load. Bounds the wait so a stalled or never-started FX thread
+    // surfaces as an IOException instead of hanging the calling thread forever.
+    private static final long DEFAULT_FX_DISPATCH_TIMEOUT_SECONDS = 30L;
+
     private final Warmup warmup;
     private final ConcurrentHashMap<String, Object> controllerCache;
     private volatile boolean developmentMode;
+
+    // Bounds how long a non-FX thread waits for a dispatched load. Overridable
+    // in tests so the timeout path can be exercised without a 30s wait.
+    private volatile long fxDispatchTimeoutSeconds = DEFAULT_FX_DISPATCH_TIMEOUT_SECONDS;
 
     // Track loaded FXML paths for hot-reload
     private final ConcurrentHashMap<String, LoadedFxmlInfo> loadedFxmlMap;
@@ -119,6 +129,17 @@ public class FxLoader {
             warmup.registerScope(UiScopes.VIEW, viewScopeHandler);
             warmup.registerScope(UiScopes.WINDOW, windowScopeHandler);
         }
+    }
+
+    /**
+     * Overrides how long a non-FX thread waits for a dispatched load before
+     * failing with an {@link IOException}. Package-private: intended for tests
+     * that must exercise the timeout path quickly.
+     *
+     * @param seconds timeout in seconds
+     */
+    void setFxDispatchTimeoutSeconds(long seconds) {
+        this.fxDispatchTimeoutSeconds = seconds;
     }
 
     private boolean shouldReload(String key) {
@@ -514,10 +535,14 @@ public class FxLoader {
                     }
                 });
                 try {
-                    loaded.get();
+                    loaded.get(fxDispatchTimeoutSeconds, TimeUnit.SECONDS);
                 } catch (InterruptedException ex) {
                     Thread.currentThread().interrupt();
                     throw new IOException("Interrupted while loading FXML: " + fxmlPath, ex);
+                } catch (TimeoutException ex) {
+                    throw new IOException(
+                            "Timed out after " + fxDispatchTimeoutSeconds
+                            + "s waiting for the JavaFX Application Thread to load FXML: " + fxmlPath, ex);
                 } catch (ExecutionException ex) {
                     Throwable cause = ex.getCause();
                     if (cause instanceof IOException ioException) {

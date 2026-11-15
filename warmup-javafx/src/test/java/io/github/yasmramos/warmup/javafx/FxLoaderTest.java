@@ -7,6 +7,7 @@ import io.github.yasmramos.warmup.core.jit.CompilationException;
 import io.github.yasmramos.warmup.core.jit.CompilationStats;
 import io.github.yasmramos.warmup.core.jit.JITCompiler;
 import io.github.yasmramos.warmup.core.scope.Scope;
+import javafx.application.Platform;
 import javafx.scene.Parent;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -14,6 +15,8 @@ import org.junit.jupiter.api.Test;
 import java.io.IOException;
 import java.lang.reflect.InvocationTargetException;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -108,6 +111,42 @@ class FxLoaderTest extends ApplicationTest {
         assertNotNull(view.resourceBundle(), "bundle() from @FxController should be loaded automatically");
         assertTrue(view.root().getStylesheets().stream().anyMatch(uri -> uri.endsWith("test.css")),
                 "css() from @FxController should be applied to the root");
+    }
+
+    @Test
+    void testLoadView_fromNonFxThread_timesOutInsteadOfHanging() throws Exception {
+        // Occupy the FX thread with a task that blocks until we release it, so a
+        // load dispatched from another thread can never run. Bound the wait so
+        // loadView fails with an IOException instead of blocking the caller.
+        CountDownLatch fxBusy = new CountDownLatch(1);
+        CountDownLatch releaseFx = new CountDownLatch(1);
+        Platform.runLater(() -> {
+            fxBusy.countDown();
+            try {
+                releaseFx.await(10, TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        });
+        assertTrue(fxBusy.await(10, TimeUnit.SECONDS), "FX thread should pick up the blocking task");
+
+        fxLoader.setFxDispatchTimeoutSeconds(1);
+        warmup.register("testService", TestService.class, TestService::new, Scope.SINGLETON);
+        warmup.register("testControllerWithFxml", TestControllerWithFxml.class, () -> {
+            TestControllerWithFxml controller = new TestControllerWithFxml();
+            controller.service = warmup.resolve(TestService.class);
+            return controller;
+        }, Scope.PROTOTYPE);
+
+        try {
+            IOException timeout = assertThrows(IOException.class,
+                    () -> fxLoader.loadView(TestControllerWithFxml.class),
+                    "loadView from a non-FX thread must fail instead of hanging");
+            assertTrue(timeout.getMessage().contains("Timed out"),
+                    "Timeout message should explain the FX-thread wait: " + timeout.getMessage());
+        } finally {
+            releaseFx.countDown();
+        }
     }
 
     @Test
