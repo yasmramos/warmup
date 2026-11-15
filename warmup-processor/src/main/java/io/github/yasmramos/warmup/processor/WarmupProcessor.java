@@ -79,7 +79,7 @@ import java.util.*;
     "io.github.yasmramos.warmup.javafx.ViewScoped",
     "io.github.yasmramos.warmup.javafx.WindowScoped"
 })
-@SupportedSourceVersion(SourceVersion.RELEASE_17)
+@SupportedSourceVersion(SourceVersion.RELEASE_21)
 public class WarmupProcessor extends AbstractProcessor {
 
     private final List<BeanInfo> processedBeans = new ArrayList<>();
