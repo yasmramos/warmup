@@ -462,12 +462,11 @@ public class BeanRegistryImpl implements BeanRegistry {
     public boolean remove(String name) {
         BeanDefinition<?> definition = definitionsByName.remove(name);
         if (definition != null) {
-            // Apply destroy callback if exists
-            if (definition.hasLifecycle() && definition.lifecycle().onDestroy() != null) {
-                Object instance = singletonInstances.get(name);
-                if (instance != null) {
-                    applyDestroyCallback(instance, definition);
-                }
+            // Destroy the instance: an explicit @PreDestroy callback, or close() for an
+            // AutoCloseable bean that declares none.
+            Object instance = singletonInstances.get(name);
+            if (instance != null) {
+                destroyInstance(instance, definition);
             }
             
             // Remove cached instance from both maps
@@ -495,8 +494,8 @@ public class BeanRegistryImpl implements BeanRegistry {
         Object instance = singletonInstances.remove(name);
         if (instance != null) {
             BeanDefinition<?> definition = definitionsByName.get(name);
-            if (definition != null && definition.hasLifecycle() && definition.lifecycle().onDestroy() != null) {
-                applyDestroyCallback(instance, definition);
+            if (definition != null) {
+                destroyInstance(instance, definition);
             }
             // Also evict from indexed array
             Integer idx = nameToIndex.get(name);
@@ -518,8 +517,7 @@ public class BeanRegistryImpl implements BeanRegistry {
         List<Throwable> destroyFailures = new ArrayList<>();
         for (String name : destructionOrder()) {
             BeanDefinition<?> definition = definitionsByName.get(name);
-            if (definition == null || !definition.hasLifecycle()
-                    || definition.lifecycle().onDestroy() == null) {
+            if (definition == null) {
                 continue;
             }
             Object instance = singletonInstances.get(name);
@@ -527,7 +525,7 @@ public class BeanRegistryImpl implements BeanRegistry {
                 continue;
             }
             try {
-                applyDestroyCallback(instance, definition);
+                destroyInstance(instance, definition);
             } catch (Throwable t) {
                 destroyFailures.add(new IllegalStateException(
                         "Destroy callback failed for bean '" + name + "': " + t.getMessage(), t));
@@ -789,6 +787,32 @@ public class BeanRegistryImpl implements BeanRegistry {
     private <T> void applyDestroyCallback(Object instance, BeanDefinition<?> definition) {
         if (definition.hasLifecycle() && definition.lifecycle().onDestroy() != null) {
             ((LifecycleCallbacks<Object>) definition.lifecycle()).onDestroy().onDestroy(instance);
+        }
+    }
+
+    /**
+     * Destroys a bean instance when the registry evicts it.
+     *
+     * <p>An explicit {@code @PreDestroy} callback always wins. When the bean
+     * declares none but implements {@link AutoCloseable}, its {@code close()}
+     * method is invoked so resources are released on shutdown without the user
+     * having to register a callback. Beans that are neither are left untouched.</p>
+     *
+     * @param instance the bean instance being destroyed
+     * @param definition the bean definition
+     */
+    private void destroyInstance(Object instance, BeanDefinition<?> definition) {
+        if (definition.hasLifecycle() && definition.lifecycle().onDestroy() != null) {
+            applyDestroyCallback(instance, definition);
+            return;
+        }
+        if (instance instanceof AutoCloseable closeable) {
+            try {
+                closeable.close();
+            } catch (Exception e) {
+                throw new IllegalStateException(
+                        "close() failed for AutoCloseable bean '" + definition.name() + "': " + e.getMessage(), e);
+            }
         }
     }
 }
