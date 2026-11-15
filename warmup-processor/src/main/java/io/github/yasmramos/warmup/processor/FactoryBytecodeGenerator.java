@@ -79,6 +79,9 @@ public class FactoryBytecodeGenerator {
         }
         
         String beanInternalName = binaryName.replace('.', '/');
+        // Private fields and methods cannot be written from a separately generated class,
+        // so the factory routes them through this reflective accessor (AGENTS §10.6).
+        String accessorInternalName = beanInternalName + "$$WarmupAccessor";
         String interfaceName = "io/github/yasmramos/warmup/core/jit/CompiledFactory";
 
         // Class signature: CompiledFactory<BeanType>
@@ -225,8 +228,7 @@ public class FactoryBytecodeGenerator {
             emitRequireDependency(gv, className, fieldName);
             emitCastToDeclaredType(gv, fieldType);
             // Put field: instance.fieldName = value
-            String fieldDescriptor = getDescriptor(fieldType);
-            gv.visitFieldInsn(Opcodes.PUTFIELD, beanInternalName, fieldName, fieldDescriptor);
+            emitFieldWrite(gv, field, beanInternalName, accessorInternalName);
         }
 
         // Invoke @Inject methods (non-lazy only) after field injection
@@ -264,7 +266,7 @@ public class FactoryBytecodeGenerator {
             }
             
             // Invoke the inject method
-            gv.visitMethodInsn(Opcodes.INVOKEVIRTUAL, beanInternalName, methodName, methodDescriptor, false);
+            emitMethodInvoke(gv, method, methodName, beanInternalName, accessorInternalName, methodDescriptor);
             
             // Update start index for next method
             methodParamStartIndex += methodParams.size();
@@ -321,8 +323,7 @@ public class FactoryBytecodeGenerator {
             emitRequireDependency(mv, className, fieldName);
             emitCastToDeclaredType(mv, fieldType);
             // Put field: instance.fieldName = value
-            String fieldDescriptor = getDescriptor(fieldType);
-            mv.visitFieldInsn(Opcodes.PUTFIELD, beanInternalName, fieldName, fieldDescriptor);
+            emitFieldWrite(mv, field, beanInternalName, accessorInternalName);
         }
 
         // Invoke non-lazy @Inject methods after field injection (create method path)
@@ -358,7 +359,7 @@ public class FactoryBytecodeGenerator {
             }
             
             // Invoke the inject method
-            mv.visitMethodInsn(Opcodes.INVOKEVIRTUAL, beanInternalName, methodName, methodDescriptor, false);
+            emitMethodInvoke(mv, method, methodName, beanInternalName, accessorInternalName, methodDescriptor);
             
             // Update start index for next method
             createMethodParamStartIndex += methodParams.size();
@@ -399,8 +400,7 @@ public class FactoryBytecodeGenerator {
                 TypeMirror fieldType = field.asType();
                 emitCastToDeclaredType(idv, fieldType);
                 // Put field: instance.fieldName = value
-                String fieldDescriptor = getDescriptor(fieldType);
-                idv.visitFieldInsn(Opcodes.PUTFIELD, beanInternalName, fieldName, fieldDescriptor);
+                emitFieldWrite(idv, field, beanInternalName, accessorInternalName);
                 
                 lazyFieldIndex++;
             }
@@ -437,7 +437,7 @@ public class FactoryBytecodeGenerator {
                 }
                 
                 // Invoke the inject method
-                idv.visitMethodInsn(Opcodes.INVOKEVIRTUAL, beanInternalName, methodName, methodDescriptor, false);
+                emitMethodInvoke(idv, method, methodName, beanInternalName, accessorInternalName, methodDescriptor);
                 
                 // Update start index for next method
                 lazyMethodParamStartIndex += methodParams.size();
@@ -961,6 +961,232 @@ public class FactoryBytecodeGenerator {
             case FLOAT: return "floatValue";
             case DOUBLE: return "doubleValue";
             default: throw new IllegalArgumentException("Not a primitive: " + kind);
+        }
+    }
+
+
+    /**
+     * Emits the field write for an injection point, routing non-public fields
+     * through the generated accessor class because the JVM forbids a separate
+     * class from writing another class's private field directly.
+     *
+     * <p>The operand stack already holds {@code [instance, value]}.</p>
+     *
+     * @param mv the method visitor
+     * @param field the field being injected
+     * @param beanInternalName the bean's internal name
+     * @param accessorInternalName the bean accessor's internal name
+     */
+    private void emitFieldWrite(MethodVisitor mv, VariableElement field, String beanInternalName,
+            String accessorInternalName) {
+        TypeMirror type = field.asType();
+        if (field.getModifiers().contains(Modifier.PRIVATE)) {
+            // The accessor takes the value boxed, so re-box a primitive field's value.
+            if (type.getKind().isPrimitive()) {
+                boxPrimitive(mv, type.getKind());
+            }
+            mv.visitMethodInsn(Opcodes.INVOKESTATIC, accessorInternalName, "set" + field.getSimpleName(),
+                    "(L" + beanInternalName + ";Ljava/lang/Object;)V", false);
+            return;
+        }
+        mv.visitFieldInsn(Opcodes.PUTFIELD, beanInternalName, field.getSimpleName().toString(),
+                getDescriptor(type));
+    }
+
+    /**
+     * Emits an {@code @Inject} method invocation, routing private methods through
+     * the generated accessor class because the JVM forbids a separate class from
+     * invoking another class's private method directly.
+     *
+     * <p>The operand stack already holds {@code [instance, arg0, ...]}.</p>
+     *
+     * @param mv the method visitor
+     * @param method the inject method
+     * @param methodName the method name
+     * @param beanInternalName the bean's internal name
+     * @param accessorInternalName the bean accessor's internal name
+     * @param methodDescriptor the JVM method descriptor
+     */
+    private void emitMethodInvoke(MethodVisitor mv, ExecutableElement method, String methodName,
+            String beanInternalName, String accessorInternalName, String methodDescriptor) {
+        if (method.getModifiers().contains(Modifier.PRIVATE)) {
+            mv.visitMethodInsn(Opcodes.INVOKESTATIC, accessorInternalName, "invoke" + methodName,
+                    "(L" + beanInternalName + ";" + methodDescriptor.substring(1), false);
+            return;
+        }
+        mv.visitMethodInsn(Opcodes.INVOKEVIRTUAL, beanInternalName, methodName, methodDescriptor, false);
+    }
+
+    /**
+     * Generates the reflective accessor class for a bean that declares private
+     * {@code @Inject}/{@code @Value} fields or private {@code @Inject} methods.
+     *
+     * <p>Each accessor method resolves its {@link java.lang.reflect.Field} /
+     * {@link java.lang.reflect.Method} once into its own static field and
+     * forwards to {@code AccessorSupport}. The class is public so the factory
+     * (a different class) can call it, while the reflective handles stay
+     * internal. Returns {@code null} when no accessor is needed.</p>
+     *
+     * @param beanClass the bean class
+     * @param privateFields fields that need an accessor writer
+     * @param privateMethods methods that need an accessor invoker
+     * @return the accessor bytecode, or {@code null}
+     */
+    public byte[] generateAccessorBytecode(TypeElement beanClass,
+            List<VariableElement> privateFields, List<ExecutableElement> privateMethods) {
+        if (privateFields.isEmpty() && privateMethods.isEmpty()) {
+            return null;
+        }
+
+        String beanInternalName = getBinaryName(beanClass).replace('.', '/');
+        String accessorInternalName = beanInternalName + "$$WarmupAccessor";
+        String supportInternalName = "io/github/yasmramos/warmup/core/jit/AccessorSupport";
+        String fieldInternalName = "java/lang/reflect/Field";
+        String methodInternalName = "java/lang/reflect/Method";
+
+        ClassWriter cw = new ClassWriter(ClassWriter.COMPUTE_FRAMES);
+        cw.visit(Opcodes.V17, Opcodes.ACC_PUBLIC | Opcodes.ACC_FINAL | Opcodes.ACC_SUPER,
+                accessorInternalName, null, "java/lang/Object", null);
+
+        for (int i = 0; i < privateFields.size(); i++) {
+            cw.visitField(Opcodes.ACC_PRIVATE | Opcodes.ACC_STATIC | Opcodes.ACC_FINAL,
+                    "field" + i, "L" + fieldInternalName + ";", null, null).visitEnd();
+        }
+        for (int j = 0; j < privateMethods.size(); j++) {
+            cw.visitField(Opcodes.ACC_PRIVATE | Opcodes.ACC_STATIC | Opcodes.ACC_FINAL,
+                    "method" + j, "L" + methodInternalName + ";", null, null).visitEnd();
+        }
+
+        MethodVisitor clinit = cw.visitMethod(Opcodes.ACC_STATIC, "<clinit>", "()V", null, null);
+        clinit.visitCode();
+        for (int i = 0; i < privateFields.size(); i++) {
+            clinit.visitLdcInsn(Type.getType("L" + beanInternalName + ";"));
+            clinit.visitLdcInsn(privateFields.get(i).getSimpleName().toString());
+            clinit.visitMethodInsn(Opcodes.INVOKESTATIC, supportInternalName, "field",
+                    "(Ljava/lang/Class;Ljava/lang/String;)Ljava/lang/reflect/Field;", false);
+            clinit.visitFieldInsn(Opcodes.PUTSTATIC, accessorInternalName, "field" + i,
+                    "L" + fieldInternalName + ";");
+        }
+        for (int j = 0; j < privateMethods.size(); j++) {
+            List<? extends VariableElement> params = privateMethods.get(j).getParameters();
+            clinit.visitLdcInsn(Type.getType("L" + beanInternalName + ";"));
+            clinit.visitLdcInsn(privateMethods.get(j).getSimpleName().toString());
+            clinit.visitLdcInsn(params.size());
+            clinit.visitTypeInsn(Opcodes.ANEWARRAY, "java/lang/Class");
+            for (int k = 0; k < params.size(); k++) {
+                clinit.visitInsn(Opcodes.DUP);
+                clinit.visitLdcInsn(k);
+                pushClassLiteral(clinit, params.get(k).asType());
+                clinit.visitInsn(Opcodes.AASTORE);
+            }
+            clinit.visitMethodInsn(Opcodes.INVOKESTATIC, supportInternalName, "method",
+                    "(Ljava/lang/Class;Ljava/lang/String;[Ljava/lang/Class;)Ljava/lang/reflect/Method;", false);
+            clinit.visitFieldInsn(Opcodes.PUTSTATIC, accessorInternalName, "method" + j,
+                    "L" + methodInternalName + ";");
+        }
+        clinit.visitInsn(Opcodes.RETURN);
+        clinit.visitMaxs(0, 0);
+        clinit.visitEnd();
+
+        for (int i = 0; i < privateFields.size(); i++) {
+            String name = privateFields.get(i).getSimpleName().toString();
+            MethodVisitor mv = cw.visitMethod(Opcodes.ACC_PUBLIC | Opcodes.ACC_STATIC, "set" + name,
+                    "(L" + beanInternalName + ";Ljava/lang/Object;)V", null, null);
+            mv.visitCode();
+            mv.visitFieldInsn(Opcodes.GETSTATIC, accessorInternalName, "field" + i, "L" + fieldInternalName + ";");
+            mv.visitVarInsn(Opcodes.ALOAD, 0);
+            mv.visitVarInsn(Opcodes.ALOAD, 1);
+            mv.visitMethodInsn(Opcodes.INVOKESTATIC, supportInternalName, "set",
+                    "(Ljava/lang/reflect/Field;Ljava/lang/Object;Ljava/lang/Object;)V", false);
+            mv.visitInsn(Opcodes.RETURN);
+            mv.visitMaxs(0, 0);
+            mv.visitEnd();
+        }
+
+        for (int j = 0; j < privateMethods.size(); j++) {
+            ExecutableElement method = privateMethods.get(j);
+            List<? extends VariableElement> params = method.getParameters();
+            StringBuilder descriptor = new StringBuilder("(L" + beanInternalName + ";");
+            for (VariableElement param : params) {
+                descriptor.append(getDescriptor(param.asType()));
+            }
+            descriptor.append(")V");
+            MethodVisitor mv = cw.visitMethod(Opcodes.ACC_PUBLIC | Opcodes.ACC_STATIC,
+                    "invoke" + method.getSimpleName(), descriptor.toString(), null, null);
+            mv.visitCode();
+            mv.visitFieldInsn(Opcodes.GETSTATIC, accessorInternalName, "method" + j, "L" + methodInternalName + ";");
+            mv.visitVarInsn(Opcodes.ALOAD, 0);
+            mv.visitLdcInsn(params.size());
+            mv.visitTypeInsn(Opcodes.ANEWARRAY, "java/lang/Object");
+            int slot = 1;
+            for (int k = 0; k < params.size(); k++) {
+                TypeMirror paramType = params.get(k).asType();
+                mv.visitInsn(Opcodes.DUP);
+                mv.visitLdcInsn(k);
+                if (paramType.getKind().isPrimitive()) {
+                    // Load then box: ALOAD on a primitive slot is invalid, and the
+                    // Object[] array needs a reference.
+                    mv.visitVarInsn(loadOpcode(paramType.getKind()), slot);
+                    boxPrimitive(mv, paramType.getKind());
+                } else {
+                    mv.visitVarInsn(Opcodes.ALOAD, slot);
+                }
+                mv.visitInsn(Opcodes.AASTORE);
+                slot += slotSize(paramType);
+            }
+            mv.visitMethodInsn(Opcodes.INVOKESTATIC, supportInternalName, "invoke",
+                    "(Ljava/lang/reflect/Method;Ljava/lang/Object;[Ljava/lang/Object;)V", false);
+            mv.visitInsn(Opcodes.RETURN);
+            mv.visitMaxs(0, 0);
+            mv.visitEnd();
+        }
+
+        cw.visitEnd();
+        return cw.toByteArray();
+    }
+
+    /**
+     * Pushes the {@code Class} literal for a type, using the wrapper's
+     * {@code TYPE} field for primitives.
+     */
+    private void pushClassLiteral(MethodVisitor mv, TypeMirror type) {
+        if (type.getKind().isPrimitive()) {
+            mv.visitFieldInsn(Opcodes.GETSTATIC, boxedInternalName(type.getKind()), "TYPE",
+                    "Ljava/lang/Class;");
+        } else {
+            mv.visitLdcInsn(Type.getType(getDescriptor(type)));
+        }
+    }
+
+    /**
+     * Returns the number of local variable slots a type occupies ({@code 2} for
+     * {@code long}/{@code double}, {@code 1} otherwise).
+     */
+    private int slotSize(TypeMirror type) {
+        TypeKind kind = type.getKind();
+        return (kind == TypeKind.LONG || kind == TypeKind.DOUBLE) ? 2 : 1;
+    }
+
+    /**
+     * Returns the load opcode that reads a value of the given kind from a local
+     * variable slot.
+     */
+    private int loadOpcode(TypeKind kind) {
+        switch (kind) {
+            case INT:
+            case SHORT:
+            case BYTE:
+            case CHAR:
+            case BOOLEAN:
+                return Opcodes.ILOAD;
+            case LONG:
+                return Opcodes.LLOAD;
+            case FLOAT:
+                return Opcodes.FLOAD;
+            case DOUBLE:
+                return Opcodes.DLOAD;
+            default:
+                return Opcodes.ALOAD;
         }
     }
 

@@ -1022,13 +1022,8 @@ public class WarmupProcessor extends AbstractProcessor {
             if (enclosed.getKind() == ElementKind.FIELD) {
                 VariableElement field = (VariableElement) enclosed;
                 if (field.getAnnotation(Inject.class) != null || field.getAnnotation(Value.class) != null) {
-                    // Validate field is not private or final
-                    if (field.getModifiers().contains(Modifier.PRIVATE)) {
-                        processingEnv.getMessager().printMessage(Diagnostic.Kind.ERROR,
-                            "@Inject/@Value fields for compile-time wiring must not be private: " + 
-                            field.getSimpleName() + " in " + beanClass.getQualifiedName(), field);
-                        continue;
-                    }
+                    // Private fields are supported through a generated accessor class;
+                    // final fields cannot be assigned after construction.
                     if (field.getModifiers().contains(Modifier.FINAL)) {
                         processingEnv.getMessager().printMessage(Diagnostic.Kind.ERROR,
                             "@Inject/@Value fields for compile-time wiring must not be final: " + 
@@ -1058,6 +1053,26 @@ public class WarmupProcessor extends AbstractProcessor {
             }
         }
         
+        // Private fields and methods are injected through a generated accessor class: the JVM
+        // forbids the factory (a separate class) from writing them directly.
+        List<VariableElement> privateFields = new ArrayList<>();
+        for (VariableElement field : injectFields) {
+            if (field.getModifiers().contains(Modifier.PRIVATE)) {
+                privateFields.add(field);
+            }
+        }
+        List<ExecutableElement> privateMethods = new ArrayList<>();
+        for (ExecutableElement method : injectMethods) {
+            if (method.getModifiers().contains(Modifier.PRIVATE)) {
+                privateMethods.add(method);
+            }
+        }
+        byte[] accessorBytecode = bytecodeGenerator.generateAccessorBytecode(
+            beanClass, privateFields, privateMethods);
+        if (accessorBytecode != null) {
+            writeGeneratedClass(packageName, className + "$$WarmupAccessor", accessorBytecode, filer);
+        }
+
         // Generate bytecode using FactoryBytecodeGenerator
         byte[] bytecode = bytecodeGenerator.generateFactoryForClassBytecode(
             beanClass, scope, explicitName, constructor, injectFields, injectMethods);
@@ -1083,7 +1098,30 @@ public class WarmupProcessor extends AbstractProcessor {
         
         return factoryFullClassName;
     }
-    
+
+    /**
+     * Writes a generated {@code .class} file, tolerating the {@link FilerException}
+     * raised when the same type is emitted twice across annotation-processing rounds.
+     *
+     * @param packageName the target package (may be empty)
+     * @param simpleName the generated type's simple name
+     * @param bytecode the class bytes
+     * @param filer the filer to write through
+     * @throws IOException if writing fails for any reason other than a duplicate file
+     */
+    private void writeGeneratedClass(String packageName, String simpleName, byte[] bytecode, Filer filer)
+            throws IOException {
+        try {
+            FileObject classFile = filer.createResource(StandardLocation.CLASS_OUTPUT, packageName, simpleName + ".class");
+            try (OutputStream os = classFile.openOutputStream()) {
+                os.write(bytecode);
+            }
+        } catch (FilerException e) {
+            processingEnv.getMessager().printMessage(Diagnostic.Kind.NOTE,
+                "Generated class already exists: " + simpleName);
+        }
+    }
+
     /**
      * Generates bytecode for a @Bean method factory and writes it as a .class file.
      * Returns the simple name of the generated factory class.
