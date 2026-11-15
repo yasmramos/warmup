@@ -13,7 +13,11 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
+import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -146,6 +150,32 @@ class FxLoaderTest extends ApplicationTest {
                     "Timeout message should explain the FX-thread wait: " + timeout.getMessage());
         } finally {
             releaseFx.countDown();
+        }
+    }
+
+    @Test
+    void testStopFileWatching_doesNotThrowNpe() throws Exception {
+        Path watchDir = Files.createTempDirectory("warmup-fx-watch");
+        try {
+            FxLoader loader = new FxLoader(warmup, true);
+            loader.startFileWatching(watchDir.toString());
+            loader.stopFileWatching();
+
+            // Race under test: stopFileWatching() nulls the watchService while
+            // the background loop has already passed the `watching` check, so
+            // its next `watchService.take()` would dereference null. Reproduce
+            // that exact state and run the loop; it must exit instead of NPE.
+            Field watchingField = FxLoader.class.getDeclaredField("watching");
+            watchingField.setAccessible(true);
+            watchingField.setBoolean(loader, true);
+
+            Method watchLoop = FxLoader.class.getDeclaredMethod("watchLoop");
+            watchLoop.setAccessible(true);
+
+            assertDoesNotThrow(() -> watchLoop.invoke(loader),
+                    "watchLoop must not NPE when the WatchService has been closed");
+        } finally {
+            Files.deleteIfExists(watchDir);
         }
     }
 

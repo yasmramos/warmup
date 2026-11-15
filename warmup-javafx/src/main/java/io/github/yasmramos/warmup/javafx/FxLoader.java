@@ -1004,9 +1004,15 @@ public class FxLoader {
      * Background loop that processes WatchService events.
      */
     private void watchLoop() {
+        // Capture the service locally: stopFileWatching() nulls the field, and a
+        // loop that re-read it would NPE mid-iteration on shutdown.
+        WatchService service = this.watchService;
+        if (service == null) {
+            return;
+        }
         while (watching && !Thread.currentThread().isInterrupted()) {
             try {
-                WatchKey key = watchService.take();
+                WatchKey key = service.take();
                 for (WatchEvent<?> event : key.pollEvents()) {
                     WatchEvent.Kind<?> kind = event.kind();
                     Path changedFile = (Path) event.context();
@@ -1052,6 +1058,9 @@ public class FxLoader {
                 }
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
+                break;
+            } catch (ClosedWatchServiceException e) {
+                // stopFileWatching() closed the service; exit quietly.
                 break;
             }
         }
