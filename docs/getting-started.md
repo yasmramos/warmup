@@ -46,7 +46,7 @@ For JIT compilation support (runtime bytecode generation):
 
 ### Build Requirements
 
-- Java 17 or higher
+- Java 21 or higher
 - Maven 3.8 or higher
 - ASM 9.x (included in warmup-asm)
 

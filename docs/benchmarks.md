@@ -14,7 +14,7 @@ Warmup includes JMH (Java Microbenchmark Harness) benchmarks for validating perf
 
 ### Prerequisites
 
-- Java 17 or higher
+- Java 21 or higher
 - Maven 3.8 or higher
 - `warmup-benchmarks` module built
 
