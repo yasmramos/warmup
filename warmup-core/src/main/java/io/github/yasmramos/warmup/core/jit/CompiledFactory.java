@@ -73,4 +73,27 @@ public interface CompiledFactory<T> {
     default void injectDeferred(T instance, Object... deferredDependencies) {
         // Default: no deferred injection support (legacy or no deferred dependencies)
     }
+
+    /**
+     * Validates that a required dependency is not {@code null}, failing fast with
+     * a descriptive message instead of letting the {@code null} surface later as
+     * an obscure {@code NullPointerException} inside the bean constructor or an
+     * injection method.
+     *
+     * <p>
+     * Generated factories call this on every non-deferred dependency right
+     * before it is passed to the bean. It returns the dependency unchanged so
+     * the call can be chained with the cast that follows it in bytecode.</p>
+     *
+     * @param dependency the resolved dependency (may be {@code null})
+     * @param message the failure message describing the missing dependency
+     * @return the dependency, guaranteed non-{@code null}
+     * @throws IllegalStateException if the dependency is {@code null}
+     */
+    static Object requireDependency(Object dependency, String message) {
+        if (dependency == null) {
+            throw new IllegalStateException(message);
+        }
+        return dependency;
+    }
 }

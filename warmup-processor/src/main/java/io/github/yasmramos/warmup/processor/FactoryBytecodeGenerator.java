@@ -188,6 +188,7 @@ public class FactoryBytecodeGenerator {
             // Invoke get() to resolve the instance
             gv.visitMethodInsn(Opcodes.INVOKEINTERFACE, "io/github/yasmramos/warmup/core/jit/CompiledFactory", "get", "()Ljava/lang/Object;", true);
             // Cast to dependency type (unboxes primitive parameters)
+            emitRequireDependency(gv, className, constructorParams.get(i).getSimpleName().toString());
             emitCastToDeclaredType(gv, constructorParams.get(i).asType());
         }
 
@@ -221,6 +222,7 @@ public class FactoryBytecodeGenerator {
             gv.visitMethodInsn(Opcodes.INVOKEINTERFACE, "io/github/yasmramos/warmup/core/jit/CompiledFactory", "get", "()Ljava/lang/Object;", true);
             // Cast to field type (unboxes primitive fields)
             TypeMirror fieldType = field.asType();
+            emitRequireDependency(gv, className, fieldName);
             emitCastToDeclaredType(gv, fieldType);
             // Put field: instance.fieldName = value
             String fieldDescriptor = getDescriptor(fieldType);
@@ -256,6 +258,7 @@ public class FactoryBytecodeGenerator {
                 // Invoke get() to resolve the instance
                 gv.visitMethodInsn(Opcodes.INVOKEINTERFACE, "io/github/yasmramos/warmup/core/jit/CompiledFactory", "get", "()Ljava/lang/Object;", true);
                 // Cast to parameter type (unboxes primitive parameters)
+                emitRequireDependency(gv, className, param.getSimpleName().toString());
                 emitCastToDeclaredType(gv, param.asType());
                 currentParamIndex++;
             }
@@ -291,6 +294,7 @@ public class FactoryBytecodeGenerator {
             // Load element: dependencies[i]
             mv.visitInsn(Opcodes.AALOAD);
             // Cast to dependency type (unboxes primitive parameters)
+            emitRequireDependency(mv, className, constructorParams.get(i).getSimpleName().toString());
             emitCastToDeclaredType(mv, constructorParams.get(i).asType());
         }
 
@@ -314,6 +318,7 @@ public class FactoryBytecodeGenerator {
             mv.visitInsn(Opcodes.AALOAD);
             // Cast to field type (unboxes primitive fields)
             TypeMirror fieldType = field.asType();
+            emitRequireDependency(mv, className, fieldName);
             emitCastToDeclaredType(mv, fieldType);
             // Put field: instance.fieldName = value
             String fieldDescriptor = getDescriptor(fieldType);
@@ -347,6 +352,7 @@ public class FactoryBytecodeGenerator {
                 // Load element: dependencies[currentParamIndex]
                 mv.visitInsn(Opcodes.AALOAD);
                 // Cast to parameter type (unboxes primitive parameters)
+                emitRequireDependency(mv, className, param.getSimpleName().toString());
                 emitCastToDeclaredType(mv, param.asType());
                 currentParamIndex++;
             }
@@ -583,6 +589,8 @@ public class FactoryBytecodeGenerator {
             gv.visitTypeInsn(Opcodes.CHECKCAST, "io/github/yasmramos/warmup/core/jit/CompiledFactory");
             // Invoke get() to resolve the instance
             gv.visitMethodInsn(Opcodes.INVOKEINTERFACE, "io/github/yasmramos/warmup/core/jit/CompiledFactory", "get", "()Ljava/lang/Object;", true);
+            // Fail fast when a wired dependency resolved to null.
+            emitRequireDependency(gv, methodName, parameters.get(i).getSimpleName().toString());
             // Cast to parameter type (unboxes primitive parameters)
             emitCastToDeclaredType(gv, parameters.get(i).asType());
         }
@@ -637,6 +645,7 @@ public class FactoryBytecodeGenerator {
             mv.visitVarInsn(Opcodes.ALOAD, 1);
             mv.visitLdcInsn(i);
             mv.visitInsn(Opcodes.AALOAD);
+            emitRequireDependency(mv, methodName, parameters.get(i).getSimpleName().toString());
             emitCastToDeclaredType(mv, parameters.get(i).asType());
         }
 
@@ -886,6 +895,26 @@ public class FactoryBytecodeGenerator {
      * @param mv the method visitor
      * @param type the declared injection type of the target parameter/field
      */
+    /**
+     * Emits a {@code CompiledFactory.requireDependency(Object, String)} call so a
+     * {@code null} non-deferred dependency fails fast with a descriptive message
+     * instead of surfacing later as an obscure {@code NullPointerException}
+     * inside the bean. The dependency stays on the stack unchanged, ready for
+     * the cast that follows.
+     *
+     * @param mv the method visitor to emit into
+     * @param beanName the simple name of the bean being created
+     * @param dependencyName the field/parameter name of the dependency
+     */
+    private void emitRequireDependency(MethodVisitor mv, String beanName, String dependencyName) {
+        mv.visitLdcInsn("Missing required dependency '" + dependencyName + "' for bean " + beanName);
+        mv.visitMethodInsn(Opcodes.INVOKESTATIC,
+                "io/github/yasmramos/warmup/core/jit/CompiledFactory",
+                "requireDependency",
+                "(Ljava/lang/Object;Ljava/lang/String;)Ljava/lang/Object;",
+                true);
+    }
+
     private void emitCastToDeclaredType(MethodVisitor mv, TypeMirror type) {
         if (type.getKind() == TypeKind.VOID) {
             return;
