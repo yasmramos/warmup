@@ -144,8 +144,11 @@ public class Container implements HotReloadCapable, AutoCloseable {
     // (or re-registering) a bean cannot attach the same listener twice.
     private final Set<String> eventListenersScanned = ConcurrentHashMap.newKeySet();
 
-    // Beans whose @DependsOn closure is currently being forced, used to detect cycles.
-    private final Set<String> dependsOnInProgress = ConcurrentHashMap.newKeySet();
+    // Beans whose @DependsOn closure is currently being forced on THIS thread,
+    // used to detect cycles. Per-thread so that two threads resolving the same
+    // bean concurrently are not mistaken for a cycle.
+    private final ThreadLocal<Set<String>> dependsOnInProgress =
+            ThreadLocal.withInitial(() -> new HashSet<>());
 
     // Resolution version counter for detecting invalidation due to reload/re-registration
     // Incremented on registerDynamic, reload, and other operations that invalidate cached resolutions
@@ -1534,7 +1537,8 @@ public class Container implements HotReloadCapable, AutoCloseable {
         }
         BeanDefinition<?> definition = resolvedDef.getDefinition();
         String self = definition.name();
-        if (!dependsOnInProgress.add(self)) {
+        Set<String> inProgress = dependsOnInProgress.get();
+        if (!inProgress.add(self)) {
             throw new IllegalStateException(
                     "Circular @DependsOn detected involving bean '" + self + "'");
         }
@@ -1546,7 +1550,10 @@ public class Container implements HotReloadCapable, AutoCloseable {
                 resolveByName(dependency);
             }
         } finally {
-            dependsOnInProgress.remove(self);
+            inProgress.remove(self);
+            if (inProgress.isEmpty()) {
+                dependsOnInProgress.remove();
+            }
         }
     }
 
