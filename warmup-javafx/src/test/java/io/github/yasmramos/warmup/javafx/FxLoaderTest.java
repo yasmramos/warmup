@@ -18,6 +18,8 @@ import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Map;
+import java.util.ResourceBundle;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -177,6 +179,54 @@ class FxLoaderTest extends ApplicationTest {
         } finally {
             Files.deleteIfExists(watchDir);
         }
+    }
+
+    @Test
+    void testReloadController_preservesBundleAndClass() throws Exception {
+        warmup.register("testService", TestService.class, TestService::new, Scope.SINGLETON);
+        warmup.register("testControllerWithFxml", TestControllerWithFxml.class, () -> {
+            TestControllerWithFxml controller = new TestControllerWithFxml();
+            controller.service = warmup.resolve(TestService.class);
+            return controller;
+        }, Scope.PROTOTYPE);
+
+        // Initial load tracks the FXML under the controller#path key, carrying
+        // the controller class and the @FxController bundle.
+        FxView<TestControllerWithFxml> initial = fxLoader.loadView(TestControllerWithFxml.class);
+        ResourceBundle initialBundle = initial.resourceBundle();
+        assertNotNull(initialBundle, "Initial load must resolve the @FxController bundle");
+
+        // Reloading must reuse the tracked entry. Passing the tracking key as a
+        // raw path would instead create a second entry with a null controller
+        // class and no bundle, i.e. a reload against the wrong configuration.
+        Parent reloaded = fxLoader.reloadController(TestControllerWithFxml.class);
+
+        assertNotNull(reloaded, "reloadController must reload the tracked FXML");
+        assertNotSame(initial.root(), reloaded, "Reload must produce a new root");
+
+        Map<String, Object> tracked = trackedFxmlEntries();
+        assertEquals(1, tracked.size(),
+                "Reload must reuse the tracked entry instead of adding one keyed by path");
+
+        Object entry = tracked.values().iterator().next();
+        Field controllerField = entry.getClass().getDeclaredField("controllerClass");
+        controllerField.setAccessible(true);
+        assertEquals(TestControllerWithFxml.class, controllerField.get(entry),
+                "Reload must preserve the tracked controller class");
+
+        Field bundleField = entry.getClass().getDeclaredField("resourceBundle");
+        bundleField.setAccessible(true);
+        ResourceBundle reloadedBundle = (ResourceBundle) bundleField.get(entry);
+        assertNotNull(reloadedBundle, "Reload must preserve the resource bundle");
+        assertEquals(initialBundle.getBaseBundleName(), reloadedBundle.getBaseBundleName(),
+                "Reload must reuse the same bundle as the initial load");
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> trackedFxmlEntries() throws Exception {
+        Field field = FxLoader.class.getDeclaredField("loadedFxmlMap");
+        field.setAccessible(true);
+        return (Map<String, Object>) field.get(fxLoader);
     }
 
     @Test
