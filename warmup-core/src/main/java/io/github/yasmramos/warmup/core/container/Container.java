@@ -22,6 +22,7 @@ import io.github.yasmramos.warmup.core.registry.BeanDefinition;
 import io.github.yasmramos.warmup.core.registry.BeanRegistry;
 import io.github.yasmramos.warmup.core.registry.BeanRegistryImpl;
 import io.github.yasmramos.warmup.core.registry.CollectionDependency;
+import io.github.yasmramos.warmup.core.registry.InjectionPoint;
 import io.github.yasmramos.warmup.core.registry.OptionalDependency;
 import io.github.yasmramos.warmup.core.registry.ResolvedBeanDefinition;
 import io.github.yasmramos.warmup.core.registry.TypedValueDependency;
@@ -144,8 +145,11 @@ public class Container implements HotReloadCapable, AutoCloseable {
     // (or re-registering) a bean cannot attach the same listener twice.
     private final Set<String> eventListenersScanned = ConcurrentHashMap.newKeySet();
 
-    // Beans whose @DependsOn closure is currently being forced, used to detect cycles.
-    private final Set<String> dependsOnInProgress = ConcurrentHashMap.newKeySet();
+    // Beans whose @DependsOn closure is currently being forced on THIS thread,
+    // used to detect cycles. Per-thread so that two threads resolving the same
+    // bean concurrently are not mistaken for a cycle.
+    private final ThreadLocal<Set<String>> dependsOnInProgress =
+            ThreadLocal.withInitial(() -> new HashSet<>());
 
     // Resolution version counter for detecting invalidation due to reload/re-registration
     // Incremented on registerDynamic, reload, and other operations that invalidate cached resolutions
@@ -418,52 +422,17 @@ public class Container implements HotReloadCapable, AutoCloseable {
             }
 
             ResolvedBeanDefinition<?> resolvedDef = registry.getResolvedOrNull(beanName);
-
-            Object[] dependencies = definition.dependencies();
-            if (dependencies.length == 0) {
-                // No dependencies: mark as wired since get() is safe to call directly
-                if (resolvedDef != null) {
-                    resolvedDef.setWired(true);
-                }
+            if (resolvedDef == null) {
                 continue;
             }
 
-            // Collect dependency factories
-            CompiledFactory<?>[] depFactories = new CompiledFactory<?>[dependencies.length];
-            boolean allResolved = true;
-
-            for (int i = 0; i < dependencies.length; i++) {
-                Object dep = dependencies[i];
-                if (dep instanceof String depName) {
-                    if (CollectionDependency.isMarker(depName)) {
-                        // Collection injection point: synthesise a factory that collects every
-                        // bean of the element type, keeping the bean on the wired fast path.
-                        depFactories[i] = collectionFactory(depName);
-                        continue;
-                    }
-                    if (OptionalDependency.isMarker(depName)) {
-                        // Optional injection point: synthesise a factory that wraps the matching
-                        // bean (or empty), keeping the bean on the wired fast path.
-                        depFactories[i] = optionalFactory(depName);
-                        continue;
-                    }
-                    CompiledFactory<?> depFactory = factoryCache.get(depName);
-                    if (depFactory != null) {
-                        depFactories[i] = depFactory;
-                    } else {
-                        // Dependency factory not yet available (forward reference or dynamic bean)
-                        allResolved = false;
-                        break;
-                    }
-                } else {
-                    // Direct object reference (not a bean name) - skip wiring for this dependency
-                    allResolved = false;
-                    break;
-                }
-            }
-
-            // Wire the factory if all dependencies are available
-            if (allResolved) {
+            // Collect the non-deferred dependency factories (deferred @Lazy deps
+            // are injected by name after creation, so they are never wired). The
+            // array is null when a dependency is a direct reference or its
+            // factory is not available yet, in which case the bean stays on the
+            // create(Object[]) slow path.
+            CompiledFactory<?>[] depFactories = collectDependencyFactories(resolvedDef);
+            if (depFactories != null) {
                 wireOneFactory(beanName, factory, depFactories, resolvedDef);
             }
         }
@@ -511,34 +480,10 @@ public class Container implements HotReloadCapable, AutoCloseable {
      */
     @SuppressWarnings("unchecked")
     private void tryLazyWire(ResolvedBeanDefinition<?> resolvedDef, CompiledFactory<?> factory) {
-        BeanDefinition<?> definition = resolvedDef.getDefinition();
-        Object[] dependencies = definition.dependencies();
-        if (dependencies.length == 0) {
-            resolvedDef.setWired(true);
-            return;
+        CompiledFactory<?>[] depFactories = collectDependencyFactories(resolvedDef);
+        if (depFactories != null) {
+            wireOneFactory(resolvedDef.getDefinition().name(), factory, depFactories, resolvedDef);
         }
-
-        CompiledFactory<?>[] depFactories = new CompiledFactory<?>[dependencies.length];
-        for (int i = 0; i < dependencies.length; i++) {
-            if (!(dependencies[i] instanceof String depName)) {
-                return; // Direct object reference: not wireable, keep slow path
-            }
-            if (CollectionDependency.isMarker(depName)) {
-                depFactories[i] = collectionFactory(depName);
-                continue;
-            }
-            if (OptionalDependency.isMarker(depName)) {
-                depFactories[i] = optionalFactory(depName);
-                continue;
-            }
-            CompiledFactory<?> depFactory = factoryCache.get(depName);
-            if (depFactory == null) {
-                return; // Dependency factory not compiled yet: retry later
-            }
-            depFactories[i] = depFactory;
-        }
-
-        wireOneFactory(definition.name(), factory, depFactories, resolvedDef);
     }
 
     /**
@@ -580,16 +525,14 @@ public class Container implements HotReloadCapable, AutoCloseable {
             int[] flatIndices = new int[dependencies.length];
             boolean allPlainBeans = true;
             boolean hasNonSingletonDep = false;
+            InjectionPoint[] injectionPoints = definition.injectionPoints();
             for (int i = 0; i < dependencies.length; i++) {
-                Object dep = dependencies[i];
-                if (!(dep instanceof String depName)
-                        || CollectionDependency.isMarker(depName)
-                        || OptionalDependency.isMarker(depName)
-                        || TypedValueDependency.isMarker(depName)
-                        || isValueExpression(depName)) {
+                InjectionPoint point = injectionPoints[i];
+                if (point.kind() != InjectionPoint.Kind.BEAN) {
                     allPlainBeans = false;
                     break;
                 }
+                String depName = point.name();
                 int idx = registry.indexOf(depName);
                 if (idx < 0) {
                     // Forward reference: leave unflattened; the generic loop
@@ -887,18 +830,7 @@ public class Container implements HotReloadCapable, AutoCloseable {
         // OPTIMIZATION 1: For PROTOTYPE beans, skip singleton cache lookup entirely
         // since prototypes are never cached. This avoids unnecessary ConcurrentHashMap.get()
         if (resolvedDef.scope() == Scope.PROTOTYPE) {
-            CompiledFactory<T> factory = resolvedDef.getOrComputeFactory(factoryCache);
-            T instance;
-            if (factory != null) {
-                // Use optimized path for prototypes: skip diagnostic overhead in hot path
-                instance = createPrototypeBeanWithFactory(resolvedDef, factory);
-            } else {
-                instance = createViaReflection(resolvedDef);
-            }
-            if (resolvedDef.lifecycle().onInit() != null) {
-                resolvedDef.lifecycle().onInit().onInit(instance);
-            }
-            return instance;
+            return createPrototypeBean(resolvedDef);
         }
 
         // CUSTOM scopes are managed by an external handler: never reuse the
@@ -933,6 +865,10 @@ public class Container implements HotReloadCapable, AutoCloseable {
         // Singleton not yet created, use registry.getInstance for thread-safe lazy init
         // Use CompiledFactory directly to avoid Supplier lambda allocation
         CompiledFactory<T> factory = resolvedDef.getOrComputeFactory(factoryCache);
+        // Deferred (@Lazy) dependencies must be injected INSIDE the creation region,
+        // after early publication but before @PostConstruct, so the callback observes a
+        // fully wired bean while cycles remain broken via the published instance.
+        Consumer<T> afterCreate = created -> injectDeferredDependencies(created, resolvedDef.getDefinition());
         T instance;
         if (factory != null && resolvedDef.isWired()) {
             // Wired factory: use factory.get() path without Object[] allocation
@@ -944,10 +880,13 @@ public class Container implements HotReloadCapable, AutoCloseable {
             if (resolvedDef.isCompileTime()) {
                 compileTimeHits.add(1);
             }
-            instance = registry.getInstance(resolvedDef.getDefinition(), factory);
+            instance = registry.getInstance(resolvedDef.getDefinition(), factory, afterCreate);
         } else {
-            // Non-wired or no factory: fall back to createBean lambda
-            instance = registry.getInstance(resolvedDef.getDefinition(), () -> createBean(resolvedDef));
+            // Non-wired or no factory: fall back to createBean lambda.
+            // createBeanWithoutDeferredInjection only creates the instance; the
+            // afterCreate hook injects deferred deps once the bean is published.
+            instance = registry.getInstance(resolvedDef.getDefinition(),
+                    () -> createBeanWithoutDeferredInjection(resolvedDef), afterCreate);
         }
         // Publish the created instance for fast-path on subsequent resolutions.
         // Only SINGLETON instances belong in the resolved-definition cache;
@@ -959,6 +898,7 @@ public class Container implements HotReloadCapable, AutoCloseable {
                 impl.setInstanceByIndex(resolvedDef.getIndex(), instance);
             }
         }
+
         return instance;
     }
 
@@ -1056,18 +996,7 @@ public class Container implements HotReloadCapable, AutoCloseable {
         // OPTIMIZATION 1: For PROTOTYPE beans, skip singleton cache lookup entirely
         // since prototypes are never cached. This avoids unnecessary ConcurrentHashMap.get()
         if (resolvedDef.isPrototype()) {
-            CompiledFactory<T> factory = resolvedDef.getOrComputeFactory(factoryCache);
-            T instance;
-            if (factory != null) {
-                // Use optimized path for prototypes: skip diagnostic overhead in hot path
-                instance = createPrototypeBeanWithFactory(resolvedDef, factory);
-            } else {
-                instance = createViaReflection(resolvedDef);
-            }
-            if (resolvedDef.lifecycle().onInit() != null) {
-                resolvedDef.lifecycle().onInit().onInit(instance);
-            }
-            return instance;
+            return createPrototypeBean(resolvedDef);
         }
 
         // CUSTOM scopes are managed by an external handler (for example the
@@ -1104,6 +1033,10 @@ public class Container implements HotReloadCapable, AutoCloseable {
         // Singleton not yet created, use registry.getInstance for thread-safe lazy init
         // Use CompiledFactory directly to avoid Supplier lambda allocation
         CompiledFactory<T> factory = resolvedDef.getOrComputeFactory(factoryCache);
+        // Deferred (@Lazy) dependencies must be injected INSIDE the creation region,
+        // after early publication but before @PostConstruct, so the callback observes a
+        // fully wired bean while cycles remain broken via the published instance.
+        Consumer<T> afterCreate = created -> injectDeferredDependencies(created, resolvedDef.getDefinition());
         T instance;
         if (factory != null && resolvedDef.isWired()) {
             // Wired factory: use factory.get() path without Object[] allocation
@@ -1115,12 +1048,13 @@ public class Container implements HotReloadCapable, AutoCloseable {
             if (resolvedDef.isCompileTime()) {
                 compileTimeHits.add(1);
             }
-            instance = registry.getInstance(resolvedDef.getDefinition(), factory);
+            instance = registry.getInstance(resolvedDef.getDefinition(), factory, afterCreate);
         } else {
-            // Non-wired or no factory: fall back to createBean lambda
-            // NOTE: createBean now only creates the instance WITHOUT injecting deferred deps
-            // Deferred injection happens AFTER getInstance returns to avoid Recursive update
-            instance = registry.getInstance(resolvedDef.getDefinition(), () -> createBeanWithoutDeferredInjection(resolvedDef));
+            // Non-wired or no factory: fall back to the createBean lambda.
+            // createBeanWithoutDeferredInjection only creates the instance; the
+            // afterCreate hook injects deferred deps once the bean is published.
+            instance = registry.getInstance(resolvedDef.getDefinition(),
+                    () -> createBeanWithoutDeferredInjection(resolvedDef), afterCreate);
         }
         // Publish the created instance for fast-path on subsequent resolutions.
         // Only SINGLETON instances are cached here; CUSTOM scopes keep their
@@ -1128,11 +1062,6 @@ public class Container implements HotReloadCapable, AutoCloseable {
         if (singleton) {
             resolvedDef.setCachedInstance(instance);
         }
-
-        // PHASE 2: Inject deferred dependencies (@Lazy field/setter injections) AFTER the bean is published
-        // This breaks circular dependencies by ensuring the instance is visible in singletonInstances
-        // before we try to resolve its lazy dependencies (which may be beans in a cycle with this one)
-        injectDeferredDependencies(instance, resolvedDef.getDefinition());
 
         return instance;
     }
@@ -1262,16 +1191,7 @@ public class Container implements HotReloadCapable, AutoCloseable {
         if (registry instanceof BeanRegistryImpl impl) {
             ResolvedBeanDefinition<T> resolvedDef = impl.getResolvedByIndex(index);
             if (resolvedDef != null && resolvedDef.isPrototype()) {
-                CompiledFactory<T> factory = resolvedDef.getOrComputeFactory(factoryCache);
-                T instance;
-                if (factory != null) {
-                    instance = createPrototypeBeanWithFactory(resolvedDef, factory);
-                } else {
-                    instance = createViaReflectionWithoutDeferredInjection(resolvedDef);
-                }
-                if (resolvedDef.lifecycle().onInit() != null) {
-                    resolvedDef.lifecycle().onInit().onInit(instance);
-                }
+                T instance = createPrototypeBean(resolvedDef);
                 if (metricsEnabled) {
                     totalResolutions.add(1);
                 }
@@ -1553,7 +1473,8 @@ public class Container implements HotReloadCapable, AutoCloseable {
         }
         BeanDefinition<?> definition = resolvedDef.getDefinition();
         String self = definition.name();
-        if (!dependsOnInProgress.add(self)) {
+        Set<String> inProgress = dependsOnInProgress.get();
+        if (!inProgress.add(self)) {
             throw new IllegalStateException(
                     "Circular @DependsOn detected involving bean '" + self + "'");
         }
@@ -1565,7 +1486,10 @@ public class Container implements HotReloadCapable, AutoCloseable {
                 resolveByName(dependency);
             }
         } finally {
-            dependsOnInProgress.remove(self);
+            inProgress.remove(self);
+            if (inProgress.isEmpty()) {
+                dependsOnInProgress.remove();
+            }
         }
     }
 
@@ -1988,6 +1912,14 @@ public class Container implements HotReloadCapable, AutoCloseable {
         ResolvedBeanDefinition<?> resolvedDef = registry.getResolvedOrNull(name);
         if (resolvedDef != null) {
             resolvedDef.setCompileTime(true);
+            // An explicit factory supersedes any scheduled background warmup:
+            // cancel it so the JIT compiler cannot replace this factory with a
+            // constructor-based one (which would fail for beans without a
+            // no-arg constructor, e.g. supplier-registered beans).
+            if (resolvedDef.hasPendingWarmup()) {
+                pendingWarmupBeans.remove(name);
+                resolvedDef.setHasPendingWarmup(false);
+            }
             // Late-registered factories never saw the startup wiring pass. Wire
             // them now (and re-wire any already-wired bean whose dependency
             // factory was just replaced) so the allocation-free get() fast path
@@ -2004,30 +1936,40 @@ public class Container implements HotReloadCapable, AutoCloseable {
      * bean dependency whose factory has not been compiled yet).
      */
     private CompiledFactory<?>[] collectDependencyFactories(ResolvedBeanDefinition<?> resolvedDef) {
-        Object[] dependencies = resolvedDef.getDefinition().dependencies();
+        BeanDefinition<?> definition = resolvedDef.getDefinition();
+        Object[] dependencies = definition.dependencies();
         if (dependencies.length == 0) {
             return new CompiledFactory<?>[0];
         }
-        CompiledFactory<?>[] depFactories = new CompiledFactory<?>[dependencies.length];
+        // Deferred (@Lazy field/setter) dependencies are resolved by name after the
+        // bean is published, so they are never wired. The generated factories index
+        // their wired slots by the compacted non-deferred position, so this array
+        // must skip deferred entries to stay aligned with get()/create().
+        List<CompiledFactory<?>> depFactories = new ArrayList<>(dependencies.length);
+        InjectionPoint[] points = definition.injectionPoints();
         for (int i = 0; i < dependencies.length; i++) {
-            if (!(dependencies[i] instanceof String depName)) {
-                return null; // Direct object reference: not wireable
-            }
-            if (CollectionDependency.isMarker(depName)) {
-                depFactories[i] = collectionFactory(depName);
+            InjectionPoint point = points[i];
+            if (point.deferred()) {
                 continue;
             }
-            if (OptionalDependency.isMarker(depName)) {
-                depFactories[i] = optionalFactory(depName);
-                continue;
+            switch (point.kind()) {
+                case COLLECTION -> depFactories.add(collectionFactory(point.name()));
+                case OPTIONAL -> depFactories.add(optionalFactory(point.name()));
+                case BEAN -> {
+                    CompiledFactory<?> depFactory = factoryCache.get(point.name());
+                    if (depFactory == null) {
+                        return null; // Dependency factory not available yet
+                    }
+                    depFactories.add(depFactory);
+                }
+                // Direct references and configuration values have no compiled factory to
+                // wire, so the bean stays on the create(Object[]) slow path.
+                default -> {
+                    return null;
+                }
             }
-            CompiledFactory<?> depFactory = factoryCache.get(depName);
-            if (depFactory == null) {
-                return null; // Dependency factory not available yet
-            }
-            depFactories[i] = depFactory;
         }
-        return depFactories;
+        return depFactories.toArray(new CompiledFactory<?>[0]);
     }
 
     /**
@@ -2092,101 +2034,6 @@ public class Container implements HotReloadCapable, AutoCloseable {
     }
 
     // Internal methods
-    /**
-     * Creates a bean instance using its factory, avoiding redundant lookups.
-     * This optimized version receives a ResolvedBeanDefinition with cached
-     * data.
-     */
-    @SuppressWarnings("unchecked")
-    private <T> T createBean(ResolvedBeanDefinition<T> resolvedDef) {
-        BeanDefinition<T> definition = resolvedDef.getDefinition();
-        String name = definition.name();
-        long compileTimeNs = 0;
-        ResolutionDiagnostic.ResolutionPath path = null;
-
-        // Check if running in GraalVM native image mode - disable JIT
-        boolean nativeImage = IS_NATIVE_IMAGE;
-
-        // Get cached factory from resolved definition to avoid redundant lookup
-        CompiledFactory<T> factory = resolvedDef.getOrComputeFactory(factoryCache);
-        if (factory != null) {
-            // Hot path: factory already cached, determine origin for metrics/diagnostic only if enabled
-            if (metricsEnabled || diagnosticMode) {
-                if (resolvedDef.isCompileTime()) {
-                    path = ResolutionDiagnostic.ResolutionPath.COMPILE_TIME;
-                    if (metricsEnabled) {
-                        compileTimeHits.add(1);
-                    }
-                } else {
-                    path = ResolutionDiagnostic.ResolutionPath.JIT;
-                    if (metricsEnabled) {
-                        jitHits.add(1);
-                    }
-                }
-            }
-        } else if (!nativeImage) {
-            // Try JIT compilation and cache the result
-            try {
-                factory = jitCompiler.compile(definition.type(), getNonDeferredDependencyClasses(definition));
-                if (factory != null) {
-                    factoryCache.put(name, factory);
-                    resolvedDef.setResolvedFactory(factory);
-                    // Wire the freshly compiled factory now that its own
-                    // dependency factories exist: this bean can take the
-                    // allocation-free get() fast path on subsequent creations.
-                    CompiledFactory<?>[] depFactories = collectDependencyFactories(resolvedDef);
-                    if (depFactories != null) {
-                        wireOneFactory(name, factory, depFactories, resolvedDef);
-                    }
-                    path = ResolutionDiagnostic.ResolutionPath.JIT;
-                    jitHits.add(1);
-                } else {
-                    // Factory is null (shouldn't happen, but be defensive)
-                    path = ResolutionDiagnostic.ResolutionPath.REFLECTION_FALLBACK;
-                    fallbackCount.add(1);
-                    return createViaReflection(resolvedDef);
-                }
-            } catch (CompilationException e) {
-                // Fallback to reflection
-                path = ResolutionDiagnostic.ResolutionPath.REFLECTION_FALLBACK;
-                fallbackCount.add(1);
-                return createViaReflection(resolvedDef);
-            }
-        } else {
-            // Native image mode: skip JIT, go directly to fallback
-            path = ResolutionDiagnostic.ResolutionPath.REFLECTION_FALLBACK;
-            fallbackCount.add(1);
-            return createViaReflection(resolvedDef);
-        }
-
-        // Create instance using factory - use wired path when available (no Object[] allocation)
-        // PHASE 1: Resolve only non-deferred dependencies and create the bean
-        T instance;
-        if (resolvedDef.isCompileTime() && resolvedDef.isWired()) {
-            // Wired compile-time factory: call get() directly without Object[] allocation
-            // Wiring was verified at startup, so get() is guaranteed safe
-            instance = factory.get();
-        } else if (resolvedDef.isCompileTime()) {
-            // Compile-time but not wired (e.g., forward reference): fallback to create()
-            Object[] deps = resolveNonDeferredDependencies(definition);
-            instance = factory.create(deps);
-        } else {
-            // JIT or other factory: use traditional path with non-deferred deps only
-            Object[] deps = resolveNonDeferredDependencies(definition);
-            instance = factory.create(deps);
-        }
-
-        // PHASE 2: Inject deferred dependencies (@Lazy field/setter injections) after bean is created
-        // This breaks circular dependencies by deferring these injections until the bean exists
-        injectDeferredDependencies(instance, definition);
-
-        // Record diagnostic if enabled
-        if (diagnosticMode) {
-            diagnostics.add(new ResolutionDiagnostic(name, definition.type(), path, compileTimeNs));
-        }
-
-        return instance;
-    }
 
     /**
      * Wraps a BeanDefinition into a ResolvedBeanDefinition with cached index
@@ -2212,6 +2059,38 @@ public class Container implements HotReloadCapable, AutoCloseable {
     @SuppressWarnings("unchecked")
     private <T> T createViaReflection(ResolvedBeanDefinition<T> resolvedDef) {
         return createViaReflection(resolvedDef.getDefinition());
+    }
+
+    /**
+     * Creates a prototype bean and runs its full lifecycle: instance creation
+     * (through the compiled factory when available, reflection otherwise),
+     * deferred (@Lazy field/setter) dependency injection, and the
+     * {@code @PostConstruct} callback.
+     *
+     * <p>Centralizes the prototype path shared by name-based, type-based and
+     * index-based resolution so that all three stay consistent.</p>
+     *
+     * @param resolvedDef the resolved prototype definition
+     * @param <T> the bean type
+     * @return a freshly created, fully initialized prototype instance
+     */
+    @SuppressWarnings("unchecked")
+    private <T> T createPrototypeBean(ResolvedBeanDefinition<T> resolvedDef) {
+        CompiledFactory<T> factory = resolvedDef.getOrComputeFactory(factoryCache);
+        T instance = factory != null
+                ? createPrototypeBeanWithFactory(resolvedDef, factory)
+                : createViaReflection(resolvedDef);
+
+        // Prototypes are never cached, so the deferred dependencies must be
+        // re-injected on every creation. The factory only wires non-deferred
+        // (constructor) dependencies, and the reflection fallback resolves them
+        // eagerly, so both paths need this step to populate @Lazy fields.
+        injectDeferredDependencies(instance, resolvedDef.getDefinition());
+
+        if (resolvedDef.lifecycle().onInit() != null) {
+            resolvedDef.lifecycle().onInit().onInit(instance);
+        }
+        return instance;
     }
 
     /**
@@ -2291,60 +2170,62 @@ public class Container implements HotReloadCapable, AutoCloseable {
         Class<?>[] depClasses = new Class<?>[nonDeferredCount];
         int depIndex = 0;
 
+        InjectionPoint[] points = definition.injectionPoints();
         for (int i = 0; i < deps.length; i++) {
+            InjectionPoint point = points[i];
             // Skip deferred dependencies
-            if (definition.isDeferredDependency(i)) {
+            if (point.deferred()) {
                 continue;
             }
 
             Object dep = deps[i];
-            if (dep instanceof String depName) {
-                if (CollectionDependency.isMarker(depName)) {
+            switch (point.kind()) {
+                case COLLECTION ->
                     // Collection injection point: the compiled factory must pass the declared
                     // collection type (List/Set/Deque/Map/...) to the constructor, and the
                     // resolved value is materialised as that exact type.
                     depClasses[depIndex++] = CollectionDependency.loadType(
-                            CollectionDependency.declaredTypeOf(depName));
-                    continue;
-                }
-                if (OptionalDependency.isMarker(depName)) {
+                            CollectionDependency.declaredTypeOf(point.name()));
+                case OPTIONAL ->
                     // Optional injection point: the constructor parameter is the declared raw
                     // type (java.util.Optional); the resolved value is an Optional instance.
                     depClasses[depIndex++] = OptionalDependency.loadType(
-                            OptionalDependency.declaredTypeOf(depName));
-                    continue;
-                }
-                if (TypedValueDependency.isMarker(depName)) {
+                            OptionalDependency.declaredTypeOf(point.name()));
+                case TYPED_VALUE ->
                     // Typed @Value collection: the constructor parameter is the declared raw
                     // collection type (List/Set/Deque/...), materialised with converted elements.
                     depClasses[depIndex++] = TypedValueDependency.loadType(
-                            TypedValueDependency.declaredTypeOf(depName));
-                    continue;
+                            TypedValueDependency.declaredTypeOf(point.name()));
+                case VALUE -> {
+                    if (dep instanceof ValueDependency valueDep) {
+                        // @Value dependency supplied as an object (dynamic registration): the
+                        // declared target type drives both the constructor parameter and
+                        // value conversion.
+                        depClasses[depIndex++] = valueDep.targetType();
+                    } else {
+                        // @Value placeholder: the constructor parameter type drives the
+                        // conversion (e.g. List for a comma separated value string).
+                        depClasses[depIndex++] = valueTargetType(definition, i);
+                    }
                 }
-                if (isValueExpression(depName)) {
-                    // @Value placeholder: the constructor parameter type drives the conversion
-                    // (e.g. List for a comma separated value string). No bean definition exists.
-                    depClasses[depIndex++] = valueTargetType(definition, i);
-                    continue;
+                case BEAN -> {
+                    BeanDefinition<?> d = registry.getDefinitionOrNull(point.name());
+                    if (d == null) {
+                        throw new IllegalStateException(
+                                "Unknown dependency '" + point.name() + "' in bean '" + definition.name()
+                                + "'. All dependencies must be registered before the dependent bean."
+                        );
+                    }
+                    depClasses[depIndex++] = d.type();
                 }
-                BeanDefinition<?> d = registry.getDefinitionOrNull(depName);
-                if (d == null) {
-                    throw new IllegalStateException(
-                            "Unknown dependency '" + depName + "' in bean '" + definition.name()
-                            + "'. All dependencies must be registered before the dependent bean."
-                    );
+                case DIRECT -> {
+                    if (dep == null) {
+                        throw new IllegalStateException(
+                                "Null dependency at index " + i + " in bean '" + definition.name() + "'"
+                        );
+                    }
+                    depClasses[depIndex++] = findConstructorParameterType(definition.type(), i, dep.getClass());
                 }
-                depClasses[depIndex++] = d.type();
-            } else if (dep instanceof ValueDependency valueDep) {
-                // @Value dependency supplied as an object (dynamic registration): the declared
-                // target type drives both the constructor parameter and value conversion.
-                depClasses[depIndex++] = valueDep.targetType();
-            } else if (dep != null) {
-                depClasses[depIndex++] = findConstructorParameterType(definition.type(), i, dep.getClass());
-            } else {
-                throw new IllegalStateException(
-                        "Null dependency at index " + i + " in bean '" + definition.name() + "'"
-                );
             }
         }
 
@@ -2466,74 +2347,66 @@ public class Container implements HotReloadCapable, AutoCloseable {
         int depIndex = 0;
         int[] depIndices = flatIndices != null ? flatIndices : definition.dependencyIndices();
 
+        InjectionPoint[] points = definition.injectionPoints();
         for (int i = 0; i < dependencies.length; i++) {
+            InjectionPoint point = points[i];
             // Skip deferred dependencies (marked as @Lazy on field/setter)
             // These will be injected after the bean is constructed and published
-            if (definition.isDeferredDependency(i)) {
+            if (point.deferred()) {
                 continue;
             }
 
             Object dep = dependencies[i];
-            if (dep instanceof String depName) {
-                // @Value placeholders ({@code ${...}}) recorded by the annotation processor are
-                // configuration values, not bean names: resolve them through the PropertyResolver
-                // with the declared injection type driving any string→collection conversion.
-                if (TypedValueDependency.isMarker(depName)) {
-                    if (propertyResolver == null) {
-                        throw new IllegalStateException(
-                                "PropertyResolver not configured but @Value dependency found in bean '"
-                                + definition.name() + "'. Use Warmup.builder().propertySource(...) to configure."
-                        );
-                    }
-                    deps[depIndex++] = resolveTypedValueDependency(depName);
-                    depIndices[i] = -2; // value dependencies have no bean index
-                    continue;
-                }
-                if (isValueExpression(depName)) {
-                    if (propertyResolver == null) {
-                        throw new IllegalStateException(
-                                "PropertyResolver not configured but @Value dependency found in bean '"
-                                + definition.name() + "'. Use Warmup.builder().propertySource(...) to configure."
-                        );
-                    }
-                    deps[depIndex++] = resolveValueDependency(
-                            new ValueDependency(depName, valueTargetType(definition, i)));
-                    depIndices[i] = -2; // value dependencies have no bean index
-                    continue;
-                }
-                // Check if we have a cached index for this dependency
-                int cachedIdx = depIndices[i];
+            InjectionPoint.Kind kind = point.kind();
 
-                // Lazy resolution: if index is -1, try to resolve it now
-                if (cachedIdx == -1) {
-                    cachedIdx = registry.indexOf(depName);
-                    depIndices[i] = cachedIdx;
-                }
-
-                // If we have a valid cached index and the singleton is already instantiated,
-                // use fast indexed access (avoids String hashing and map lookup)
-                if (cachedIdx >= 0) {
-                    Object indexedInstance = registry.getIfPresent(cachedIdx);
-                    if (indexedInstance != null) {
-                        deps[depIndex++] = indexedInstance;
-                        continue;
-                    }
-                }
-
-                // Fallback: resolve by name (handles prototypes, not-yet-cached, or forward references)
-                deps[depIndex++] = resolveByName(depName);
-            } else if (dep instanceof ValueDependency valueDep) {
-                // Resolve configuration value via PropertyResolver
+            if (kind == InjectionPoint.Kind.DIRECT) {
+                // Direct object reference (not a bean name)
+                deps[depIndex++] = dep;
+            } else if (point.isConfiguration()) {
+                // @Value placeholders and typed collections are configuration values, not bean
+                // names: resolve them through the PropertyResolver with the declared injection
+                // type driving any string→collection conversion.
                 if (propertyResolver == null) {
                     throw new IllegalStateException(
                             "PropertyResolver not configured but @Value dependency found in bean '"
                             + definition.name() + "'. Use Warmup.builder().propertySource(...) to configure."
                     );
                 }
-                deps[depIndex++] = resolveValueDependency(valueDep);
+                if (kind == InjectionPoint.Kind.TYPED_VALUE) {
+                    deps[depIndex++] = resolveTypedValueDependency(point.name());
+                } else {
+                    ValueDependency valueDep = dep instanceof ValueDependency vd
+                            ? vd : new ValueDependency(point.name(), valueTargetType(definition, i));
+                    deps[depIndex++] = resolveValueDependency(valueDep);
+                }
+                depIndices[i] = -2; // value dependencies have no bean index
             } else {
-                // Direct object reference (not a bean name)
-                deps[depIndex++] = dep;
+                // Bean reference (single bean, collection or optional marker): resolve by name.
+                String depName = point.name();
+                if (kind == InjectionPoint.Kind.BEAN) {
+                    // Check if we have a cached index for this dependency
+                    int cachedIdx = depIndices[i];
+
+                    // Lazy resolution: if index is -1, try to resolve it now
+                    if (cachedIdx == -1) {
+                        cachedIdx = registry.indexOf(depName);
+                        depIndices[i] = cachedIdx;
+                    }
+
+                    // If we have a valid cached index and the singleton is already instantiated,
+                    // use fast indexed access (avoids String hashing and map lookup)
+                    if (cachedIdx >= 0) {
+                        Object indexedInstance = registry.getIfPresent(cachedIdx);
+                        if (indexedInstance != null) {
+                            deps[depIndex++] = indexedInstance;
+                            continue;
+                        }
+                    }
+                }
+
+                // Fallback: resolve by name (handles prototypes, not-yet-cached, forward
+                // references and collection/optional markers)
+                deps[depIndex++] = resolveByName(depName);
             }
         }
         return deps;
@@ -2552,58 +2425,53 @@ public class Container implements HotReloadCapable, AutoCloseable {
         Object[] dependencies = definition.dependencies();
         int[] depIndices = definition.dependencyIndices();
 
+        InjectionPoint[] points = definition.injectionPoints();
         for (int i = 0; i < dependencies.length; i++) {
+            InjectionPoint point = points[i];
             // Only process deferred dependencies
-            if (!definition.isDeferredDependency(i)) {
+            if (!point.deferred()) {
                 continue;
             }
 
             Object dep = dependencies[i];
-            if (dep instanceof String depName) {
-                // Resolve the deferred dependency now that the bean is published
-                Object resolvedDep;
-                if (TypedValueDependency.isMarker(depName)) {
-                    // Typed @Value collection on a field/setter: convert every split element to
-                    // the element type encoded in the marker.
-                    if (propertyResolver == null) {
-                        throw new IllegalStateException(
-                                "PropertyResolver not configured but @Value dependency found in bean '"
-                                + definition.name() + "'. Use Warmup.builder().propertySource(...) to configure."
-                        );
-                    }
-                    resolvedDep = resolveTypedValueDependency(depName);
-                } else if (isValueExpression(depName)) {
-                    // @Value placeholder on a field/setter: resolve via PropertyResolver with a
-                    // target type derived from the reflected field/setter parameter.
-                    if (propertyResolver == null) {
-                        throw new IllegalStateException(
-                                "PropertyResolver not configured but @Value dependency found in bean '"
-                                + definition.name() + "'. Use Warmup.builder().propertySource(...) to configure."
-                        );
-                    }
-                    resolvedDep = resolveValueDependency(
-                            new ValueDependency(depName, valueTargetType(definition, i)));
-                } else {
-                    resolvedDep = resolveByName(depName);
-                }
+            InjectionPoint.Kind kind = point.kind();
 
-                // Inject via field or setter based on metadata
-                if (definition.isFieldOrSetterDependency(i)) {
-                    // This is a field or setter injection - use reflection to inject
-                    injectDependencyViaReflection(instance, definition.type(), depName, resolvedDep, i);
+            if (kind == InjectionPoint.Kind.DIRECT) {
+                // Direct object reference (not a bean name)
+                if (point.fieldOrSetter()) {
+                    injectDependencyViaReflection(instance, definition.type(), null, dep, i);
                 }
-            } else if (dep instanceof ValueDependency valueDep) {
-                // Resolve and inject value dependency
+                continue;
+            }
+
+            // Resolve the deferred dependency now that the bean is published
+            Object resolvedDep;
+            String depName = point.name();
+            if (point.isConfiguration()) {
+                // Typed @Value collection or @Value placeholder on a field/setter: resolve via
+                // the PropertyResolver, deriving the target type from the reflected
+                // field/setter parameter when the token is not already a typed marker.
                 if (propertyResolver == null) {
                     throw new IllegalStateException(
                             "PropertyResolver not configured but @Value dependency found in bean '"
                             + definition.name() + "'. Use Warmup.builder().propertySource(...) to configure."
                     );
                 }
-                Object resolvedValue = resolveValueDependency(valueDep);
-                if (definition.isFieldOrSetterDependency(i)) {
-                    injectDependencyViaReflection(instance, definition.type(), valueDep.expression(), resolvedValue, i);
+                if (kind == InjectionPoint.Kind.TYPED_VALUE) {
+                    resolvedDep = resolveTypedValueDependency(depName);
+                } else {
+                    ValueDependency valueDep = dep instanceof ValueDependency vd
+                            ? vd : new ValueDependency(depName, valueTargetType(definition, i));
+                    resolvedDep = resolveValueDependency(valueDep);
+                    depName = valueDep.expression();
                 }
+            } else {
+                resolvedDep = resolveByName(depName);
+            }
+
+            // Inject via field or setter based on metadata
+            if (point.fieldOrSetter()) {
+                injectDependencyViaReflection(instance, definition.type(), depName, resolvedDep, i);
             }
         }
     }
@@ -2827,15 +2695,6 @@ public class Container implements HotReloadCapable, AutoCloseable {
             return Enum.valueOf((Class<? extends Enum>) elementType, value);
         }
         return value;
-    }
-
-    /**
-     * @param name a dependency name
-     * @return {@code true} when {@code name} is a {@code @Value} placeholder
-     * expression such as {@code ${app.name}} or {@code ${app.port:8080}}
-     */
-    private boolean isValueExpression(String name) {
-        return name != null && name.length() >= 3 && name.startsWith("${") && name.endsWith("}");
     }
 
     /**

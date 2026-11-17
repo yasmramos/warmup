@@ -18,6 +18,7 @@ import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
+import java.util.function.Consumer;
 import java.util.function.Supplier;
 
 /**
@@ -31,6 +32,9 @@ import java.util.function.Supplier;
  * - Pre-computed ResolvedBeanDefinition wrappers for single-lookup resolution
  */
 public class BeanRegistryImpl implements BeanRegistry {
+
+    // No-op hook reused by the 2-arg overloads so they allocate no lambda per call.
+    private static final Consumer<Object> NO_AFTER_CREATE = instance -> { };
 
     // Bean definitions indexed by name
     private final ConcurrentMap<String, BeanDefinition<?>> definitionsByName = new ConcurrentHashMap<>();
@@ -291,6 +295,13 @@ public class BeanRegistryImpl implements BeanRegistry {
     @Override
     @SuppressWarnings("unchecked")
     public <T> T getInstance(BeanDefinition<T> definition, Supplier<T> factory) {
+        return getInstance(definition, factory, NO_AFTER_CREATE);
+    }
+
+    @Override
+    @SuppressWarnings("unchecked")
+    public <T> T getInstance(BeanDefinition<T> definition, Supplier<T> factory,
+                             Consumer<? super T> afterCreate) {
         String name = definition.name();
 
         return switch (definition.scope()) {
@@ -310,6 +321,8 @@ public class BeanRegistryImpl implements BeanRegistry {
                     if (idx != null && idx >= 0 && idx < singletonInstancesByIndex.length) {
                         ARRAY_ELEMENT_HANDLE.setRelease(singletonInstancesByIndex, idx, newInstance);
                     }
+                    // Inject deferred (@Lazy) dependencies before @PostConstruct
+                    afterCreate.accept(newInstance);
                     // Apply init callback BEFORE returning the instance (inside the lock)
                     applyInitCallback(newInstance, definition);
                     return newInstance;
@@ -320,6 +333,7 @@ public class BeanRegistryImpl implements BeanRegistry {
             case PROTOTYPE -> {
                 // Always create new instance for prototype scope
                 T instance = factory.get();
+                afterCreate.accept(instance);
                 // Only apply init callback if the bean has lifecycle callbacks defined
                 if (definition.lifecycle().onInit() != null) {
                     definition.lifecycle().onInit().onInit(instance);
@@ -332,6 +346,7 @@ public class BeanRegistryImpl implements BeanRegistry {
                 if (scopeName == null || scopeName.isEmpty()) {
                     // Fallback to prototype behavior if no scope name is specified
                     T instance = factory.get();
+                    afterCreate.accept(instance);
                     if (definition.lifecycle().onInit() != null) {
                         definition.lifecycle().onInit().onInit(instance);
                     }
@@ -345,6 +360,7 @@ public class BeanRegistryImpl implements BeanRegistry {
                 
                 T instance = handler.get(name, () -> {
                     T newInstance = factory.get();
+                    afterCreate.accept(newInstance);
                     // Apply init callback when creating a new instance in the custom scope
                     if (definition.lifecycle().onInit() != null) {
                         definition.lifecycle().onInit().onInit(newInstance);
@@ -359,6 +375,13 @@ public class BeanRegistryImpl implements BeanRegistry {
     @Override
     @SuppressWarnings("unchecked")
     public <T> T getInstance(BeanDefinition<T> definition, CompiledFactory<T> factory) {
+        return getInstance(definition, factory, NO_AFTER_CREATE);
+    }
+
+    @Override
+    @SuppressWarnings("unchecked")
+    public <T> T getInstance(BeanDefinition<T> definition, CompiledFactory<T> factory,
+                             Consumer<? super T> afterCreate) {
         String name = definition.name();
 
         return switch (definition.scope()) {
@@ -378,6 +401,8 @@ public class BeanRegistryImpl implements BeanRegistry {
                     if (idx != null && idx >= 0 && idx < singletonInstancesByIndex.length) {
                         ARRAY_ELEMENT_HANDLE.setRelease(singletonInstancesByIndex, idx, newInstance);
                     }
+                    // Inject deferred (@Lazy) dependencies before @PostConstruct
+                    afterCreate.accept(newInstance);
                     // Apply init callback BEFORE returning the instance (inside the lock)
                     applyInitCallback(newInstance, definition);
                     return newInstance;
@@ -389,6 +414,7 @@ public class BeanRegistryImpl implements BeanRegistry {
                 // Always create new instance for prototype scope
                 // Use factory.get() directly to avoid Object[] allocation when wired
                 T instance = factory.get();
+                afterCreate.accept(instance);
                 // Only apply init callback if the bean has lifecycle callbacks defined
                 if (definition.lifecycle().onInit() != null) {
                     definition.lifecycle().onInit().onInit(instance);
@@ -401,6 +427,7 @@ public class BeanRegistryImpl implements BeanRegistry {
                 if (scopeName == null || scopeName.isEmpty()) {
                     // Fallback to prototype behavior if no scope name is specified
                     T instance = factory.get();
+                    afterCreate.accept(instance);
                     if (definition.lifecycle().onInit() != null) {
                         definition.lifecycle().onInit().onInit(instance);
                     }
@@ -414,6 +441,7 @@ public class BeanRegistryImpl implements BeanRegistry {
                 
                 T instance = handler.get(name, () -> {
                     T newInstance = factory.get();
+                    afterCreate.accept(newInstance);
                     // Apply init callback when creating a new instance in the custom scope
                     if (definition.lifecycle().onInit() != null) {
                         definition.lifecycle().onInit().onInit(newInstance);
@@ -434,12 +462,11 @@ public class BeanRegistryImpl implements BeanRegistry {
     public boolean remove(String name) {
         BeanDefinition<?> definition = definitionsByName.remove(name);
         if (definition != null) {
-            // Apply destroy callback if exists
-            if (definition.hasLifecycle() && definition.lifecycle().onDestroy() != null) {
-                Object instance = singletonInstances.get(name);
-                if (instance != null) {
-                    applyDestroyCallback(instance, definition);
-                }
+            // Destroy the instance: an explicit @PreDestroy callback, or close() for an
+            // AutoCloseable bean that declares none.
+            Object instance = singletonInstances.get(name);
+            if (instance != null) {
+                destroyInstance(instance, definition);
             }
             
             // Remove cached instance from both maps
@@ -467,8 +494,8 @@ public class BeanRegistryImpl implements BeanRegistry {
         Object instance = singletonInstances.remove(name);
         if (instance != null) {
             BeanDefinition<?> definition = definitionsByName.get(name);
-            if (definition != null && definition.hasLifecycle() && definition.lifecycle().onDestroy() != null) {
-                applyDestroyCallback(instance, definition);
+            if (definition != null) {
+                destroyInstance(instance, definition);
             }
             // Also evict from indexed array
             Integer idx = nameToIndex.get(name);
@@ -490,8 +517,7 @@ public class BeanRegistryImpl implements BeanRegistry {
         List<Throwable> destroyFailures = new ArrayList<>();
         for (String name : destructionOrder()) {
             BeanDefinition<?> definition = definitionsByName.get(name);
-            if (definition == null || !definition.hasLifecycle()
-                    || definition.lifecycle().onDestroy() == null) {
+            if (definition == null) {
                 continue;
             }
             Object instance = singletonInstances.get(name);
@@ -499,7 +525,7 @@ public class BeanRegistryImpl implements BeanRegistry {
                 continue;
             }
             try {
-                applyDestroyCallback(instance, definition);
+                destroyInstance(instance, definition);
             } catch (Throwable t) {
                 destroyFailures.add(new IllegalStateException(
                         "Destroy callback failed for bean '" + name + "': " + t.getMessage(), t));
@@ -761,6 +787,32 @@ public class BeanRegistryImpl implements BeanRegistry {
     private <T> void applyDestroyCallback(Object instance, BeanDefinition<?> definition) {
         if (definition.hasLifecycle() && definition.lifecycle().onDestroy() != null) {
             ((LifecycleCallbacks<Object>) definition.lifecycle()).onDestroy().onDestroy(instance);
+        }
+    }
+
+    /**
+     * Destroys a bean instance when the registry evicts it.
+     *
+     * <p>An explicit {@code @PreDestroy} callback always wins. When the bean
+     * declares none but implements {@link AutoCloseable}, its {@code close()}
+     * method is invoked so resources are released on shutdown without the user
+     * having to register a callback. Beans that are neither are left untouched.</p>
+     *
+     * @param instance the bean instance being destroyed
+     * @param definition the bean definition
+     */
+    private void destroyInstance(Object instance, BeanDefinition<?> definition) {
+        if (definition.hasLifecycle() && definition.lifecycle().onDestroy() != null) {
+            applyDestroyCallback(instance, definition);
+            return;
+        }
+        if (instance instanceof AutoCloseable closeable) {
+            try {
+                closeable.close();
+            } catch (Exception e) {
+                throw new IllegalStateException(
+                        "close() failed for AutoCloseable bean '" + definition.name() + "': " + e.getMessage(), e);
+            }
         }
     }
 }

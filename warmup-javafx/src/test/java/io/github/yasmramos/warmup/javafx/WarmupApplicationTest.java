@@ -65,6 +65,19 @@ class WarmupApplicationTest {
         assertTrue(app.isOnStopCalled());
     }
 
+    @Test
+    void testConfigureCalledBeforeBuild() throws Exception {
+        ConfigureApp app = new ConfigureApp();
+
+        app.init();
+
+        assertTrue(app.isConfigureCalled(),
+                "configure(Builder) must run during init()");
+        assertTrue(app.isDevModeApplied(),
+                "settings applied in configure(Builder) must be reflected by the built container");
+        app.stop();
+    }
+
     /**
      * Concrete test implementation of WarmupApplication.
      */
@@ -153,6 +166,41 @@ class WarmupApplicationTest {
         @Override
         protected void onStart(Stage stage) throws Exception {
             
+        }
+    }
+
+    /**
+     * Test app that customizes the builder through configure(Builder). Verifies
+     * the hook runs before build() so its settings reach the container.
+     */
+    private static class ConfigureApp extends WarmupApplication {
+
+        private boolean configureCalled = false;
+
+        @Override
+        protected void configure(Warmup.Builder builder) {
+            configureCalled = true;
+            builder.enableDevMode(true).registerShutdownHook(false);
+        }
+
+        @Override
+        protected void registerBeans(Warmup warmup) {
+        }
+
+        boolean isConfigureCalled() {
+            return configureCalled;
+        }
+
+        boolean isDevModeApplied() {
+            return getWarmup() != null && getWarmup().isDevelopmentMode();
+        }
+
+        @Override
+        protected void onStart(Stage stage) throws Exception {
+        }
+
+        @Override
+        protected void onStop() throws Exception {
         }
     }
 }

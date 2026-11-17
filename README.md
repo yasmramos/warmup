@@ -642,10 +642,10 @@ void testWithCustomConfig() {
 
 ## Build Requirements
 
-- Java 17+
+- Java 21+
 - Maven 3.8+
 - ASM 9.x
-- JavaFX 17+ (for warmup-javafx module)
+- JavaFX 21+ (for warmup-javafx module)
 
 ## Build Commands
 

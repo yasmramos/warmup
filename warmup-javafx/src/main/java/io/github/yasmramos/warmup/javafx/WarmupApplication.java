@@ -38,8 +38,12 @@ public abstract class WarmupApplication extends Application {
 
     @Override
     public void init() throws Exception {
-        // Initialize container via Warmup facade (or custom override)
-        warmup = createWarmup().build();
+        // Let subclasses customize the builder before it is built. This runs
+        // before build(), unlike registerBeans which runs against the live
+        // container afterwards.
+        Warmup.Builder builder = createWarmup();
+        configure(builder);
+        warmup = builder.build();
 
         // Configure beans (implemented by subclass)
         registerBeans(warmup);
@@ -215,6 +219,28 @@ public abstract class WarmupApplication extends Application {
         }));
     }
 
+    /**
+     * Customize the {@link Warmup.Builder} before the container is built. Called
+     * by {@link #init()} before {@code build()}, so settings applied here (dev
+     * mode, profiles, property sources, shutdown hook…) take effect on the
+     * resulting container.
+     *
+     * <p>Override {@link #createWarmup()} instead when you need to replace the
+     * builder itself. The default implementation does nothing.</p>
+     *
+     * @param builder the builder about to be built
+     */
+    protected void configure(Warmup.Builder builder) {
+        // Default: no customization
+    }
+
+    /**
+     * Creates the {@link Warmup.Builder} used by {@link #init()}. Override to
+     * replace the builder; override {@link #configure(Warmup.Builder)} to tweak
+     * the default one.
+     *
+     * @return a fresh builder
+     */
     public Warmup.Builder createWarmup() {
         return Warmup.builder();
     }

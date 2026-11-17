@@ -7,13 +7,22 @@ import io.github.yasmramos.warmup.core.jit.CompilationException;
 import io.github.yasmramos.warmup.core.jit.CompilationStats;
 import io.github.yasmramos.warmup.core.jit.JITCompiler;
 import io.github.yasmramos.warmup.core.scope.Scope;
+import javafx.application.Platform;
 import javafx.scene.Parent;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
+import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.Map;
+import java.util.ResourceBundle;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -108,6 +117,116 @@ class FxLoaderTest extends ApplicationTest {
         assertNotNull(view.resourceBundle(), "bundle() from @FxController should be loaded automatically");
         assertTrue(view.root().getStylesheets().stream().anyMatch(uri -> uri.endsWith("test.css")),
                 "css() from @FxController should be applied to the root");
+    }
+
+    @Test
+    void testLoadView_fromNonFxThread_timesOutInsteadOfHanging() throws Exception {
+        // Occupy the FX thread with a task that blocks until we release it, so a
+        // load dispatched from another thread can never run. Bound the wait so
+        // loadView fails with an IOException instead of blocking the caller.
+        CountDownLatch fxBusy = new CountDownLatch(1);
+        CountDownLatch releaseFx = new CountDownLatch(1);
+        Platform.runLater(() -> {
+            fxBusy.countDown();
+            try {
+                releaseFx.await(10, TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        });
+        assertTrue(fxBusy.await(10, TimeUnit.SECONDS), "FX thread should pick up the blocking task");
+
+        fxLoader.setFxDispatchTimeoutSeconds(1);
+        warmup.register("testService", TestService.class, TestService::new, Scope.SINGLETON);
+        warmup.register("testControllerWithFxml", TestControllerWithFxml.class, () -> {
+            TestControllerWithFxml controller = new TestControllerWithFxml();
+            controller.service = warmup.resolve(TestService.class);
+            return controller;
+        }, Scope.PROTOTYPE);
+
+        try {
+            IOException timeout = assertThrows(IOException.class,
+                    () -> fxLoader.loadView(TestControllerWithFxml.class),
+                    "loadView from a non-FX thread must fail instead of hanging");
+            assertTrue(timeout.getMessage().contains("Timed out"),
+                    "Timeout message should explain the FX-thread wait: " + timeout.getMessage());
+        } finally {
+            releaseFx.countDown();
+        }
+    }
+
+    @Test
+    void testStopFileWatching_doesNotThrowNpe() throws Exception {
+        Path watchDir = Files.createTempDirectory("warmup-fx-watch");
+        try {
+            FxLoader loader = new FxLoader(warmup, true);
+            loader.startFileWatching(watchDir.toString());
+            loader.stopFileWatching();
+
+            // Race under test: stopFileWatching() nulls the watchService while
+            // the background loop has already passed the `watching` check, so
+            // its next `watchService.take()` would dereference null. Reproduce
+            // that exact state and run the loop; it must exit instead of NPE.
+            Field watchingField = FxLoader.class.getDeclaredField("watching");
+            watchingField.setAccessible(true);
+            watchingField.setBoolean(loader, true);
+
+            Method watchLoop = FxLoader.class.getDeclaredMethod("watchLoop");
+            watchLoop.setAccessible(true);
+
+            assertDoesNotThrow(() -> watchLoop.invoke(loader),
+                    "watchLoop must not NPE when the WatchService has been closed");
+        } finally {
+            Files.deleteIfExists(watchDir);
+        }
+    }
+
+    @Test
+    void testReloadController_preservesBundleAndClass() throws Exception {
+        warmup.register("testService", TestService.class, TestService::new, Scope.SINGLETON);
+        warmup.register("testControllerWithFxml", TestControllerWithFxml.class, () -> {
+            TestControllerWithFxml controller = new TestControllerWithFxml();
+            controller.service = warmup.resolve(TestService.class);
+            return controller;
+        }, Scope.PROTOTYPE);
+
+        // Initial load tracks the FXML under the controller#path key, carrying
+        // the controller class and the @FxController bundle.
+        FxView<TestControllerWithFxml> initial = fxLoader.loadView(TestControllerWithFxml.class);
+        ResourceBundle initialBundle = initial.resourceBundle();
+        assertNotNull(initialBundle, "Initial load must resolve the @FxController bundle");
+
+        // Reloading must reuse the tracked entry. Passing the tracking key as a
+        // raw path would instead create a second entry with a null controller
+        // class and no bundle, i.e. a reload against the wrong configuration.
+        Parent reloaded = fxLoader.reloadController(TestControllerWithFxml.class);
+
+        assertNotNull(reloaded, "reloadController must reload the tracked FXML");
+        assertNotSame(initial.root(), reloaded, "Reload must produce a new root");
+
+        Map<String, Object> tracked = trackedFxmlEntries();
+        assertEquals(1, tracked.size(),
+                "Reload must reuse the tracked entry instead of adding one keyed by path");
+
+        Object entry = tracked.values().iterator().next();
+        Field controllerField = entry.getClass().getDeclaredField("controllerClass");
+        controllerField.setAccessible(true);
+        assertEquals(TestControllerWithFxml.class, controllerField.get(entry),
+                "Reload must preserve the tracked controller class");
+
+        Field bundleField = entry.getClass().getDeclaredField("resourceBundle");
+        bundleField.setAccessible(true);
+        ResourceBundle reloadedBundle = (ResourceBundle) bundleField.get(entry);
+        assertNotNull(reloadedBundle, "Reload must preserve the resource bundle");
+        assertEquals(initialBundle.getBaseBundleName(), reloadedBundle.getBaseBundleName(),
+                "Reload must reuse the same bundle as the initial load");
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> trackedFxmlEntries() throws Exception {
+        Field field = FxLoader.class.getDeclaredField("loadedFxmlMap");
+        field.setAccessible(true);
+        return (Map<String, Object>) field.get(fxLoader);
     }
 
     @Test

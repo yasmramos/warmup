@@ -63,7 +63,7 @@ flowchart TD
 
 ### Prerequisites
 
-1. **GraalVM JDK 17+** installed
+1. **GraalVM JDK 21+** installed
 2. **native-image** tool available
 3. All dependencies compatible with native image
 

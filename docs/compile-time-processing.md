@@ -26,8 +26,8 @@ The `WarmupProcessor` is a JSR 269 annotation processor that:
             <artifactId>maven-compiler-plugin</artifactId>
             <version>3.11.0</version>
             <configuration>
-                <source>17</source>
-                <target>17</target>
+                <source>21</source>
+                <target>21</target>
                 <annotationProcessorPaths>
                     <path>
                         <groupId>io.github.yasmramos</groupId>

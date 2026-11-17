@@ -54,6 +54,14 @@ public class BeanDefinition<T> {
     private final boolean[] fieldOrSetterDependencies;
     
     /**
+     * Lazily computed rich description of every dependency slot, one entry per
+     * position in {@link #dependencies}. Derived from the raw tokens so it stays
+     * consistent with the mutable {@code dependencyIndices} cache and the
+     * deferred/field-or-setter flags.
+     */
+    private volatile InjectionPoint[] injectionPoints;
+
+    /**
      * Explicit order for collection injection, set by the annotation processor from
      * {@code @Order} on the bean class or {@code @Bean} method.
      * {@link Integer#MAX_VALUE} means the bean is unordered.
@@ -180,6 +188,39 @@ public class BeanDefinition<T> {
     
     public Object[] dependencies() {
         return dependencies;
+    }
+
+    /**
+     * Returns a rich description of every dependency slot, in the same order as
+     * {@link #dependencies()}.
+     *
+     * <p>The array is computed once on first use and cached. It is the single
+     * place that turns raw dependency tokens into {@link InjectionPoint} kinds,
+     * so container code no longer repeats the marker/expression classification
+     * chain.</p>
+     *
+     * @return one injection point per dependency slot
+     */
+    public InjectionPoint[] injectionPoints() {
+        InjectionPoint[] points = injectionPoints;
+        if (points == null) {
+            points = computeInjectionPoints();
+            injectionPoints = points;
+        }
+        return points;
+    }
+
+    private InjectionPoint[] computeInjectionPoints() {
+        InjectionPoint[] points = new InjectionPoint[dependencies.length];
+        for (int i = 0; i < dependencies.length; i++) {
+            Object dependency = dependencies[i];
+            InjectionPoint.Kind kind = InjectionPoint.classify(dependency);
+            String name = dependency instanceof String s ? s
+                    : dependency instanceof ValueDependency v ? v.expression() : null;
+            points[i] = new InjectionPoint(i, kind, name,
+                    isDeferredDependency(i), isFieldOrSetterDependency(i));
+        }
+        return points;
     }
     
     /**

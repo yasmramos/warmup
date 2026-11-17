@@ -79,10 +79,17 @@ import java.util.*;
     "io.github.yasmramos.warmup.javafx.ViewScoped",
     "io.github.yasmramos.warmup.javafx.WindowScoped"
 })
-@SupportedSourceVersion(SourceVersion.RELEASE_17)
+@SupportedSourceVersion(SourceVersion.RELEASE_21)
 public class WarmupProcessor extends AbstractProcessor {
 
     private final List<BeanInfo> processedBeans = new ArrayList<>();
+
+    /**
+     * Maximum number of beans registered per generated method. A registrar method must stay
+     * under the JVM's 64KB bytecode limit, so large registrars are split into {@code initChunk_N}
+     * methods of at most this many beans.
+     */
+    private static final int REGISTRAR_CHUNK_SIZE = 64;
     private final Set<String> generatedFactoryClasses = new HashSet<>();
     private boolean processingOver = false;
     private FactoryBytecodeGenerator bytecodeGenerator;
@@ -587,11 +594,11 @@ public class WarmupProcessor extends AbstractProcessor {
             }
         }
         
-        // @Inject field dependencies (deferrable)
+        // Field dependencies: @Inject beans and @Value configuration values (deferrable)
         for (Element enclosed : typeElement.getEnclosedElements()) {
             if (enclosed.getKind() == ElementKind.FIELD) {
                 VariableElement field = (VariableElement) enclosed;
-                if (field.getAnnotation(Inject.class) != null) {
+                if (field.getAnnotation(Inject.class) != null || field.getAnnotation(Value.class) != null) {
                     extractFieldDependencyInfo(field, depNames, providerFlags, isDeferred, isFieldOrSetter);
                 }
             }
@@ -739,7 +746,7 @@ public class WarmupProcessor extends AbstractProcessor {
             }
         }
         providerFlags.add(isProvider);
-        isDeferred.add(true); // Field injections are always deferrable
+        isDeferred.add(isLazy); // Only @Lazy fields are injected after construction
         isFieldOrSetter.add(true);
     }
     
@@ -829,9 +836,9 @@ public class WarmupProcessor extends AbstractProcessor {
             }
             methodProviderFlags.add(isProvider);
             providerFlags.add(isProvider);
-            methodIsDeferred.add(true); // Setter injections are always deferrable
+            methodIsDeferred.add(isLazy); // Only @Lazy setter/method deps are injected later
             methodIsFieldOrSetter.add(true);
-            isDeferred.add(true);
+            isDeferred.add(isLazy);
             isFieldOrSetter.add(true);
         }
         
@@ -997,28 +1004,29 @@ public class WarmupProcessor extends AbstractProcessor {
         }
         generatedFactoryClasses.add(factoryFullClassName);
         
-        // Find constructor and dependencies
+        // Find constructor and dependencies. A missing constructor is a
+        // programming error: without an unambiguous constructor the generated
+        // factory would assume a no-arg one and fail confusingly at runtime.
         ExecutableElement constructor = findInjectableConstructor(beanClass);
-        List<? extends VariableElement> parameters = constructor != null 
-            ? constructor.getParameters() 
-            : Collections.emptyList();
+        if (constructor == null) {
+            throw new IOException("No injectable constructor found for bean '"
+                + beanClass.getQualifiedName() + "': declare a single public constructor, a "
+                + "no-argument constructor, or annotate exactly one constructor with @Inject.");
+        }
+        List<? extends VariableElement> parameters = constructor.getParameters();
         
-        // Collect @Inject fields
+        // Collect @Inject and @Value fields, in declaration order so the generated
+        // factory indices stay aligned with the BeanDefinition dependency array.
         List<VariableElement> injectFields = new ArrayList<>();
         for (Element enclosed : beanClass.getEnclosedElements()) {
             if (enclosed.getKind() == ElementKind.FIELD) {
                 VariableElement field = (VariableElement) enclosed;
-                if (field.getAnnotation(Inject.class) != null) {
-                    // Validate field is not private or final
-                    if (field.getModifiers().contains(Modifier.PRIVATE)) {
-                        processingEnv.getMessager().printMessage(Diagnostic.Kind.ERROR,
-                            "@Inject fields for compile-time wiring must not be private: " + 
-                            field.getSimpleName() + " in " + beanClass.getQualifiedName(), field);
-                        continue;
-                    }
+                if (field.getAnnotation(Inject.class) != null || field.getAnnotation(Value.class) != null) {
+                    // Private fields are supported through a generated accessor class;
+                    // final fields cannot be assigned after construction.
                     if (field.getModifiers().contains(Modifier.FINAL)) {
                         processingEnv.getMessager().printMessage(Diagnostic.Kind.ERROR,
-                            "@Inject fields for compile-time wiring must not be final: " + 
+                            "@Inject/@Value fields for compile-time wiring must not be final: " + 
                             field.getSimpleName() + " in " + beanClass.getQualifiedName(), field);
                         continue;
                     }
@@ -1045,6 +1053,26 @@ public class WarmupProcessor extends AbstractProcessor {
             }
         }
         
+        // Private fields and methods are injected through a generated accessor class: the JVM
+        // forbids the factory (a separate class) from writing them directly.
+        List<VariableElement> privateFields = new ArrayList<>();
+        for (VariableElement field : injectFields) {
+            if (field.getModifiers().contains(Modifier.PRIVATE)) {
+                privateFields.add(field);
+            }
+        }
+        List<ExecutableElement> privateMethods = new ArrayList<>();
+        for (ExecutableElement method : injectMethods) {
+            if (method.getModifiers().contains(Modifier.PRIVATE)) {
+                privateMethods.add(method);
+            }
+        }
+        byte[] accessorBytecode = bytecodeGenerator.generateAccessorBytecode(
+            beanClass, privateFields, privateMethods);
+        if (accessorBytecode != null) {
+            writeGeneratedClass(packageName, className + "$$WarmupAccessor", accessorBytecode, filer);
+        }
+
         // Generate bytecode using FactoryBytecodeGenerator
         byte[] bytecode = bytecodeGenerator.generateFactoryForClassBytecode(
             beanClass, scope, explicitName, constructor, injectFields, injectMethods);
@@ -1070,7 +1098,30 @@ public class WarmupProcessor extends AbstractProcessor {
         
         return factoryFullClassName;
     }
-    
+
+    /**
+     * Writes a generated {@code .class} file, tolerating the {@link FilerException}
+     * raised when the same type is emitted twice across annotation-processing rounds.
+     *
+     * @param packageName the target package (may be empty)
+     * @param simpleName the generated type's simple name
+     * @param bytecode the class bytes
+     * @param filer the filer to write through
+     * @throws IOException if writing fails for any reason other than a duplicate file
+     */
+    private void writeGeneratedClass(String packageName, String simpleName, byte[] bytecode, Filer filer)
+            throws IOException {
+        try {
+            FileObject classFile = filer.createResource(StandardLocation.CLASS_OUTPUT, packageName, simpleName + ".class");
+            try (OutputStream os = classFile.openOutputStream()) {
+                os.write(bytecode);
+            }
+        } catch (FilerException e) {
+            processingEnv.getMessager().printMessage(Diagnostic.Kind.NOTE,
+                "Generated class already exists: " + simpleName);
+        }
+    }
+
     /**
      * Generates bytecode for a @Bean method factory and writes it as a .class file.
      * Returns the simple name of the generated factory class.
@@ -1463,6 +1514,28 @@ public class WarmupProcessor extends AbstractProcessor {
      * Handles default package: if packageName is empty, omits the package declaration
      * and uses simple class names for factory references.
      */
+    /**
+     * Returns a registrar simple class name that is free in the given package.
+     *
+     * <p>Starts from {@code GeneratedFactoryRegistrar} and appends a numeric
+     * suffix until the name does not resolve to an existing type. This avoids
+     * overwriting a user class (which would leave the service file pointing at
+     * a non-registrar type) or a registrar generated by a previous round.</p>
+     *
+     * @param packageName the package the registrar lives in (may be empty)
+     * @return a simple class name that is not already taken
+     */
+    private String uniqueRegistrarClassName(String packageName) {
+        String baseName = "GeneratedFactoryRegistrar";
+        String candidate = baseName;
+        int suffix = 2;
+        while (processingEnv.getElementUtils().getTypeElement(
+                packageName.isEmpty() ? candidate : packageName + "." + candidate) != null) {
+            candidate = baseName + suffix++;
+        }
+        return candidate;
+    }
+
     private void generateFactoryRegistrar(Filer filer) throws IOException {
         if (processedBeans.isEmpty()) {
             return;
@@ -1481,7 +1554,12 @@ public class WarmupProcessor extends AbstractProcessor {
             String registrarPackage = entry.getKey();
             List<BeanInfo> packageBeans = entry.getValue();
             
-            String registrarClassName = "GeneratedFactoryRegistrar";
+            // Pick a registrar class name that does not clash with an existing
+            // type (a user class with the same name, or a registrar already
+            // generated by another round). Clobbering the user's type would
+            // leave the service file pointing at a class that is not a
+            // FactoryRegistrar, so the beans would never be registered.
+            String registrarClassName = uniqueRegistrarClassName(registrarPackage);
             String fullyQualifiedRegistrarName = registrarPackage.isEmpty() 
                 ? registrarClassName 
                 : registrarPackage + "." + registrarClassName;
@@ -1489,7 +1567,7 @@ public class WarmupProcessor extends AbstractProcessor {
             allRegistrarNames.add(fullyQualifiedRegistrarName);
             
             // Generate registrar as bytecode
-            byte[] registrarBytecode = generateRegistrarBytecode(registrarPackage, packageBeans);
+            byte[] registrarBytecode = generateRegistrarBytecode(registrarPackage, registrarClassName, packageBeans);
             
             // Write the .class file
             String resourcePath = registrarPackage.replace('.', '/') + "/" + registrarClassName + ".class";
@@ -1527,6 +1605,26 @@ public class WarmupProcessor extends AbstractProcessor {
         }
     }
     
+    /**
+     * Emits bytecode that pushes a {@code boolean[]} onto the stack, one
+     * {@code BASTORE} per element. An empty list yields {@code null} so legacy
+     * "no metadata" consumers keep their previous behaviour.
+     */
+    private void emitBooleanArray(org.objectweb.asm.MethodVisitor mv, List<Boolean> values) {
+        if (values == null || values.isEmpty()) {
+            mv.visitInsn(org.objectweb.asm.Opcodes.ACONST_NULL);
+            return;
+        }
+        mv.visitLdcInsn(values.size());
+        mv.visitIntInsn(org.objectweb.asm.Opcodes.NEWARRAY, org.objectweb.asm.Opcodes.T_BOOLEAN);
+        for (int i = 0; i < values.size(); i++) {
+            mv.visitInsn(org.objectweb.asm.Opcodes.DUP);
+            mv.visitLdcInsn(i);
+            mv.visitInsn(Boolean.TRUE.equals(values.get(i)) ? org.objectweb.asm.Opcodes.ICONST_1 : org.objectweb.asm.Opcodes.ICONST_0);
+            mv.visitInsn(org.objectweb.asm.Opcodes.BASTORE);
+        }
+    }
+
     /**
      * Converts a binary name (with $ for nested classes) to JVM internal name format.
      * E.g., "com.pkg.Outer$Inner" -> "com/pkg/Outer$Inner"
@@ -1571,10 +1669,9 @@ public class WarmupProcessor extends AbstractProcessor {
      * @param beans the list of bean infos to register
      * @return the generated bytecode
      */
-    private byte[] generateRegistrarBytecode(String packageName, List<BeanInfo> beans) {
+    private byte[] generateRegistrarBytecode(String packageName, String registrarClassName, List<BeanInfo> beans) {
         org.objectweb.asm.ClassWriter cw = new org.objectweb.asm.ClassWriter(org.objectweb.asm.ClassWriter.COMPUTE_FRAMES);
         
-        String registrarClassName = "GeneratedFactoryRegistrar";
         String registrarInternalName = packageName.isEmpty() ? registrarClassName : packageName.replace('.', '/') + "/" + registrarClassName;
         String interfaceName = "io/github/yasmramos/warmup/core/jit/FactoryRegistrar";
         
@@ -1591,132 +1688,286 @@ public class WarmupProcessor extends AbstractProcessor {
         ctor.visitMaxs(1, 1);
         ctor.visitEnd();
         
-        // registerAll method: public void registerAll(BiConsumer<BeanDefinition<?>, CompiledFactory<?>> sink)
-        org.objectweb.asm.MethodVisitor mv = cw.visitMethod(org.objectweb.asm.Opcodes.ACC_PUBLIC, "registerAll",
-                "(Ljava/util/function/BiConsumer;)V",
-                "(Ljava/util/function/BiConsumer<Lio/github/yasmramos/warmup/core/registry/BeanDefinition<*>;Lio/github/yasmramos/warmup/core/jit/CompiledFactory<*>;>;)V", null);
-        mv.visitCode();
-        
-        // For each bean, create BeanDefinition and call sink.accept()
+        // One method per chunk of beans: the JVM limits a method to 64KB of bytecode, and a
+        // registrar for hundreds of beans would otherwise overflow a single registerAll body.
         String beanDefInternal = "io/github/yasmramos/warmup/core/registry/BeanDefinition";
-        for (BeanInfo beanInfo : beans) {
-            // Load sink
-            mv.visitVarInsn(org.objectweb.asm.Opcodes.ALOAD, 1);
-            
-            // Create new BeanDefinition instance
-            mv.visitTypeInsn(org.objectweb.asm.Opcodes.NEW, beanDefInternal);
-            mv.visitInsn(org.objectweb.asm.Opcodes.DUP);
-            
-            // Convert binary name to internal name correctly (preserving $ for nested classes)
-            String beanTypeInternal = binaryNameToInternalName(beanInfo.className);
-            String beanTypeFqn = beanInfo.className;
-            
-            // Push beanType.class onto stack
-            mv.visitLdcInsn(org.objectweb.asm.Type.getType("L" + beanTypeInternal + ";"));
-            
-            // Push bean name
-            mv.visitLdcInsn(beanInfo.beanName);
-            
-            // Push scope enum
-            String scopeEnum = switch (beanInfo.scope) {
-                case "PROTOTYPE" -> "PROTOTYPE";
-                case "CUSTOM" -> "CUSTOM";
-                default -> "SINGLETON";
-            };
-            mv.visitFieldInsn(org.objectweb.asm.Opcodes.GETSTATIC, "io/github/yasmramos/warmup/core/scope/Scope", scopeEnum, "Lio/github/yasmramos/warmup/core/scope/Scope;");
-            
-            // Push LifecycleCallbacks.empty()
-            mv.visitMethodInsn(org.objectweb.asm.Opcodes.INVOKESTATIC, "io/github/yasmramos/warmup/core/lifecycle/LifecycleCallbacks", "empty", 
-                    "()Lio/github/yasmramos/warmup/core/lifecycle/LifecycleCallbacks;", false);
-            
-            // Push isPrimary flag
-            mv.visitLdcInsn(beanInfo.isPrimary);
-            
-            // Create dependency names array (String[] for BeanDefinition constructor)
-            if (beanInfo.dependencyNames.isEmpty()) {
-                mv.visitInsn(org.objectweb.asm.Opcodes.ICONST_0);
-                mv.visitTypeInsn(org.objectweb.asm.Opcodes.ANEWARRAY, "java/lang/String");
-            } else {
-                mv.visitLdcInsn(beanInfo.dependencyNames.size());
-                mv.visitTypeInsn(org.objectweb.asm.Opcodes.ANEWARRAY, "java/lang/String");
-                for (int i = 0; i < beanInfo.dependencyNames.size(); i++) {
-                    mv.visitInsn(org.objectweb.asm.Opcodes.DUP);
-                    mv.visitLdcInsn(i);
-                    mv.visitLdcInsn(beanInfo.dependencyNames.get(i));
-                    mv.visitInsn(org.objectweb.asm.Opcodes.AASTORE);
-                }
-            }
-            
-            // Create profiles array
-            if (beanInfo.profiles.isEmpty()) {
-                mv.visitInsn(org.objectweb.asm.Opcodes.ACONST_NULL);
-            } else {
-                mv.visitLdcInsn(beanInfo.profiles.size());
-                mv.visitTypeInsn(org.objectweb.asm.Opcodes.ANEWARRAY, "java/lang/String");
-                for (int i = 0; i < beanInfo.profiles.size(); i++) {
-                    mv.visitInsn(org.objectweb.asm.Opcodes.DUP);
-                    mv.visitLdcInsn(i);
-                    mv.visitLdcInsn(beanInfo.profiles.get(i));
-                    mv.visitInsn(org.objectweb.asm.Opcodes.AASTORE);
-                }
-            }
-            
-            // Create condition classes array
-            if (beanInfo.conditionClassNames.isEmpty()) {
-                mv.visitInsn(org.objectweb.asm.Opcodes.ACONST_NULL);
-            } else {
-                mv.visitLdcInsn(beanInfo.conditionClassNames.size());
-                mv.visitTypeInsn(org.objectweb.asm.Opcodes.ANEWARRAY, "java/lang/String");
-                for (int i = 0; i < beanInfo.conditionClassNames.size(); i++) {
-                    mv.visitInsn(org.objectweb.asm.Opcodes.DUP);
-                    mv.visitLdcInsn(i);
-                    mv.visitLdcInsn(beanInfo.conditionClassNames.get(i));
-                    mv.visitInsn(org.objectweb.asm.Opcodes.AASTORE);
-                }
-            }
-            
-            // Push the custom scope name (empty string for non-CUSTOM scopes)
-            mv.visitLdcInsn(beanInfo.scopeName != null ? beanInfo.scopeName : "");
-            
-            // Invoke BeanDefinition constructor
-            // Constructor descriptor: (Ljava/lang/Class;Ljava/lang/String;Lio/github/yasmramos/warmup/core/scope/Scope;Lio/github/yasmramos/warmup/core/lifecycle/LifecycleCallbacks;Z[Ljava/lang/Object;[Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;)V
-            StringBuilder beanDefCtorDesc = new StringBuilder("(Ljava/lang/Class;Ljava/lang/String;Lio/github/yasmramos/warmup/core/scope/Scope;Lio/github/yasmramos/warmup/core/lifecycle/LifecycleCallbacks;Z[Ljava/lang/Object;[Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;)V");
-            mv.visitMethodInsn(org.objectweb.asm.Opcodes.INVOKESPECIAL, beanDefInternal, "<init>", beanDefCtorDesc.toString(), false);
-            
-            // Apply @Order so collection injection can order this bean (lower value first).
-            if (beanInfo.order != Integer.MAX_VALUE) {
-                mv.visitInsn(org.objectweb.asm.Opcodes.DUP);
-                mv.visitLdcInsn(beanInfo.order);
-                mv.visitMethodInsn(org.objectweb.asm.Opcodes.INVOKEVIRTUAL, beanDefInternal, "setOrder", "(I)V", false);
-            }
-            // Apply @DependsOn so the container creates the named beans before this one.
-            if (!beanInfo.dependsOn.isEmpty()) {
-                mv.visitInsn(org.objectweb.asm.Opcodes.DUP);
-                mv.visitLdcInsn(beanInfo.dependsOn.size());
-                mv.visitTypeInsn(org.objectweb.asm.Opcodes.ANEWARRAY, "java/lang/String");
-                for (int i = 0; i < beanInfo.dependsOn.size(); i++) {
-                    mv.visitInsn(org.objectweb.asm.Opcodes.DUP);
-                    mv.visitLdcInsn(i);
-                    mv.visitLdcInsn(beanInfo.dependsOn.get(i));
-                    mv.visitInsn(org.objectweb.asm.Opcodes.AASTORE);
-                }
-                mv.visitMethodInsn(org.objectweb.asm.Opcodes.INVOKEVIRTUAL, beanDefInternal, "setDependsOn", "([Ljava/lang/String;)V", false);
-            }
-            
-            // Create new factory instance - factory class names use dots, convert to internal name
-            String factoryInternal = binaryNameToInternalName(beanInfo.factoryClassName);
-            mv.visitTypeInsn(org.objectweb.asm.Opcodes.NEW, factoryInternal);
-            mv.visitInsn(org.objectweb.asm.Opcodes.DUP);
-            mv.visitMethodInsn(org.objectweb.asm.Opcodes.INVOKESPECIAL, factoryInternal, "<init>", "()V", false);
-            
-            // Call sink.accept(beanDef, factory)
-            mv.visitMethodInsn(org.objectweb.asm.Opcodes.INVOKEINTERFACE, "java/util/function/BiConsumer", "accept", 
-                    "(Ljava/lang/Object;Ljava/lang/Object;)V", true);
-        }
+        String registerAllDescriptor =
+                "(Ljava/util/function/BiConsumer<Lio/github/yasmramos/warmup/core/registry/BeanDefinition<*>;Lio/github/yasmramos/warmup/core/jit/CompiledFactory<*>;>;)V";
+        int chunkCount = (beans.size() + REGISTRAR_CHUNK_SIZE - 1) / REGISTRAR_CHUNK_SIZE;
+
+        if (chunkCount <= 1) {
+            org.objectweb.asm.MethodVisitor mv = cw.visitMethod(org.objectweb.asm.Opcodes.ACC_PUBLIC, "registerAll",
+                    "(Ljava/util/function/BiConsumer;)V", registerAllDescriptor, null);
+            mv.visitCode();
+            for (BeanInfo beanInfo : beans) {
+                // Load sink
+                mv.visitVarInsn(org.objectweb.asm.Opcodes.ALOAD, 1);
         
-        mv.visitInsn(org.objectweb.asm.Opcodes.RETURN);
-        mv.visitMaxs(10, 2);
-        mv.visitEnd();
+                // Create new BeanDefinition instance
+                mv.visitTypeInsn(org.objectweb.asm.Opcodes.NEW, beanDefInternal);
+                mv.visitInsn(org.objectweb.asm.Opcodes.DUP);
+        
+                // Convert binary name to internal name correctly (preserving $ for nested classes)
+                String beanTypeInternal = binaryNameToInternalName(beanInfo.className);
+                String beanTypeFqn = beanInfo.className;
+        
+                // Push beanType.class onto stack
+                mv.visitLdcInsn(org.objectweb.asm.Type.getType("L" + beanTypeInternal + ";"));
+        
+                // Push bean name
+                mv.visitLdcInsn(beanInfo.beanName);
+        
+                // Push scope enum
+                String scopeEnum = switch (beanInfo.scope) {
+                    case "PROTOTYPE" -> "PROTOTYPE";
+                    case "CUSTOM" -> "CUSTOM";
+                    default -> "SINGLETON";
+                };
+                mv.visitFieldInsn(org.objectweb.asm.Opcodes.GETSTATIC, "io/github/yasmramos/warmup/core/scope/Scope", scopeEnum, "Lio/github/yasmramos/warmup/core/scope/Scope;");
+        
+                // Push LifecycleCallbacks.empty()
+                mv.visitMethodInsn(org.objectweb.asm.Opcodes.INVOKESTATIC, "io/github/yasmramos/warmup/core/lifecycle/LifecycleCallbacks", "empty", 
+                        "()Lio/github/yasmramos/warmup/core/lifecycle/LifecycleCallbacks;", false);
+        
+                // Push isPrimary flag
+                mv.visitLdcInsn(beanInfo.isPrimary);
+        
+                // Create dependency names array (String[] for BeanDefinition constructor)
+                if (beanInfo.dependencyNames.isEmpty()) {
+                    mv.visitInsn(org.objectweb.asm.Opcodes.ICONST_0);
+                    mv.visitTypeInsn(org.objectweb.asm.Opcodes.ANEWARRAY, "java/lang/String");
+                } else {
+                    mv.visitLdcInsn(beanInfo.dependencyNames.size());
+                    mv.visitTypeInsn(org.objectweb.asm.Opcodes.ANEWARRAY, "java/lang/String");
+                    for (int i = 0; i < beanInfo.dependencyNames.size(); i++) {
+                        mv.visitInsn(org.objectweb.asm.Opcodes.DUP);
+                        mv.visitLdcInsn(i);
+                        mv.visitLdcInsn(beanInfo.dependencyNames.get(i));
+                        mv.visitInsn(org.objectweb.asm.Opcodes.AASTORE);
+                    }
+                }
+        
+                // Create profiles array
+                if (beanInfo.profiles.isEmpty()) {
+                    mv.visitInsn(org.objectweb.asm.Opcodes.ACONST_NULL);
+                } else {
+                    mv.visitLdcInsn(beanInfo.profiles.size());
+                    mv.visitTypeInsn(org.objectweb.asm.Opcodes.ANEWARRAY, "java/lang/String");
+                    for (int i = 0; i < beanInfo.profiles.size(); i++) {
+                        mv.visitInsn(org.objectweb.asm.Opcodes.DUP);
+                        mv.visitLdcInsn(i);
+                        mv.visitLdcInsn(beanInfo.profiles.get(i));
+                        mv.visitInsn(org.objectweb.asm.Opcodes.AASTORE);
+                    }
+                }
+        
+                // Create condition classes array
+                if (beanInfo.conditionClassNames.isEmpty()) {
+                    mv.visitInsn(org.objectweb.asm.Opcodes.ACONST_NULL);
+                } else {
+                    mv.visitLdcInsn(beanInfo.conditionClassNames.size());
+                    mv.visitTypeInsn(org.objectweb.asm.Opcodes.ANEWARRAY, "java/lang/String");
+                    for (int i = 0; i < beanInfo.conditionClassNames.size(); i++) {
+                        mv.visitInsn(org.objectweb.asm.Opcodes.DUP);
+                        mv.visitLdcInsn(i);
+                        mv.visitLdcInsn(beanInfo.conditionClassNames.get(i));
+                        mv.visitInsn(org.objectweb.asm.Opcodes.AASTORE);
+                    }
+                }
+        
+                // Push the custom scope name (empty string for non-CUSTOM scopes)
+                mv.visitLdcInsn(beanInfo.scopeName != null ? beanInfo.scopeName : "");
+
+                // Propagate the deferred (@Lazy field/setter) and field-or-setter flags so the
+                // container injects those dependencies after construction and keeps the wired
+                // factory slots aligned with the compacted non-deferred dependency order.
+                emitBooleanArray(mv, beanInfo.isDeferredDependency);
+                emitBooleanArray(mv, beanInfo.isFieldOrSetterDependency);
+        
+                // Invoke BeanDefinition constructor
+                // Constructor descriptor: (Ljava/lang/Class;Ljava/lang/String;Lio/github/yasmramos/warmup/core/scope/Scope;Lio/github/yasmramos/warmup/core/lifecycle/LifecycleCallbacks;Z[Ljava/lang/Object;[Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;[Z[Z)V
+                StringBuilder beanDefCtorDesc = new StringBuilder("(Ljava/lang/Class;Ljava/lang/String;Lio/github/yasmramos/warmup/core/scope/Scope;Lio/github/yasmramos/warmup/core/lifecycle/LifecycleCallbacks;Z[Ljava/lang/Object;[Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;[Z[Z)V");
+                mv.visitMethodInsn(org.objectweb.asm.Opcodes.INVOKESPECIAL, beanDefInternal, "<init>", beanDefCtorDesc.toString(), false);
+        
+                // Apply @Order so collection injection can order this bean (lower value first).
+                if (beanInfo.order != Integer.MAX_VALUE) {
+                    mv.visitInsn(org.objectweb.asm.Opcodes.DUP);
+                    mv.visitLdcInsn(beanInfo.order);
+                    mv.visitMethodInsn(org.objectweb.asm.Opcodes.INVOKEVIRTUAL, beanDefInternal, "setOrder", "(I)V", false);
+                }
+                // Apply @DependsOn so the container creates the named beans before this one.
+                if (!beanInfo.dependsOn.isEmpty()) {
+                    mv.visitInsn(org.objectweb.asm.Opcodes.DUP);
+                    mv.visitLdcInsn(beanInfo.dependsOn.size());
+                    mv.visitTypeInsn(org.objectweb.asm.Opcodes.ANEWARRAY, "java/lang/String");
+                    for (int i = 0; i < beanInfo.dependsOn.size(); i++) {
+                        mv.visitInsn(org.objectweb.asm.Opcodes.DUP);
+                        mv.visitLdcInsn(i);
+                        mv.visitLdcInsn(beanInfo.dependsOn.get(i));
+                        mv.visitInsn(org.objectweb.asm.Opcodes.AASTORE);
+                    }
+                    mv.visitMethodInsn(org.objectweb.asm.Opcodes.INVOKEVIRTUAL, beanDefInternal, "setDependsOn", "([Ljava/lang/String;)V", false);
+                }
+        
+                // Create new factory instance - factory class names use dots, convert to internal name
+                String factoryInternal = binaryNameToInternalName(beanInfo.factoryClassName);
+                mv.visitTypeInsn(org.objectweb.asm.Opcodes.NEW, factoryInternal);
+                mv.visitInsn(org.objectweb.asm.Opcodes.DUP);
+                mv.visitMethodInsn(org.objectweb.asm.Opcodes.INVOKESPECIAL, factoryInternal, "<init>", "()V", false);
+        
+                // Call sink.accept(beanDef, factory)
+                mv.visitMethodInsn(org.objectweb.asm.Opcodes.INVOKEINTERFACE, "java/util/function/BiConsumer", "accept", 
+                        "(Ljava/lang/Object;Ljava/lang/Object;)V", true);
+            }
+            mv.visitInsn(org.objectweb.asm.Opcodes.RETURN);
+            mv.visitMaxs(10, 2);
+            mv.visitEnd();
+        } else {
+            // registerAll delegates to the chunk methods so each stays well under the 64KB limit.
+            org.objectweb.asm.MethodVisitor mv = cw.visitMethod(org.objectweb.asm.Opcodes.ACC_PUBLIC, "registerAll",
+                    "(Ljava/util/function/BiConsumer;)V", registerAllDescriptor, null);
+            mv.visitCode();
+            for (int chunk = 0; chunk < chunkCount; chunk++) {
+                mv.visitVarInsn(org.objectweb.asm.Opcodes.ALOAD, 0);
+                mv.visitVarInsn(org.objectweb.asm.Opcodes.ALOAD, 1);
+                mv.visitMethodInsn(org.objectweb.asm.Opcodes.INVOKESPECIAL, registrarInternalName,
+                        "initChunk" + chunk, "(Ljava/util/function/BiConsumer;)V", false);
+            }
+            mv.visitInsn(org.objectweb.asm.Opcodes.RETURN);
+            mv.visitMaxs(2, 2);
+            mv.visitEnd();
+
+            for (int chunk = 0; chunk < chunkCount; chunk++) {
+                int from = chunk * REGISTRAR_CHUNK_SIZE;
+                int to = Math.min(from + REGISTRAR_CHUNK_SIZE, beans.size());
+                org.objectweb.asm.MethodVisitor cmv = cw.visitMethod(org.objectweb.asm.Opcodes.ACC_PRIVATE,
+                        "initChunk" + chunk, "(Ljava/util/function/BiConsumer;)V", null, null);
+                cmv.visitCode();
+                for (BeanInfo beanInfo : beans.subList(from, to)) {
+                    // Load sink
+                    cmv.visitVarInsn(org.objectweb.asm.Opcodes.ALOAD, 1);
+        
+                    // Create new BeanDefinition instance
+                    cmv.visitTypeInsn(org.objectweb.asm.Opcodes.NEW, beanDefInternal);
+                    cmv.visitInsn(org.objectweb.asm.Opcodes.DUP);
+        
+                    // Convert binary name to internal name correctly (preserving $ for nested classes)
+                    String beanTypeInternal = binaryNameToInternalName(beanInfo.className);
+                    String beanTypeFqn = beanInfo.className;
+        
+                    // Push beanType.class onto stack
+                    cmv.visitLdcInsn(org.objectweb.asm.Type.getType("L" + beanTypeInternal + ";"));
+        
+                    // Push bean name
+                    cmv.visitLdcInsn(beanInfo.beanName);
+        
+                    // Push scope enum
+                    String scopeEnum = switch (beanInfo.scope) {
+                        case "PROTOTYPE" -> "PROTOTYPE";
+                        case "CUSTOM" -> "CUSTOM";
+                        default -> "SINGLETON";
+                    };
+                    cmv.visitFieldInsn(org.objectweb.asm.Opcodes.GETSTATIC, "io/github/yasmramos/warmup/core/scope/Scope", scopeEnum, "Lio/github/yasmramos/warmup/core/scope/Scope;");
+        
+                    // Push LifecycleCallbacks.empty()
+                    cmv.visitMethodInsn(org.objectweb.asm.Opcodes.INVOKESTATIC, "io/github/yasmramos/warmup/core/lifecycle/LifecycleCallbacks", "empty", 
+                            "()Lio/github/yasmramos/warmup/core/lifecycle/LifecycleCallbacks;", false);
+        
+                    // Push isPrimary flag
+                    cmv.visitLdcInsn(beanInfo.isPrimary);
+        
+                    // Create dependency names array (String[] for BeanDefinition constructor)
+                    if (beanInfo.dependencyNames.isEmpty()) {
+                        cmv.visitInsn(org.objectweb.asm.Opcodes.ICONST_0);
+                        cmv.visitTypeInsn(org.objectweb.asm.Opcodes.ANEWARRAY, "java/lang/String");
+                    } else {
+                        cmv.visitLdcInsn(beanInfo.dependencyNames.size());
+                        cmv.visitTypeInsn(org.objectweb.asm.Opcodes.ANEWARRAY, "java/lang/String");
+                        for (int i = 0; i < beanInfo.dependencyNames.size(); i++) {
+                            cmv.visitInsn(org.objectweb.asm.Opcodes.DUP);
+                            cmv.visitLdcInsn(i);
+                            cmv.visitLdcInsn(beanInfo.dependencyNames.get(i));
+                            cmv.visitInsn(org.objectweb.asm.Opcodes.AASTORE);
+                        }
+                    }
+        
+                    // Create profiles array
+                    if (beanInfo.profiles.isEmpty()) {
+                        cmv.visitInsn(org.objectweb.asm.Opcodes.ACONST_NULL);
+                    } else {
+                        cmv.visitLdcInsn(beanInfo.profiles.size());
+                        cmv.visitTypeInsn(org.objectweb.asm.Opcodes.ANEWARRAY, "java/lang/String");
+                        for (int i = 0; i < beanInfo.profiles.size(); i++) {
+                            cmv.visitInsn(org.objectweb.asm.Opcodes.DUP);
+                            cmv.visitLdcInsn(i);
+                            cmv.visitLdcInsn(beanInfo.profiles.get(i));
+                            cmv.visitInsn(org.objectweb.asm.Opcodes.AASTORE);
+                        }
+                    }
+        
+                    // Create condition classes array
+                    if (beanInfo.conditionClassNames.isEmpty()) {
+                        cmv.visitInsn(org.objectweb.asm.Opcodes.ACONST_NULL);
+                    } else {
+                        cmv.visitLdcInsn(beanInfo.conditionClassNames.size());
+                        cmv.visitTypeInsn(org.objectweb.asm.Opcodes.ANEWARRAY, "java/lang/String");
+                        for (int i = 0; i < beanInfo.conditionClassNames.size(); i++) {
+                            cmv.visitInsn(org.objectweb.asm.Opcodes.DUP);
+                            cmv.visitLdcInsn(i);
+                            cmv.visitLdcInsn(beanInfo.conditionClassNames.get(i));
+                            cmv.visitInsn(org.objectweb.asm.Opcodes.AASTORE);
+                        }
+                    }
+        
+                    // Push the custom scope name (empty string for non-CUSTOM scopes)
+                    cmv.visitLdcInsn(beanInfo.scopeName != null ? beanInfo.scopeName : "");
+
+                    // Propagate the deferred (@Lazy field/setter) and field-or-setter flags so the
+                    // container injects those dependencies after construction and keeps the wired
+                    // factory slots aligned with the compacted non-deferred dependency order.
+                    emitBooleanArray(mv, beanInfo.isDeferredDependency);
+                    emitBooleanArray(mv, beanInfo.isFieldOrSetterDependency);
+        
+                    // Invoke BeanDefinition constructor
+                    // Constructor descriptor: (Ljava/lang/Class;Ljava/lang/String;Lio/github/yasmramos/warmup/core/scope/Scope;Lio/github/yasmramos/warmup/core/lifecycle/LifecycleCallbacks;Z[Ljava/lang/Object;[Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;[Z[Z)V
+                    StringBuilder beanDefCtorDesc = new StringBuilder("(Ljava/lang/Class;Ljava/lang/String;Lio/github/yasmramos/warmup/core/scope/Scope;Lio/github/yasmramos/warmup/core/lifecycle/LifecycleCallbacks;Z[Ljava/lang/Object;[Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;[Z[Z)V");
+                    cmv.visitMethodInsn(org.objectweb.asm.Opcodes.INVOKESPECIAL, beanDefInternal, "<init>", beanDefCtorDesc.toString(), false);
+        
+                    // Apply @Order so collection injection can order this bean (lower value first).
+                    if (beanInfo.order != Integer.MAX_VALUE) {
+                        cmv.visitInsn(org.objectweb.asm.Opcodes.DUP);
+                        cmv.visitLdcInsn(beanInfo.order);
+                        cmv.visitMethodInsn(org.objectweb.asm.Opcodes.INVOKEVIRTUAL, beanDefInternal, "setOrder", "(I)V", false);
+                    }
+                    // Apply @DependsOn so the container creates the named beans before this one.
+                    if (!beanInfo.dependsOn.isEmpty()) {
+                        cmv.visitInsn(org.objectweb.asm.Opcodes.DUP);
+                        cmv.visitLdcInsn(beanInfo.dependsOn.size());
+                        cmv.visitTypeInsn(org.objectweb.asm.Opcodes.ANEWARRAY, "java/lang/String");
+                        for (int i = 0; i < beanInfo.dependsOn.size(); i++) {
+                            cmv.visitInsn(org.objectweb.asm.Opcodes.DUP);
+                            cmv.visitLdcInsn(i);
+                            cmv.visitLdcInsn(beanInfo.dependsOn.get(i));
+                            cmv.visitInsn(org.objectweb.asm.Opcodes.AASTORE);
+                        }
+                        cmv.visitMethodInsn(org.objectweb.asm.Opcodes.INVOKEVIRTUAL, beanDefInternal, "setDependsOn", "([Ljava/lang/String;)V", false);
+                    }
+        
+                    // Create new factory instance - factory class names use dots, convert to internal name
+                    String factoryInternal = binaryNameToInternalName(beanInfo.factoryClassName);
+                    cmv.visitTypeInsn(org.objectweb.asm.Opcodes.NEW, factoryInternal);
+                    cmv.visitInsn(org.objectweb.asm.Opcodes.DUP);
+                    cmv.visitMethodInsn(org.objectweb.asm.Opcodes.INVOKESPECIAL, factoryInternal, "<init>", "()V", false);
+        
+                    // Call sink.accept(beanDef, factory)
+                    cmv.visitMethodInsn(org.objectweb.asm.Opcodes.INVOKEINTERFACE, "java/util/function/BiConsumer", "accept", 
+                            "(Ljava/lang/Object;Ljava/lang/Object;)V", true);
+                }
+                cmv.visitInsn(org.objectweb.asm.Opcodes.RETURN);
+                cmv.visitMaxs(10, 2);
+                cmv.visitEnd();
+            }
+        }
         
         cw.visitEnd();
         

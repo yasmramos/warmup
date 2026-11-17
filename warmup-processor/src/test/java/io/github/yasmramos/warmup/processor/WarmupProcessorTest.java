@@ -674,16 +674,19 @@ class WarmupProcessorTest {
         Object factory = factoryClass.getDeclaredConstructor().newInstance();
         assertNotNull(factory);
 
-        // create(Object...) injects constructor param (int), field (char) and all setters
-        // (long, boolean, double) since the create path is the "full" wiring path.
+        // create(Object...) injects the non-deferred dependencies in declaration
+        // order: constructor param (int), field (char) and non-lazy setters
+        // (long, boolean). The @Lazy setter (double) is left for injectDeferred,
+        // matching the container, which passes the compacted non-deferred array.
         Object bean = factoryClass.getMethod("create", Object[].class)
-                .invoke(factory, (Object) new Object[]{ 12345, 'X', 99L, Boolean.TRUE, 2.5d });
+                .invoke(factory, (Object) new Object[]{ 12345, 'X', 99L, Boolean.TRUE });
         assertNotNull(bean);
         assertEquals(12345, beanClass.getMethod("getPort").invoke(bean));
         assertEquals('X', beanClass.getMethod("getCode").invoke(bean));
         assertEquals(99L, beanClass.getMethod("getTimeout").invoke(bean));
         assertEquals(Boolean.TRUE, beanClass.getMethod("isEnabled").invoke(bean));
-        assertEquals(2.5d, beanClass.getMethod("getRatio").invoke(bean));
+        assertEquals(0.0d, beanClass.getMethod("getRatio").invoke(bean),
+                "@Lazy dependency must not be injected by create()");
 
         // injectDeferred injects the lazy setter parameter (double), overriding the value
         factoryClass.getMethod("injectDeferred", Object.class, Object[].class)
@@ -912,7 +915,7 @@ class WarmupProcessorTest {
             "@Singleton",
             "public class ValueBean {",
             "    @Value(\"${app.name}\")",
-            "    private String appName;",
+            "    String appName;",
             "    ",
             "    public ValueBean(@Value(\"${app.name}\") String appName) {",
             "        this.appName = appName;",
